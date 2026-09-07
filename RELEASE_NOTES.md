@@ -1,3 +1,18 @@
+## PilferedParrot Interface 0.7.0-rc.7 preview
+
+Work and Chat top bars now display the selected Chrome theme's original toolbar image. The
+Linux custom title bar uses its original frame image and overlay. Artwork retains its natural
+size and horizontal tiling, with the author's colors underneath; the full-bar translucent tint
+is removed. Theme backgrounds retain their original size, alignment and repeat settings.
+
+Text and controls remain readable with localized contrast support. Color-only themes retain
+their authored surfaces and readable foregrounds. Switching or removing themes replaces the
+images together without reloading Work or Chat or losing drafts.
+
+Linux/source and Windows x64 packages contain the same interface update. Reopen the updated
+application after current jobs finish to load this version. This remains a preview alongside
+stable 0.6.1.
+
 ## PilferedParrot Interface 0.7.0-rc.6 preview
 
 The selected theme artwork now continues through the Work and Chat top bars and the Linux
