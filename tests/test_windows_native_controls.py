@@ -58,10 +58,12 @@ class WindowsNativeControlsTests(unittest.TestCase):
         with sync_playwright() as playwright:
             context = playwright.chromium.launch_persistent_context(
                 str(profile), headless=False, timeout=15000,
-                args=["--window-size=900,700", f"--app={fixture.browser_url}"],
+                args=["--window-size=900,700", "--disable-windows10-custom-titlebar",
+                      f"--app={fixture.browser_url}"],
             )
             try:
                 page = next(page for page in context.pages if page.url.startswith(fixture.base_url))
+                print("Native frame browser:", context.new_cdp_session(page).send("Browser.getVersion")["product"])
                 expect(page.locator("#prompt")).to_be_enabled()
                 expect(page.locator("#nativeTitlebar")).to_be_hidden()
 
