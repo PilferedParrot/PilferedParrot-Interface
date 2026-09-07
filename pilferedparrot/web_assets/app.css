@@ -1009,7 +1009,10 @@ body.chrome-theme :is(.sidebar, .chat-window-sidebar) { border-right-color: tran
 body.chrome-theme :is(.chat-title, .project-path, .chat-item-title, .chat-item-meta, .brand, .chat-subtitle) { color: inherit; }
 body.chrome-theme :is(.composer-wrap, .chat-composer-wrap) { background: transparent; }
 body.chrome-theme :is(.composer, .chat-composer, .message, .chat-message, .welcome, .dialog-card) {
-  background: var(--panel); color: var(--chrome-theme-panel-text); --text: var(--chrome-theme-panel-text);
+  background: var(--panel); color: var(--chrome-theme-panel-text);
+  --text: var(--chrome-theme-panel-text);
+  --muted: var(--chrome-theme-panel-text);
+  --faint: var(--chrome-theme-panel-text);
 }
 body.chrome-theme :is(.message, .chat-message) { padding: 16px; border-radius: 12px; margin-bottom: 12px; }
 body.chrome-theme .welcome { border-radius: 16px; padding: 22px; width: fit-content; max-width: 100%; margin-inline: auto; }
