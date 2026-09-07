@@ -29,7 +29,7 @@ const api = async (path, init) => {
 };
 const sessionStorage = {setItem() {}};
 const ACTIVE_CHAT_SESSION_KEY = "active";
-const resizePrompt = () => {}, render = () => {};
+const resizePrompt = () => {}, render = () => {}, saveActiveDraft = () => {}, reportActiveSession = () => {};
 eval(definition("latestUsedChat"));
 eval(definition("createChat", "async function"));
 createChat("chosen-model").then(() => {

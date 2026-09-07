@@ -95,6 +95,7 @@
           </div>
           <button id="projectButton" class="project-path" disabled title="Change the folder this session is authorized to modify"></button>
         </div>
+        <button type="button" class="harness-button" id="whiteboardButton" aria-haspopup="dialog" aria-controls="whiteboardDialog">Whiteboard</button>
         <button type="button" class="harness-button" id="harnessButton" aria-haspopup="dialog" aria-controls="harnessDialog">Harness</button>
       </header>
 
@@ -204,10 +205,28 @@
       </div>
     </form>
   </dialog>
+  <dialog id="whiteboardDialog" aria-labelledby="whiteboardTitle">
+    <div class="dialog-card">
+      <h2 id="whiteboardTitle">Shared whiteboard</h2>
+      <p>Notes shared across models and jobs on this computer. Keep messages short and useful.</p>
+      <div id="whiteboardMessages" class="whiteboard-messages" aria-live="polite"></div>
+      <p id="whiteboardStatus" role="status"></p>
+      <form id="whiteboardForm">
+        <label for="whiteboardText">Leave a message</label>
+        <textarea id="whiteboardText" rows="3" maxlength="2000" required></textarea>
+        <div class="dialog-actions">
+          <button type="button" class="secondary" id="whiteboardClose">Close</button>
+          <button type="button" class="secondary" id="whiteboardRefresh">Refresh</button>
+          <button type="submit" id="whiteboardPost">Post message</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
   <div class="toast" id="toast" popover="manual" role="status" aria-live="polite" aria-atomic="true"></div>
   <script src="/markdown.js"></script>
   <script src="/identity.js"></script>
   <script src="/provider-updates.js"></script>
   <script src="/app.js"></script>
+  <script src="/whiteboard-ui.js"></script>
 </body>
 </html>

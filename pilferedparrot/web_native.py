@@ -25,7 +25,14 @@ CHROMIUM_BROWSER_CANDIDATES = (
 )
 CHROME_THEME_GALLERY_URL = "https://chromewebstore.google.com/category/themes"
 CHROME_THEME_ID = re.compile(r"[a-p]{32}")
-CHROME_THEME_COLOR_KEYS = ("frame", "toolbar", "ntp_text", "ntp_link", "ntp_section")
+CHROME_THEME_COLOR_KEYS = (
+    "frame", "toolbar", "ntp_background", "ntp_text", "ntp_link", "ntp_section",
+    "ntp_section_text", "tab_background_text", "bookmark_text", "toolbar_text",
+)
+CHROME_THEME_IMAGE_KEYS = (
+    "theme_frame", "theme_frame_overlay", "theme_toolbar", "theme_ntp_background",
+    "theme_ntp_attribution",
+)
 CHROME_THEME_IMAGE_MAX_BYTES = 16 * 1024 * 1024
 _DISCOVER_BROWSER = object()
 WINDOWS = sys.platform == "win32"
@@ -241,6 +248,32 @@ def _chrome_theme_name(pack: Path, manifest: dict[str, Any]) -> str:
     return name.strip()[:120]
 
 
+def _chrome_theme_image(pack: Path, value: Any) -> Path | None:
+    """Resolve a manifest image while keeping reads inside the unpacked theme."""
+    if isinstance(value, dict):
+        # Chrome theme images may be keyed by scale (for example {"100": path}).
+        choices = []
+        for scale, image in value.items():
+            try:
+                choices.append((abs(float(scale) - 100), float(scale), image))
+            except (TypeError, ValueError):
+                continue
+        value = min(choices, key=lambda item: (item[0], -item[1]))[2] if choices else None
+    if not isinstance(value, str) or not value or len(value) > 1024:
+        return None
+    try:
+        candidate = (pack / value).resolve()
+        if (
+            candidate.is_relative_to(pack) and candidate.is_file()
+            and candidate.stat().st_size <= CHROME_THEME_IMAGE_MAX_BYTES
+            and candidate.suffix.lower() in {".gif", ".jpeg", ".jpg", ".png", ".webp"}
+        ):
+            return candidate
+    except (OSError, RuntimeError):
+        pass
+    return None
+
+
 def selected_chrome_theme() -> tuple[dict[str, Any], Path | None]:
     """Read the active Chrome theme without trusting extension-controlled paths."""
     inactive: dict[str, Any] = {"active": False}
@@ -278,22 +311,19 @@ def selected_chrome_theme() -> tuple[dict[str, Any], Path | None]:
             if (color := _chrome_theme_color(raw_colors.get(key))) is not None
         }
         raw_images = theme.get("images") if isinstance(theme.get("images"), dict) else {}
-        background_path: Path | None = None
-        background_value = raw_images.get("theme_ntp_background")
-        if isinstance(background_value, str):
-            candidate = (pack / background_value).resolve()
-            if (
-                candidate.is_relative_to(pack) and candidate.is_file()
-                and candidate.stat().st_size <= CHROME_THEME_IMAGE_MAX_BYTES
-                and candidate.suffix.lower() in {".gif", ".jpeg", ".jpg", ".png", ".webp"}
-            ):
-                background_path = candidate
+        image_paths = {
+            key: image_path for key in CHROME_THEME_IMAGE_KEYS
+            if (image_path := _chrome_theme_image(pack, raw_images.get(key))) is not None
+        }
         properties = theme.get("properties") if isinstance(theme.get("properties"), dict) else {}
         alignment = properties.get("ntp_background_alignment", "center")
         repeat = properties.get("ntp_background_repeat", "no-repeat")
-        if alignment not in {"bottom", "center", "left", "right", "top"}:
+        if not isinstance(alignment, str) or any(
+            token not in {"bottom", "center", "left", "right", "top"}
+            for token in alignment.split()
+        ) or len(alignment.split()) > 2:
             alignment = "center"
-        if repeat not in {"no-repeat", "repeat", "repeat-x", "repeat-y"}:
+        if not isinstance(repeat, str) or repeat not in {"no-repeat", "repeat", "repeat-x", "repeat-y"}:
             repeat = "no-repeat"
         version = re.sub(r"[^A-Za-z0-9._-]", "", str(manifest.get("version") or ""))[:40]
         public = {
@@ -302,13 +332,21 @@ def selected_chrome_theme() -> tuple[dict[str, Any], Path | None]:
             "version": version,
             "name": _chrome_theme_name(pack, manifest),
             "colors": colors,
-            "background": background_path is not None,
+            "background": "theme_ntp_background" in image_paths,
             "background_alignment": alignment,
             "background_repeat": repeat,
         }
-        if background_path is not None:
-            public["background_url"] = f"/api/browser/theme/background?v={theme_id}-{version}"
-        return public, background_path
+        image_urls = {
+            "theme_frame": "frame_url", "theme_toolbar": "toolbar_url",
+            "theme_frame_overlay": "frame_overlay_url",
+            "theme_ntp_background": "background_url", "theme_ntp_attribution": "attribution_url",
+        }
+        for image_key, public_key in image_urls.items():
+            if image_key in image_paths:
+                endpoint = "/api/browser/theme/background" if image_key == "theme_ntp_background" \
+                    else f"/api/browser/theme/image/{image_key}"
+                public[public_key] = f"{endpoint}?v={theme_id}-{version}"
+        return public, image_paths.get("theme_ntp_background")
     except (OSError, ValueError, json.JSONDecodeError, AttributeError):
         return inactive, None
 
@@ -656,18 +694,47 @@ class NativeIntegration:
 
     @staticmethod
     def chrome_theme_background() -> tuple[bytes, str] | None:
-        _theme, background = selected_chrome_theme()
-        if background is None:
+        return NativeIntegration.chrome_theme_image("theme_ntp_background")
+
+    @staticmethod
+    def chrome_theme_image(image_key: str) -> tuple[bytes, str] | None:
+        """Return one allowlisted image from the selected theme."""
+        if image_key not in CHROME_THEME_IMAGE_KEYS:
             return None
-        content_types = {
-            ".gif": "image/gif", ".jpeg": "image/jpeg", ".jpg": "image/jpeg",
-            ".png": "image/png", ".webp": "image/webp",
-        }
+        _theme, background = selected_chrome_theme()
+        if background is None and image_key == "theme_ntp_background":
+            return None
+        # Re-read the selected pack and resolve the requested manifest image.
+        profile = persistent_browser_profile().resolve()
         try:
-            if background.stat().st_size > CHROME_THEME_IMAGE_MAX_BYTES:
+            preferences_path = profile / "Default/Preferences"
+            if preferences_path.stat().st_size > 20 * 1024 * 1024:
                 return None
-            return background.read_bytes(), content_types[background.suffix.lower()]
-        except (OSError, KeyError):
+            preferences = json.loads(preferences_path.read_text(encoding="utf-8"))
+            selected = preferences.get("extensions", {}).get("theme", {})
+            theme_id = selected.get("id")
+            pack = Path(str(selected.get("pack"))).expanduser().resolve()
+            extensions_root = (profile / "Default/Extensions").resolve()
+            extension_root = (extensions_root / str(theme_id)).resolve()
+            if not isinstance(theme_id, str) or not CHROME_THEME_ID.fullmatch(theme_id):
+                return None
+            if not extension_root.is_relative_to(extensions_root) or not pack.is_relative_to(extension_root) or not pack.is_dir():
+                return None
+            manifest_path = (pack / "manifest.json").resolve()
+            if not manifest_path.is_relative_to(pack) or manifest_path.stat().st_size > 1_000_000:
+                return None
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            theme = manifest.get("theme") if isinstance(manifest, dict) else None
+            images = theme.get("images", {}) if isinstance(theme, dict) else {}
+            path = _chrome_theme_image(pack, images.get(image_key) if isinstance(images, dict) else None)
+            if path is None:
+                return None
+            content_types = {
+                ".gif": "image/gif", ".jpeg": "image/jpeg", ".jpg": "image/jpeg",
+                ".png": "image/png", ".webp": "image/webp",
+            }
+            return path.read_bytes(), content_types[path.suffix.lower()]
+        except (OSError, ValueError, json.JSONDecodeError, AttributeError, RuntimeError, KeyError):
             return None
 
     def shutdown(self, *, deadline: float | None = None, timeout: float = 3) -> None:

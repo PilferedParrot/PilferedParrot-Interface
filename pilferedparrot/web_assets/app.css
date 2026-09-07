@@ -22,6 +22,10 @@
   --chrome-theme-background-image: none;
   --chrome-theme-background-position: center;
   --chrome-theme-background-repeat: no-repeat;
+  --chrome-theme-frame-image: none;
+  --chrome-theme-frame-overlay-image: none;
+  --chrome-theme-toolbar-image: none;
+  --chrome-theme-attribution-image: none;
   color-scheme: dark;
   font-size: 16px;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -31,31 +35,57 @@
 html, body { height: 100%; }
 body { margin: 0; overflow: hidden; background: var(--bg); color: var(--text); }
 body.chrome-theme {
-  --bg: color-mix(in srgb, var(--chrome-theme-frame) 48%, #070b10);
-  --panel: color-mix(in srgb, var(--chrome-theme-frame) 42%, #111821);
-  --panel-2: color-mix(in srgb, var(--chrome-theme-frame) 38%, #151e29);
-  --panel-3: color-mix(in srgb, var(--chrome-theme-frame) 52%, #1a2532);
-  --border: color-mix(in srgb, var(--chrome-theme-toolbar) 32%, #263342);
-  --border-soft: color-mix(in srgb, var(--chrome-theme-frame) 48%, #1e2a37);
-  --blue: color-mix(in srgb, var(--chrome-theme-toolbar) 60%, #b8d9ff);
-  --blue-strong: color-mix(in srgb, var(--chrome-theme-frame) 68%, #3d8df5);
+  --bg: var(--chrome-theme-background, #ffffff);
+  --panel: var(--chrome-theme-section, #111821);
+  --panel-2: var(--chrome-theme-section, #151e29);
+  --panel-3: var(--chrome-theme-section, #ffffff);
+  --border: var(--chrome-theme-toolbar, #263342);
+  --border-soft: var(--chrome-theme-frame, #1e2a37);
+  --blue: var(--chrome-theme-link, #67a8ff);
+  --blue-strong: var(--chrome-theme-link, #1558d6);
+  --text: var(--chrome-theme-text, #e8edf3);
 }
 body.chrome-theme .main {
   background:
-    linear-gradient(90deg, color-mix(in srgb, var(--bg) 88%, transparent), color-mix(in srgb, var(--bg) 67%, transparent)),
-    var(--chrome-theme-background-image) var(--chrome-theme-background-position) / cover var(--chrome-theme-background-repeat),
+    var(--chrome-theme-background-image) var(--chrome-theme-background-position) / auto auto var(--chrome-theme-background-repeat),
     var(--bg);
 }
-body.chrome-theme .sidebar { background: color-mix(in srgb, var(--chrome-theme-frame) 46%, #0e151e); }
-body.chrome-theme .topbar { background: color-mix(in srgb, var(--chrome-theme-frame) 34%, rgba(11, 16, 23, .88)); }
+body.chrome-theme .sidebar {
+  background: var(--chrome-theme-frame-overlay-image) top left / auto auto repeat-x,
+    var(--chrome-theme-frame-image) top left / auto auto repeat-x,
+    var(--chrome-theme-frame, #0e151e);
+}
+body.chrome-theme .topbar {
+  background: var(--chrome-theme-toolbar-image) center / auto auto repeat-x,
+    var(--chrome-theme-toolbar, #263342);
+}
 body.chrome-theme .chat-window {
   background:
-    linear-gradient(90deg, color-mix(in srgb, var(--bg) 92%, transparent), color-mix(in srgb, var(--bg) 66%, transparent)),
-    var(--chrome-theme-background-image) var(--chrome-theme-background-position) / cover var(--chrome-theme-background-repeat),
+    var(--chrome-theme-background-image) var(--chrome-theme-background-position) / auto auto var(--chrome-theme-background-repeat),
     var(--bg);
 }
-body.chrome-theme .chat-window-sidebar { background: color-mix(in srgb, var(--chrome-theme-frame) 46%, #0e151e); }
-body.chrome-theme .chat-window-conversation .chat-header { background: color-mix(in srgb, var(--chrome-theme-frame) 40%, rgba(11, 16, 23, .84)); }
+body.chrome-theme .chat-window-sidebar {
+  background: var(--chrome-theme-frame-overlay-image) top left / auto auto repeat-x,
+    var(--chrome-theme-frame-image) top left / auto auto repeat-x,
+    var(--chrome-theme-frame, #0e151e);
+}
+body.chrome-theme .chat-window-conversation .chat-header {
+  background: var(--chrome-theme-toolbar-image) center / auto auto repeat-x,
+    var(--chrome-theme-toolbar, #263342);
+}
+body.chrome-theme .main::after,
+body.chrome-theme .chat-window::after {
+  content: "";
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  width: min(220px, 30vw);
+  height: 64px;
+  pointer-events: none;
+  background: var(--chrome-theme-attribution-image) right bottom / auto auto no-repeat;
+}
+body.chrome-theme .main,
+body.chrome-theme .chat-window { position: relative; }
 body.chrome-theme .chat-composer,
 body.chrome-theme .chat-model-card,
 body.chrome-theme .chat-model-card select { background: var(--panel); }
@@ -865,3 +895,35 @@ dialog::backdrop { background: rgba(0, 0, 0, .62); }
 .provider-update { font-size: 16px; padding: 6px 12px; overflow-wrap: anywhere; }
 .provider-update[data-status="update_available"] { color: #c98521; }
 .pending-line { overflow-wrap: anywhere; }
+
+/* The shared board is fetched on demand and keeps long notes inside the dialog. */
+#whiteboardDialog { width: min(640px, calc(100% - 30px)); max-height: calc(100dvh - 40px); }
+.whiteboard-messages { max-height: 42dvh; overflow-y: auto; }
+.whiteboard-messages article { border-bottom: 1px solid var(--border); padding: 12px 0; }
+.whiteboard-messages article p { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); margin: 7px 0; }
+#whiteboardText { display: block; width: 100%; margin-top: 8px; padding: 10px; resize: vertical; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; font: inherit; }
+#whiteboardText:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+/* Theme surfaces use their own foregrounds, including light and vivid themes. */
+body.chrome-theme { --muted: var(--text); --faint: var(--text); }
+body.chrome-theme :is(.sidebar, .chat-window-sidebar) {
+  color: var(--chrome-theme-frame-text); --sidebar-muted: currentColor; --sidebar-faint: currentColor;
+}
+body.chrome-theme :is(.topbar, .chat-window-conversation .chat-header) { color: var(--chrome-theme-toolbar-text); backdrop-filter: none; }
+body.chrome-theme :is(.chat-title, .project-path, .chat-item-title, .chat-item-meta, .brand, .chat-subtitle) { color: inherit; }
+body.chrome-theme :is(.composer-wrap, .chat-composer-wrap) { background: transparent; }
+body.chrome-theme :is(.composer, .chat-composer, .message, .chat-message, .welcome, .dialog-card) {
+  background: var(--panel); color: var(--chrome-theme-panel-text); --text: var(--chrome-theme-panel-text);
+}
+body.chrome-theme :is(.message, .chat-message) { padding: 16px; border-radius: 12px; margin-bottom: 12px; }
+body.chrome-theme .welcome { border-radius: 16px; padding: 22px; width: fit-content; max-width: 100%; margin-inline: auto; }
+body.chrome-theme :is(.message-content, .chat-message-body, .message-name, .chat-message-head, .welcome h1, .welcome p) { color: inherit; }
+body.chrome-theme :is(.message-content, .chat-message-body) :is(h1, h2, h3, h4, h5, h6, blockquote) { color: inherit; }
+body.chrome-theme .composer select { background: var(--panel); color: var(--chrome-theme-panel-text); }
+body.chrome-theme .chat-item:is(:hover, .active) { color: var(--chrome-theme-panel-text); }
+body.chrome-theme .send-button:not(:disabled) { background: var(--chrome-theme-toolbar); color: var(--chrome-theme-toolbar-text); }
+#whiteboardButton { margin-left: auto; }
+#whiteboardButton + #harnessButton { margin-left: 0; }
+
+body.chrome-theme .sidebar-disclosure summary { color: var(--chrome-theme-frame-text); }
+body.chrome-theme .provider-update { background: var(--panel); color: var(--chrome-theme-panel-text); border-radius: 8px; padding: 6px 10px; width: fit-content; }

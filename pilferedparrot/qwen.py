@@ -83,7 +83,7 @@ def _chat_completion(
     if provider_config.get("read_only"):
         tools = [
             tool for tool in tools
-            if tool.get("function", {}).get("name") in {"read_file", "diff"}
+            if tool.get("function", {}).get("name") in {"read_file", "diff", "whiteboard_read"}
         ]
     payload = {
         "model": provider_config["model"],
@@ -225,7 +225,10 @@ def run_compatible_agent(
         response_identity.clear()
         response_identity.update(configured_identity(config, provider))
     additional_dirs = provider_additional_dirs(config, provider)
-    toolbox = QwenToolbox(cwd, provider_config, additional_dirs)
+    toolbox_config = dict(provider_config)
+    from .whiteboard import whiteboard_directory
+    toolbox_config["_whiteboard_directory"] = str(whiteboard_directory(config))
+    toolbox = QwenToolbox(cwd, toolbox_config, additional_dirs)
     messages.append({"role": "user", "content": prompt})
     # Appended rather than interpolated: the context estimator formats this
     # template with an empty workspace, so the template keeps one field.

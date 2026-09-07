@@ -213,6 +213,7 @@ class Conversation:
     messages: list[dict[str, Any]] = field(default_factory=list)
     token_usage: dict[str, int] = field(default_factory=dict)
     response_identity: dict[str, Any] = field(default_factory=dict)
+    whiteboard_discovered: bool = False
 
     def reset(self, provider: str | None = None) -> None:
         self.provider = provider
@@ -220,3 +221,4 @@ class Conversation:
         self.messages.clear()
         self.token_usage.clear()
         self.response_identity.clear()
+        self.whiteboard_discovered = False

@@ -30,9 +30,9 @@ ASSET_ROOT = Path(__file__).resolve().parent / "web_assets"
 RUNTIME_ROOT = Path(__file__).resolve().parent
 ASSET_NAMES = (
     "index.html", "chat.html", "app.css", "markdown.js", "identity.js", "provider-updates.js", "app.js", "chat.js", "icon.svg",
-    "pilferedparrot-icon.png", "company-logo.png", "company-logo-dark.png",
+    "pilferedparrot-icon.png", "company-logo.png", "company-logo-dark.png", "whiteboard-ui.js",
 )
-API_GENERATION = 20
+API_GENERATION = 21
 
 
 class ServerApp(Protocol):
@@ -42,6 +42,7 @@ class ServerApp(Protocol):
 
     def capability_context(self, supplied: str) -> dict[str, str] | None: ...
     def state(self, scope: str, *, window_id: str, window_provider: str | None) -> Any: ...
+    def cleanup_stale_sessions(self, *, protected_window_ids: tuple[str, ...] = (), protected_chat_ids: tuple[str, ...] = ()) -> int: ...
     def chat_state(self, chat_id: str, *, window_id: str) -> Any: ...
     def current_chat_state(self) -> Any: ...
     def budgets(self) -> dict[str, Any]: ...
@@ -49,6 +50,10 @@ class ServerApp(Protocol):
     def provider_update(self, provider: str) -> Any: ...
     def browser_theme(self) -> Any: ...
     def chrome_theme_background(self) -> tuple[bytes, str] | None: ...
+    def chrome_theme_image(self, image_key: str) -> tuple[bytes, str] | None: ...
+    def whiteboard_read(self) -> Any: ...
+    def whiteboard_post(self, payload: dict[str, Any]) -> Any: ...
+    def set_draft(self, chat_id: str, payload: dict[str, Any], *, window_id: str) -> Any: ...
     def create_chat(self, payload: dict[str, Any], *, window_id: str, window_provider: str | None) -> Any: ...
     def add_provider(self, payload: dict[str, Any]) -> Any: ...
     def remove_provider(self, payload: dict[str, Any]) -> None: ...
@@ -210,6 +215,7 @@ def make_handler(
     window_close_lock = threading.Lock()
     window_close_timer: Any = None
     open_window_documents: dict[str, set[str]] = {}
+    active_window_sessions: dict[tuple[str, str], set[str]] = {}
 
     def cancel_window_close() -> None:
         nonlocal window_close_timer
@@ -240,6 +246,9 @@ def make_handler(
     ) -> None:
         nonlocal window_close_timer
         with window_close_lock:
+            for key in list(active_window_sessions):
+                if key[0] == window_id and (close_all or key[1] == page_id):
+                    active_window_sessions.pop(key, None)
             pages = open_window_documents.get(window_id)
             if close_all:
                 open_window_documents.pop(window_id, None)
@@ -363,7 +372,7 @@ def make_handler(
             self.send_header("Content-Security-Policy", (
                 "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
                 "form-action 'self'; object-src 'none'; script-src 'self'; "
-                "style-src 'self' 'unsafe-inline'"
+                "style-src 'self' 'unsafe-inline'; img-src 'self' blob:"
             ))
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("X-Frame-Options", "DENY")
@@ -408,6 +417,8 @@ def make_handler(
                 self._asset("provider-updates.js", "text/javascript; charset=utf-8")
             elif path == "/chat.js":
                 self._asset("chat.js", "text/javascript; charset=utf-8")
+            elif path == "/whiteboard-ui.js":
+                self._asset("whiteboard-ui.js", "text/javascript; charset=utf-8")
             elif path == "/icon.svg":
                 self._asset("icon.svg", "image/svg+xml")
             elif path == "/pilferedparrot-icon.png":
@@ -473,6 +484,20 @@ def make_handler(
                     self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
                 else:
                     self._json(app.provider_update(provider))
+            elif path == "/api/whiteboard":
+                if self._request_capability_scope() != "dashboard":
+                    self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
+                else:
+                    self._json(app.whiteboard_read())
+            elif path.startswith("/api/browser/theme/image/"):
+                if self._request_capability_scope() not in {"dashboard", "chat"}:
+                    self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
+                else:
+                    asset = app.chrome_theme_image(path.rsplit("/", 1)[1])
+                    if asset is None:
+                        self.send_error(HTTPStatus.NOT_FOUND)
+                    else:
+                        self._binary(*asset)
             elif path == "/api/browser/theme":
                 if self._request_capability_scope() not in {"dashboard", "chat"}:
                     self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
@@ -523,6 +548,8 @@ def make_handler(
                     self._json(app.create_chat(
                         payload, window_id=window_id, window_provider=window_provider,
                     ), HTTPStatus.CREATED)
+                elif path == "/api/whiteboard":
+                    self._json(app.whiteboard_post(payload), HTTPStatus.CREATED)
                 elif path == "/api/providers":
                     self._json(app.add_provider(payload), HTTPStatus.CREATED)
                 elif path == "/api/providers/remove":
@@ -576,6 +603,22 @@ def make_handler(
                 elif path == "/api/window/open":
                     register_window(lifecycle_window_id, document_id(payload))
                     self._json({"ok": True})
+                elif path == "/api/window/active":
+                    page_id = document_id(payload)
+                    chat_id = payload.get("chat_id")
+                    if not isinstance(chat_id, str):
+                        raise ValueError("chat_id must be text")
+                    draft_ids = payload.get("draft_ids", [])
+                    if not isinstance(draft_ids, list) or not all(isinstance(item, str) for item in draft_ids):
+                        raise ValueError("draft_ids must be a list of session IDs")
+                    selected = {chat_id, *draft_ids}
+                    for selected_id in selected:
+                        app.chat_state(selected_id, window_id=window_id)
+                    with window_close_lock:
+                        active_window_sessions[(lifecycle_window_id, page_id)] = selected
+                        protected = tuple(set().union(*active_window_sessions.values()))
+                    removed = app.cleanup_stale_sessions(protected_chat_ids=protected)
+                    self._json({"ok": True, "removed": removed})
                 elif path == "/api/window/close":
                     self._json({"ok": True}, HTTPStatus.ACCEPTED)
                     page_id = document_id(payload)
@@ -611,6 +654,8 @@ def make_handler(
                     ))
                 elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "activate":
                     self._json(app.activate_chat(parts[2], window_id=window_id))
+                elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "draft":
+                    self._json(app.set_draft(parts[2], payload, window_id=window_id))
                 elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "cancel":
                     self._json(app.cancel_message(parts[2], window_id=window_id))
                 elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "terminal":

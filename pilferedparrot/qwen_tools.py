@@ -13,6 +13,26 @@ from typing import Any
 
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
+        "type": "function", "function": {
+            "name": "whiteboard_read",
+            "description": "Read up to 20 recent shared model whiteboard notes.",
+            "parameters": {"type": "object", "properties": {
+                "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+                "since": {"type": "string"},
+            }, "additionalProperties": False},
+        },
+    },
+    {
+        "type": "function", "function": {
+            "name": "whiteboard_post",
+            "description": "Post a concise note to the shared model whiteboard (at most 2000 characters).",
+            "parameters": {"type": "object", "properties": {
+                "text": {"type": "string", "maxLength": 2000},
+                "author": {"type": "string"}, "workspace": {"type": "string"},
+            }, "required": ["text", "author"], "additionalProperties": False},
+        },
+    },
+    {
         "type": "function",
         "function": {
             "name": "read_file",
@@ -142,9 +162,11 @@ class QwenToolbox:
         self._baselines: dict[Path, str | None] = {}
 
     def execute(self, name: str, arguments: dict[str, Any]) -> str:
-        if self.config.get("read_only") and name not in {"read_file", "diff"}:
+        if self.config.get("read_only") and name not in {"read_file", "diff", "whiteboard_read"}:
             raise PermissionError(f"tool is unavailable in read-only Chat: {name}")
         handlers = {
+            "whiteboard_read": self._whiteboard_read,
+            "whiteboard_post": self._whiteboard_post,
             "read_file": self._read_file,
             "write_file": self._write_file,
             "edit_file": self._edit_file,
@@ -157,6 +179,14 @@ class QwenToolbox:
         if not isinstance(arguments, dict):
             raise ValueError("tool arguments must be a JSON object")
         return self._limit(handler(**arguments))
+
+    def _whiteboard_read(self, limit: int = 20, since: str | None = None) -> str:
+        from .whiteboard import Whiteboard
+        return json.dumps(Whiteboard(self.config).read(limit=limit, since=since), ensure_ascii=False)
+
+    def _whiteboard_post(self, text: str, author: str, workspace: str | None = None) -> str:
+        from .whiteboard import Whiteboard
+        return json.dumps(Whiteboard(self.config).post(text, author, workspace), ensure_ascii=False)
 
     def _path(self, value: str, *, must_exist: bool = False) -> Path:
         if not isinstance(value, str) or not value.strip():

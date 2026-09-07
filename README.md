@@ -1,7 +1,10 @@
 # PilferedParrot Interface
 
-This checkout is the **0.7.0-rc.1 Harness preview**. [Try the preview](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.1)
-for bounded handoffs and artifact review. The stable download links below remain on 0.6.1.
+This checkout is the **0.7.0-rc.2 preview**, with faithful Chrome theme artwork, saved Work drafts,
+daily empty-session cleanup, and a shared model whiteboard alongside Harness.
+[Download the preview](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.2) ·
+[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.2/PilferedParrot-0.7.0-rc.2-windows-x64.zip).
+The stable download links below remain on 0.6.1.
 
 > **v0.6.1 · stable Linux release and Windows 10/11 x64 preview**
 >
@@ -156,8 +159,9 @@ PilferedParrot never receives the account password.
 Use **Preferences → Change theme** in the sidebar to open Chrome's theme gallery with
 PilferedParrot's dedicated browser profile. PilferedParrot runs as a private Chrome app window, and
 this control does not change the Chrome theme used for normal browsing. The selected theme persists for the main app window and
-PilferedParrot applies its colors and available new-tab background artwork when the user returns to
-the app. The isolated Chat window uses the same selected theme without sharing browser state.
+PilferedParrot shows the original theme colors and available new-tab, frame, toolbar and attribution
+artwork when the user returns to the app. Artwork keeps its native size, alignment and tiling; readable
+text panels leave the surrounding artwork visible. The isolated Chat window uses the same selected theme without sharing browser state.
 Chrome theme installation requires Chrome or Chromium; it is unavailable when using Edge.
 
 The model picker sits beside **Reasoning** at the bottom of the composer in both work and Chat.
@@ -309,6 +313,16 @@ Other commands remain available for diagnostics and scripts:
 Run `./bin/install-pilferedparrot-desktop` to replace the old Mint/Cinnamon start-menu entry and
 its letter-C icon with the PilferedParrot launcher and parrot artwork.
 
+## Drafts and the shared whiteboard
+
+Unsent Work text is saved per session. Switching sessions, reloading, or reopening the app restores
+that session's draft. Empty, unused sessions older than 24 hours are removed by a daily local cleanup
+while the app is open. Drafts, conversations, live selections and Harness activity are preserved.
+
+Open **Whiteboard** at the top of Work to read recent notes or leave a message. Models on all jobs
+can discover the shared board and use it when useful. Notes are local to this installation and are
+read on demand; the board is not copied into every prompt. See [access and limits](docs/whiteboard.md).
+
 ## Provider usage display
 
 The sidebar reports the percentage **left in Codex's weekly included-usage window**. It does not
@@ -352,7 +366,9 @@ per-turn token and context usage, capabilities, authentication, execution availa
 reporting availability, and model discovery. Codex, Claude, Gemini, Antigravity, and OpenAI-compatible endpoints
 retain separate implementations behind that contract.
 
-- An ordinary Codex turn receives the user's prompt directly. An explicitly launched Harness
+- Each new provider conversation receives a compact [shared whiteboard](docs/whiteboard.md) pointer
+  once. Board contents are read only on demand; there are no background model calls. An ordinary
+  Codex turn otherwise receives the user's prompt directly. An explicitly launched Harness
   package receives its compact, visible contract once for that attempt. Chat is informational and
   does not interpret, rewrite, or relay technical requests.
 - Continuing with the same provider and model resumes that provider session. A new conversation,

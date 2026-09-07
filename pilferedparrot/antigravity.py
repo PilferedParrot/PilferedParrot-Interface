@@ -35,6 +35,11 @@ class AntigravityAdapter(ProviderAdapter):
         command += ["--mode", mode]
         if mode == "accept-edits":
             command.append("--disable-slash-commands")
+        if mode != "plan":
+            from .whiteboard import whiteboard_directory
+            board = whiteboard_directory(self.config)
+            board.mkdir(parents=True, exist_ok=True, mode=0o700)
+            command += ["--add-dir", str(board)]
         if settings.get("model"):
             command += ["--model", str(settings["model"])]
         # Antigravity requires the explicit conversation identifier.  Do not

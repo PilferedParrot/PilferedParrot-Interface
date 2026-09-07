@@ -452,6 +452,12 @@ def _codex_command(conversation: Conversation, config: dict[str, Any], cwd: Path
     for path in codex_additional_write_dirs(config):
         if path != cwd:
             command += ["--add-dir", str(path)]
+    if sandbox != "read-only":
+        from .whiteboard import whiteboard_directory
+        board = whiteboard_directory(config)
+        board.mkdir(parents=True, exist_ok=True)
+        if board != cwd and board not in codex_additional_write_dirs(config):
+            command += ["--add-dir", str(board)]
     if codex.get("model"):
         command += ["--model", codex["model"]]
     if conversation.provider_session_id:
@@ -553,6 +559,11 @@ def _claude_command(conversation: Conversation, config: dict[str, Any]) -> list[
     ]
     if conversation.provider_session_id:
         command += ["--resume", conversation.provider_session_id]
+    if claude.get("permission_mode") != "plan":
+        from .whiteboard import whiteboard_directory
+        board = whiteboard_directory(config)
+        board.mkdir(parents=True, exist_ok=True)
+        command += ["--add-dir", str(board)]
     reasoning_effort = claude.get("reasoning_effort")
     if reasoning_effort is not None:
         reasoning_effort = str(reasoning_effort).strip().lower()
@@ -700,6 +711,8 @@ def capture_dispatch(
         if callable(candidate):
             on_progress = candidate
     conversation.provider = provider
+    from .whiteboard import whiteboard_discovery
+    prompt = prompt + whiteboard_discovery(conversation, config)
     from .adapters import adapter_for
     adapter = adapter_for(provider, config)
     operation = adapter.resume if conversation.provider_session_id \
@@ -716,6 +729,8 @@ def dispatch(
     config: dict[str, Any],
 ) -> int:
     conversation.provider = provider
+    from .whiteboard import whiteboard_discovery
+    prompt = prompt + whiteboard_discovery(conversation, config)
     from .adapters import adapter_for
     result = adapter_for(provider, config).run(prompt, cwd, conversation)
     if result.text and provider != "qwen" \

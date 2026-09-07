@@ -173,6 +173,42 @@ class BrowserThemeTests(unittest.TestCase):
             with patch.dict(os.environ, {"XDG_STATE_HOME": directory}):
                 self.assertEqual(selected_chrome_theme(), ({"active": False}, None))
 
+    def test_theme_artwork_is_reported_and_kept_inside_extension_pack(self):
+        theme_id = "abcdefghijklmnopabcdefghijklmnop"
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory) / "pilferedparrot/chrome-profile"
+            pack = profile / "Default/Extensions" / theme_id / "1.0.0"
+            pack.mkdir(parents=True)
+            for name in ("frame.png", "toolbar.png", "background.png", "attribution.png"):
+                (pack / name).write_bytes(b"image")
+            (pack / "manifest.json").write_text(json.dumps({
+                "name": "Artwork theme", "version": "1.0.0",
+                "theme": {
+                    "colors": {"frame": [1, 2, 3], "toolbar": [4, 5, 6]},
+                    "images": {
+                        "theme_frame": {"100": "frame.png"}, "theme_toolbar": "toolbar.png",
+                        "theme_ntp_background": "background.png",
+                        "theme_ntp_attribution": "attribution.png",
+                    },
+                    "properties": {"ntp_background_alignment": "right bottom", "ntp_background_repeat": "repeat-x"},
+                },
+            }), encoding="utf-8")
+            preferences = profile / "Default/Preferences"
+            preferences.write_text(json.dumps({"extensions": {"theme": {
+                "id": theme_id, "pack": str(pack),
+            }}}), encoding="utf-8")
+            with patch.dict(os.environ, {"XDG_STATE_HOME": directory}):
+                theme, background = selected_chrome_theme()
+                self.assertEqual(theme["frame_url"].split("?")[0], "/api/browser/theme/image/theme_frame")
+                self.assertEqual(theme["toolbar_url"].split("?")[0], "/api/browser/theme/image/theme_toolbar")
+                self.assertEqual(theme["attribution_url"].split("?")[0], "/api/browser/theme/image/theme_ntp_attribution")
+                self.assertEqual(theme["background_alignment"], "right bottom")
+                self.assertEqual(theme["background_repeat"], "repeat-x")
+                self.assertEqual(background, pack / "background.png")
+
+    def test_theme_image_rejects_unallowlisted_key(self):
+        self.assertIsNone(NativeIntegration.chrome_theme_image("../../Preferences"))
+
     @patch("pilferedparrot.web_native.subprocess.Popen")
     def test_theme_gallery_uses_persistent_profile_without_real_browser(self, popen):
         with tempfile.TemporaryDirectory() as directory, \
