@@ -144,8 +144,16 @@ class WindowsNativeControlsTests(unittest.TestCase):
                     self._wait(frame_is_themed, "Chromium's native caption did not use the installed theme")
                 finally:
                     print("Native frame pixels:", observed, "expected:", expected_pixel)
-                self.assertEqual(page.evaluate("getComputedStyle(document.querySelector('.topbar')).backgroundColor"),
-                                 "rgb(197, 43, 127)")
+                toolbar_rgba = page.evaluate("""() => {
+                    const context = document.createElement('canvas').getContext('2d');
+                    context.fillStyle = getComputedStyle(document.querySelector('.topbar')).backgroundColor;
+                    context.fillRect(0, 0, 1, 1);
+                    return [...context.getImageData(0, 0, 1, 1).data];
+                }""")
+                for actual, expected in zip(toolbar_rgba[:3], color):
+                    self.assertAlmostEqual(actual, expected, delta=1)
+                self.assertGreater(toolbar_rgba[3], 0)
+                self.assertLess(toolbar_rgba[3], 255)
                 user32.ShowWindow(hwnd, 3)
                 self._wait(lambda: user32.IsZoomed(hwnd), "Native maximize did not work")
                 user32.ShowWindow(hwnd, 9)
