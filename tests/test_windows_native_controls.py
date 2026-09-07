@@ -21,6 +21,7 @@ except ModuleNotFoundError:
     expect = sync_playwright = None
 
 from playwright_fixture import PilferedParrotBrowserFixture
+from pilferedparrot.web_native import chromium_browser
 
 
 @unittest.skipUnless(sys.platform == "win32" and sync_playwright, "Windows and Playwright required")
@@ -76,10 +77,25 @@ class WindowsNativeControlsTests(unittest.TestCase):
                                    "ntp_background": [255, 255, 255], "ntp_text": [0, 0, 0]}},
         }), encoding="utf-8")
         with sync_playwright() as playwright:
+            # Chromium can install the deterministic fixture unpacked. Branded
+            # Chrome no longer accepts --load-extension, but can read the theme
+            # already installed in this disposable profile.
+            setup = playwright.chromium.launch_persistent_context(
+                str(root / "profile"), headless=False, timeout=15000,
+                args=[f"--disable-extensions-except={theme}", f"--load-extension={theme}"],
+            )
+            try:
+                self._wait(lambda: (theme / "Cached Theme.pak").is_file(),
+                           "Chromium did not install the fixture theme")
+            finally:
+                setup.close()
+            installed_browser = chromium_browser()
+            if installed_browser and "edge" in Path(installed_browser).name.lower():
+                installed_browser = None
             context = playwright.chromium.launch_persistent_context(
                 str(root / "profile"), headless=False, timeout=15000,
+                executable_path=installed_browser or playwright.chromium.executable_path,
                 args=["--window-size=900,700", "--window-position=40,40",
-                      f"--disable-extensions-except={theme}", f"--load-extension={theme}",
                       f"--app={fixture.browser_url}"],
             )
             try:
@@ -124,8 +140,10 @@ class WindowsNativeControlsTests(unittest.TestCase):
                         user32.ReleaseDC(None, dc)
                     return expected_pixel in observed
 
-                self._wait(frame_is_themed, "Chromium's native caption did not use the installed theme")
-                print("Native frame pixels:", observed, "expected:", expected_pixel)
+                try:
+                    self._wait(frame_is_themed, "Chromium's native caption did not use the installed theme")
+                finally:
+                    print("Native frame pixels:", observed, "expected:", expected_pixel)
                 self.assertEqual(page.evaluate("getComputedStyle(document.querySelector('.topbar')).backgroundColor"),
                                  "rgb(197, 43, 127)")
                 user32.ShowWindow(hwnd, 3)

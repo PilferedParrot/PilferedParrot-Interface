@@ -17,10 +17,16 @@ from pilferedparrot.web_native import (
 
 class BrowserIntegrationTests(unittest.TestCase):
     def test_native_marker_is_added_only_to_app_window_url(self):
-        self.assertEqual(
-            native_app_url("http://127.0.0.1/#capability=secret"),
-            "http://127.0.0.1/#capability=secret&native-window=1",
-        )
+        with patch("pilferedparrot.web_native.WINDOWS", False):
+            self.assertEqual(
+                native_app_url("http://127.0.0.1/#capability=secret"),
+                "http://127.0.0.1/#capability=secret&native-window=1",
+            )
+        with patch("pilferedparrot.web_native.WINDOWS", True):
+            self.assertEqual(
+                native_app_url("http://127.0.0.1/#capability=secret"),
+                "http://127.0.0.1/#capability=secret",
+            )
 
     @patch("pilferedparrot.web_native.shutil.which")
     def test_chromium_discovery_preserves_launcher_preference_order(self, which):
@@ -123,6 +129,17 @@ class NativeWindowManagerTests(unittest.TestCase):
             {"ok": True, "supported": True},
         )
         window.maximize_or_restore.assert_called_once_with()
+        self.assertEqual(
+            manager.native_window_action(
+                "provider-codex", {"action": "begin-resize", "direction": "east"},
+            ),
+            {"ok": True, "supported": True},
+        )
+        window.begin_resize.assert_called_once_with("east")
+        manager.native_window_action("provider-codex", {"action": "update-geometry"})
+        manager.native_window_action("provider-codex", {"action": "end-geometry"})
+        window.update_geometry.assert_called_once_with()
+        window.end_geometry.assert_called_once_with()
 
     def test_native_actions_require_prepare_binding_and_allowlisted_data(self):
         manager = NativeIntegration(MagicMock())
@@ -141,7 +158,7 @@ class NativeWindowManagerTests(unittest.TestCase):
         manager.native_windows["main"] = MagicMock()
         with self.assertRaisesRegex(ValueError, "resize direction"):
             manager.native_window_action(
-                "main", {"action": "resize", "direction": ["north"]},
+                "main", {"action": "begin-resize", "direction": ["north"]},
             )
 
     def test_failed_native_close_keeps_the_verified_binding(self):

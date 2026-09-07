@@ -5,9 +5,11 @@ use the selected theme version, outdated image requests cannot return a differen
 artwork, and delayed refreshes cannot overwrite the current selection. Removing a theme clears
 its images. Dialogs, controls and activity panels use the selected theme's readable colors.
 
-Desktop app windows on Linux/X11 and Windows now have a themed title bar with minimize,
-maximize/restore and close controls, title-bar dragging and resizing. Browser tabs and unsupported
-window systems retain their normal native controls.
+Linux/X11 desktop app windows now have a themed title bar with minimize, maximize/restore and
+close controls, title-bar dragging and resizing. The main Windows app keeps Chrome's native
+frame, which uses the theme installed in its dedicated profile. Isolated Windows provider and
+Chat windows keep their browser-owned frames while their page content follows the shared theme.
+Browser tabs and unsupported window systems retain their normal native controls.
 
 The Linux source and Windows x64 package include the same application changes. Close the old
 application after current jobs finish and reopen it to load the updated desktop integration.

@@ -93,7 +93,7 @@ class WindowsDesktopTests(unittest.TestCase):
             self.assertIn("--disable-background-mode", command)
             self.assertEqual(
                 command[-1],
-                "--app=http://127.0.0.1:8000/#capability=x&native-window=1",
+                "--app=http://127.0.0.1:8000/#capability=x",
             )
 
     @patch("pilferedparrot.web_native.WINDOWS", True)

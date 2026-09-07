@@ -376,6 +376,10 @@ def browser_url(
 
 def native_app_url(url: str) -> str:
     """Mark a URL as a browser app window without exposing the marker to servers."""
+    if WINDOWS:
+        # Chromium owns its client-drawn Windows frame. The persistent profile
+        # applies the selected Chrome theme to that frame directly.
+        return url
     separator = "&" if "#" in url else "#"
     return f"{url}{separator}native-window=1"
 
@@ -508,10 +512,12 @@ class NativeIntegration:
         """Bind or control the native window owned by one capability context."""
         action = payload.get("action")
         if not isinstance(action, str) or action not in {
-            "prepare", "bind", "minimize", "maximize", "close", "drag", "resize",
+            "prepare", "bind", "minimize", "maximize", "close",
+            "begin-move", "begin-resize", "update-geometry", "end-geometry",
         }:
             raise ValueError("native window action is invalid")
-        allowed_fields = {"action", "direction"} if action == "resize" else {"action"}
+        allowed_fields = {"action", "direction"} \
+            if action == "begin-resize" else {"action"}
         if set(payload) - allowed_fields:
             raise ValueError("native window action fields are invalid")
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", window_id):
@@ -545,13 +551,17 @@ class NativeIntegration:
                 ok = window.close()
                 if ok:
                     self.native_windows.pop(window_id, None)
-            elif action == "drag":
-                ok = window.drag()
-            else:
+            elif action == "begin-move":
+                ok = window.begin_move()
+            elif action == "begin-resize":
                 direction = payload.get("direction")
                 if not isinstance(direction, str):
                     raise ValueError("native window resize direction is invalid")
-                ok = window.resize(direction)
+                ok = window.begin_resize(direction)
+            elif action == "update-geometry":
+                ok = window.update_geometry()
+            else:
+                ok = window.end_geometry()
             return {"ok": bool(ok), "supported": True}
 
     def forget_native_window(self, window_id: str) -> None:
@@ -638,7 +648,7 @@ class NativeIntegration:
         profile = Path(tempfile.mkdtemp(prefix=f"pilferedparrot-{provider}-"))
         provider_url = (
             f"{url}#capability={capability}&provider={provider}"
-            f"&window={history_id}&native-window=1"
+            f"&window={history_id}"
         )
         if cwd is None:
             provider_url += "&pick=1"
@@ -646,6 +656,7 @@ class NativeIntegration:
             provider_url += f"&cwd={quote(str(cwd), safe='')}"
         if model:
             provider_url += f"&model={quote(model, safe='')}"
+        provider_url = native_app_url(provider_url)
         try:
             process = subprocess.Popen(
                 [
@@ -720,8 +731,8 @@ class NativeIntegration:
             chat_url = (
                 f"{url}{separator}capability={capability}"
                 f"&provider={quote(provider, safe='')}&model={quote(model, safe='')}"
-                "&native-window=1"
             )
+            chat_url = native_app_url(chat_url)
             try:
                 process = subprocess.Popen(
                     [

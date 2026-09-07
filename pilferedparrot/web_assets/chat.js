@@ -27,6 +27,7 @@ try {
 }
 let nativeWindowRequested = fragmentNativeWindow;
 try { nativeWindowRequested ||= sessionStorage.getItem(NATIVE_WINDOW_SESSION_KEY) === "1"; } catch {}
+let nativeWindowInitializing = null;
 if (fragmentCapability) history.replaceState(null, "", location.pathname + location.search);
 let pollTimer = null;
 let themeBackgroundObjectUrl = null;
@@ -278,15 +279,82 @@ async function nativeWindowAction(action, details = {}) {
   });
 }
 
+function beginNativeGeometry(event, direction = "") {
+  if (event.button !== 0 || event.detail > 1) return;
+  event.preventDefault();
+  const target = event.currentTarget;
+  const startX = event.screenX;
+  const startY = event.screenY;
+  let moved = false;
+  let frame = null;
+  let pulseRunning = false;
+  let pulsePending = false;
+  let ended = false;
+  let endSent = false;
+  const begin = nativeWindowAction(
+    direction ? "begin-resize" : "begin-move",
+    direction ? { direction } : {},
+  );
+  const pulse = async () => {
+    frame = null;
+    if (pulseRunning) { pulsePending = true; return; }
+    pulseRunning = true;
+    try {
+      do {
+        pulsePending = false;
+        await begin;
+        await nativeWindowAction("update-geometry");
+      } while (pulsePending);
+    } catch (_error) {
+      // The native frame remains usable through standard keyboard shortcuts.
+    } finally {
+      pulseRunning = false;
+      if (ended && !endSent) {
+        endSent = true;
+        nativeWindowAction("end-geometry").catch(() => {});
+      }
+    }
+  };
+  const move = (nextEvent) => {
+    if ((nextEvent.buttons & 1) === 0) { finish(); return; }
+    if (Math.max(
+      Math.abs(nextEvent.screenX - startX), Math.abs(nextEvent.screenY - startY),
+    ) < 3) return;
+    moved = true;
+    if (frame === null) frame = requestAnimationFrame(pulse);
+  };
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    if (frame !== null) cancelAnimationFrame(frame);
+    target.removeEventListener("pointermove", move);
+    target.removeEventListener("pointerup", finish);
+    target.removeEventListener("pointercancel", finish);
+    target.removeEventListener("lostpointercapture", finish);
+    if (target.hasPointerCapture?.(event.pointerId)) target.releasePointerCapture(event.pointerId);
+    if (moved) pulse();
+    else begin.finally(() => {
+      if (!endSent) {
+        endSent = true;
+        nativeWindowAction("end-geometry").catch(() => {});
+      }
+    }).catch(() => {});
+  };
+  target.setPointerCapture?.(event.pointerId);
+  target.addEventListener("pointermove", move);
+  target.addEventListener("pointerup", finish);
+  target.addEventListener("pointercancel", finish);
+  target.addEventListener("lostpointercapture", finish);
+}
+
+
 function installNativeWindowControls() {
   const bar = $("#nativeTitlebar");
   if (!bar || document.body.classList.contains("native-window")) return;
   bar.hidden = false;
   document.body.classList.add("native-window");
   bar.querySelector("[data-native-drag]")?.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0 || event.detail > 1) return;
-    event.preventDefault();
-    nativeWindowAction("drag").catch(() => {});
+    beginNativeGeometry(event);
   });
   bar.querySelector("[data-native-drag]")?.addEventListener("dblclick", (event) => {
     if (event.button !== 0) return;
@@ -304,34 +372,38 @@ function installNativeWindowControls() {
   });
   document.querySelectorAll("[data-native-resize]").forEach((handle) => {
     handle.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0) return;
-      event.preventDefault();
-      nativeWindowAction("resize", {
-        direction: handle.dataset.nativeResize,
-      }).catch(() => {});
+      beginNativeGeometry(event, handle.dataset.nativeResize);
     });
   });
 }
 
 async function initializeNativeWindow() {
-  if (!nativeWindowRequested) return;
-  const originalTitle = document.title;
-  try {
-    const prepared = await nativeWindowAction("prepare");
-    if (!prepared.marker) return;
-    document.title = prepared.marker;
-    for (let attempt = 0; attempt < 8; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 40));
-      const result = await nativeWindowAction("bind");
-      if (result.supported) {
-        installNativeWindowControls();
-        return;
+  if (!nativeWindowRequested || document.body.classList.contains("native-window")) return;
+  if (nativeWindowInitializing) return nativeWindowInitializing;
+  nativeWindowInitializing = (async () => {
+    const originalTitle = document.title;
+    try {
+      const prepared = await nativeWindowAction("prepare");
+      if (!prepared.marker) return;
+      document.title = prepared.marker;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        const result = await nativeWindowAction("bind");
+        if (result.supported) {
+          installNativeWindowControls();
+          return;
+        }
       }
+    } catch (_error) {
+      // Unsupported desktops retain the browser or window-manager title bar.
+    } finally {
+      document.title = originalTitle;
     }
-  } catch (_error) {
-    // Unsupported desktops retain the browser or window-manager title bar.
+  })();
+  try {
+    await nativeWindowInitializing;
   } finally {
-    document.title = originalTitle;
+    nativeWindowInitializing = null;
   }
 }
 
@@ -940,6 +1012,7 @@ document.addEventListener("keydown", (event) => {
 });
 setupChatSidebarResizer();
 window.addEventListener("focus", () => {
+  initializeNativeWindow().catch(() => {});
   refreshState().catch(() => {});
   refreshBrowserTheme().catch(() => {});
 });

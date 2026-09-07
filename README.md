@@ -162,11 +162,13 @@ this control does not change the Chrome theme used for normal browsing. The sele
 PilferedParrot shows the original theme colors and available new-tab, frame, toolbar and attribution
 artwork when the user returns to the app. Artwork keeps its native size, alignment and tiling; readable
 text panels leave the surrounding artwork visible. The isolated Chat window uses the same selected theme without sharing browser state.
-Theme changes replace colors and artwork together. Desktop app windows on Linux/X11 and Windows
-also use the selected frame artwork and colors for the title bar and window controls. Drag the
-title bar to move the window, double-click it to maximize or restore, or use its minimize,
-maximize/restore and close buttons. Window edges remain resizable. Browser tabs and unsupported
-window systems retain their normal browser or desktop controls.
+Theme changes replace colors and artwork together. On Linux/X11, desktop app windows also use
+the selected frame artwork and colors for the title bar and window controls. Drag the title bar
+to move the window, double-click it to maximize or restore, or use its minimize, maximize/restore
+and close buttons. Window edges remain resizable. On Windows, the main app's dedicated Chrome
+profile supplies the theme to Chrome's own title bar and controls. Isolated provider and Chat
+windows keep their browser-owned frames; their page content uses the shared theme. Browser tabs
+and unsupported window systems retain their normal browser or desktop controls.
 Chrome theme installation requires Chrome or Chromium; it is unavailable when using Edge.
 
 The model picker sits beside **Reasoning** at the bottom of the composer in both work and Chat.

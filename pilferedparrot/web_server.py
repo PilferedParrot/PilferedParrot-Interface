@@ -32,7 +32,7 @@ ASSET_NAMES = (
     "index.html", "chat.html", "app.css", "markdown.js", "identity.js", "provider-updates.js", "app.js", "chat.js", "icon.svg",
     "pilferedparrot-icon.png", "company-logo.png", "company-logo-dark.png", "whiteboard-ui.js",
 )
-API_GENERATION = 21
+API_GENERATION = 22
 
 
 class ServerApp(Protocol):

@@ -5,6 +5,9 @@ This is the PilferedParrot 0.7.0-rc.3 Harness release-candidate preview for Wind
 The ZIP is portable: extract it anywhere and run PilferedParrot.exe.
 No Python installation or administrator rights are required.
 Install Google Chrome, Chromium, or Microsoft Edge to open the interface.
+Choose a theme through Preferences in the app. Chrome/Chromium's main app window
+uses that theme for its native title bar as well as the page. Separate provider
+and Chat windows retain their browser-owned frames. Edge cannot install Chrome themes.
 This preview executable is unsigned. SHA256SUMS is available with the release.
 
 The first run opens the local browser interface. Keep the console window open
