@@ -1,3 +1,14 @@
+## PilferedParrot Interface 0.7.0-rc.6 preview
+
+The selected theme artwork now continues through the Work and Chat top bars and the Linux
+custom window title bar. Header text and window controls remain readable over the artwork.
+The white divider strip and idle grab tab between sections are removed; pointer and keyboard
+sidebar resizing still work, with a visible handle on hover or keyboard focus.
+
+Linux/source and Windows x64 packages contain the same interface update. Reopen the updated
+application after current jobs finish to load this version. This remains a preview alongside
+stable 0.6.1.
+
 ## PilferedParrot Interface 0.7.0-rc.5 preview
 
 Work and Chat share one theme background across session history and the conversation. Drag the

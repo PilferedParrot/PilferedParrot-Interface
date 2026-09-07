@@ -51,7 +51,7 @@ body.native-window {
   user-select: none;
 }
 .chrome-theme .native-titlebar {
-  background: var(--chrome-theme-frame, #263342);
+  background: color-mix(in srgb, var(--chrome-theme-frame, #263342) 68%, transparent);
   color: var(--chrome-theme-frame-text, #e8edf3);
 }
 .native-titlebar[hidden] { display: none; }
@@ -119,13 +119,15 @@ body.chrome-theme {
   --blue: var(--chrome-theme-link, #67a8ff);
   --blue-strong: var(--chrome-theme-link, #1558d6);
   --text: var(--chrome-theme-text, #e8edf3);
-}
-/* Keep theme artwork in one coordinate space.  The grid children stay clear so
-   resizing either sidebar reveals the corresponding part of the same image. */
-body.chrome-theme :is(.shell, .chat-window) {
   background:
     var(--chrome-theme-background-image) var(--chrome-theme-background-position) / auto auto var(--chrome-theme-background-repeat),
     var(--bg);
+}
+/* Keep theme artwork in one coordinate space across the titlebar and content.
+   Structural grid children stay clear so resizing either sidebar reveals the
+   corresponding part of the same image. */
+body.chrome-theme :is(.shell, .chat-window) {
+  background: transparent;
 }
 body.chrome-theme :is(.main, .sidebar, .pane-resizer, .chat-window-sidebar, .chat-window-conversation) {
   background: transparent;
@@ -176,7 +178,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   min-width: 6px;
   cursor: col-resize;
   touch-action: none;
-  background: var(--bg);
+  background: transparent;
 }
 .pane-resizer::before { content: ""; position: absolute; inset: 0 -3px; }
 .pane-resizer::after {
@@ -184,13 +186,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   position: absolute;
   inset: calc(50% - 24px) 1px;
   border-radius: 4px;
-  background: var(--muted);
+  background: transparent;
   transition: background .15s ease;
 }
 .pane-resizer:hover::after, .pane-resizer:focus-visible::after, .pane-resizer.dragging::after {
   background: var(--blue);
 }
-.pane-resizer:focus-visible { outline: 1px solid var(--blue); outline-offset: -1px; }
+.pane-resizer:focus-visible { outline: 0; }
 
 .sidebar {
   --sidebar-muted: #a5b0bd;
@@ -981,10 +983,11 @@ body.chrome-theme :is(.sidebar, .chat-window-sidebar) {
   --sidebar-muted: var(--chrome-theme-frame-text); --sidebar-faint: var(--chrome-theme-frame-text);
 }
 body.chrome-theme :is(.topbar, .chat-window-conversation .chat-header) {
-  background: var(--chrome-theme-toolbar, #263342);
+  background: color-mix(in srgb, var(--chrome-theme-toolbar, #263342) 68%, transparent);
   color: var(--chrome-theme-toolbar-text);
   backdrop-filter: none;
 }
+body.chrome-theme :is(.sidebar, .chat-window-sidebar) { border-right-color: transparent; }
 body.chrome-theme :is(.chat-title, .project-path, .chat-item-title, .chat-item-meta, .brand, .chat-subtitle) { color: inherit; }
 body.chrome-theme :is(.composer-wrap, .chat-composer-wrap) { background: transparent; }
 body.chrome-theme :is(.composer, .chat-composer, .message, .chat-message, .welcome, .dialog-card) {
