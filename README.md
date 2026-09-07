@@ -1,10 +1,10 @@
 # PilferedParrot Interface
 
-This checkout is the **0.7.0-rc.4 preview**, with centered header branding, a cleaner sidebar,
-consistent Chrome themes, saved Work drafts, daily empty-session cleanup, and a shared model
+This checkout is the **0.7.0-rc.5 preview**, with continuous theme backgrounds, resizable session
+sidebars, automatic theme updates, saved Work drafts, daily empty-session cleanup, and a shared model
 whiteboard alongside Harness.
-[Download the preview](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.4) ·
-[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.4/PilferedParrot-0.7.0-rc.4-windows-x64.zip).
+[Download the preview](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.5) ·
+[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.5/PilferedParrot-0.7.0-rc.5-windows-x64.zip).
 The stable download links below remain on 0.6.1.
 
 > **v0.6.1 · stable Linux release and Windows 10/11 x64 preview**
@@ -160,11 +160,16 @@ PilferedParrot never receives the account password.
 Use **Preferences → Change theme** in the sidebar to open Chrome's theme gallery with
 PilferedParrot's dedicated browser profile. PilferedParrot runs as a private Chrome app window, and
 this control does not change the Chrome theme used for normal browsing. The selected theme persists for the main app window and
-PilferedParrot shows the original theme colors and available new-tab, frame, toolbar and attribution
-artwork when the user returns to the app. Artwork keeps its native size, alignment and tiling; readable
-text panels leave the surrounding artwork visible. The isolated Chat window uses the same selected theme without sharing browser state.
-Theme changes replace colors and artwork together. On Linux/X11, desktop app windows also use
-the selected frame artwork and colors for the title bar and window controls. Drag the title bar
+PilferedParrot shows the theme palette and available new-tab and attribution artwork
+across the full Work and Chat window. Headers use solid theme colors to keep text readable. Artwork keeps its native size, alignment and tiling;
+readable text panels leave the surrounding artwork visible. Drag the divider beside session history
+to resize the sidebar and change how much of the continuous background falls inside it. You can
+also focus the divider and use arrow keys, Home or End; the width is saved for each view.
+The isolated Chat window uses the same selected theme without sharing browser state.
+Visible windows check for theme changes every second and apply them automatically after Chrome
+saves the selection, without refreshing the page or losing drafts. Theme changes replace colors
+and artwork together. On Linux/X11, desktop app windows also use
+the selected frame colors for the title bar and window controls. Drag the title bar
 to move the window, double-click it to maximize or restore, or use its minimize, maximize/restore
 and close buttons. Window edges remain resizable. On Windows, the main app's dedicated Chrome
 profile supplies the theme to Chrome's own title bar and controls. Isolated provider and Chat

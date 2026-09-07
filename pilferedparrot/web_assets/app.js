@@ -48,6 +48,9 @@ let themeBackgroundObjectUrl = null;
 const themeImageObjectUrls = { frame: null, toolbar: null, attribution: null };
 let themeApplyGeneration = 0;
 let themeRefreshGeneration = 0;
+let themePollTimer = null;
+let themeRefreshPending = null;
+let appliedThemeDescriptor = null;
 let terminalTarget = null;
 let providerLogoutTarget = null;
 let pendingLaunchModel = null;
@@ -66,9 +69,11 @@ const harnessPendingActions = new Set();
 const documentId = globalThis.crypto?.randomUUID?.()
   || `document-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const BUDGET_POLL_MS = 60_000;
+const THEME_POLL_MS = 1_000;
 const CHAT_WINDOW_WIDTH = 871;
 const CHAT_WINDOW_HEIGHT = 376;
 const PANE_WIDTHS_KEY = "pilferedparrot-pane-widths";
+const WORK_CONVERSATION_MIN_WIDTH = 300;
 const DEFAULT_PROMPT_PLACEHOLDER = "Describe what you want done";
 const FORK_PROMPT_SUGGESTION = "Help me create my own version of the Pilfered Parrot interface, then ask me what I'd like to change.";
 let promptSuggestion = "";
@@ -989,7 +994,9 @@ function renderMessages() {
 
 function clampPaneWidth(name, value) {
   const limits = PANE_LIMITS[name];
-  return Math.round(Math.max(limits.min, Math.min(limits.max, Number(value) || limits.min)));
+  const maximum = Math.max(limits.min, Math.min(limits.max,
+    window.innerWidth - WORK_CONVERSATION_MIN_WIDTH - 6));
+  return Math.round(Math.max(limits.min, Math.min(maximum, Number(value) || limits.min)));
 }
 
 function savedPaneWidths() {
@@ -1000,9 +1007,10 @@ function savedPaneWidths() {
 function setPaneWidth(name, value, persist = false) {
   const width = clampPaneWidth(name, value);
   $(".shell").style.setProperty(PANE_LIMITS[name].variable, `${width}px`);
-  const handle = name === "sidebar" ? $("#sidebarResizer") : $("#chatResizer");
+  const handle = $("#sidebarResizer");
   handle.setAttribute("aria-valuemin", PANE_LIMITS[name].min);
-  handle.setAttribute("aria-valuemax", PANE_LIMITS[name].max);
+  handle.setAttribute("aria-valuemax", Math.max(PANE_LIMITS[name].min,
+    Math.min(PANE_LIMITS[name].max, window.innerWidth - WORK_CONVERSATION_MIN_WIDTH - 6)));
   handle.setAttribute("aria-valuenow", width);
   if (persist) {
     const widths = savedPaneWidths();
@@ -1015,7 +1023,7 @@ function setPaneWidth(name, value, persist = false) {
 
 function setupPaneResizer(selector, name) {
   const handle = $(selector);
-  const fromPointer = (event) => name === "sidebar" ? event.clientX : window.innerWidth - event.clientX;
+  const fromPointer = (event) => event.clientX;
   handle.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
     event.preventDefault();
@@ -1039,12 +1047,14 @@ function setupPaneResizer(selector, name) {
     handle.addEventListener("pointercancel", finish);
   });
   handle.addEventListener("keydown", (event) => {
-    if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
     const current = parseFloat(getComputedStyle($(".shell"))
       .getPropertyValue(PANE_LIMITS[name].variable)) || PANE_LIMITS[name].min;
-    const screenDelta = event.key === "ArrowRight" ? 16 : -16;
-    setPaneWidth(name, current + (name === "chat" ? -screenDelta : screenDelta), true);
+    const next = event.key === "Home" ? PANE_LIMITS[name].min
+      : event.key === "End" ? PANE_LIMITS[name].max
+        : current + (event.key === "ArrowRight" ? 16 : -16);
+    setPaneWidth(name, next, true);
   });
 }
 
@@ -1055,6 +1065,26 @@ function restorePaneWidths() {
       .getPropertyValue(PANE_LIMITS[name].variable));
     setPaneWidth(name, Number.isFinite(Number(widths[name])) ? widths[name] : current);
   });
+}
+
+function themeDescriptor(theme) {
+  if (!theme?.active) return "inactive";
+  return JSON.stringify({
+    id: theme.id, version: theme.version, colors: theme.colors,
+    frame_url: theme.frame_url, frame_overlay_url: theme.frame_overlay_url,
+    toolbar_url: theme.toolbar_url, attribution_url: theme.attribution_url,
+    background: theme.background, background_url: theme.background_url,
+    background_alignment: theme.background_alignment, background_repeat: theme.background_repeat,
+  });
+}
+
+function scheduleThemeRefresh(delay = THEME_POLL_MS) {
+  if (themePollTimer !== null || document.hidden) return;
+  themePollTimer = setTimeout(async () => {
+    themePollTimer = null;
+    await refreshBrowserTheme(false).catch(() => {});
+    scheduleThemeRefresh();
+  }, delay);
 }
 
 function renderHeader() {
@@ -1493,7 +1523,7 @@ async function applyBrowserTheme(theme, refreshGeneration = null) {
     "--chrome-theme-panel-text": foreground(panel, colors.ntp_section_text || colors.ntp_text),
     "--chrome-theme-frame-text": foreground(frame, colors.tab_background_text),
     "--chrome-theme-toolbar-text": foreground(toolbar, colors.toolbar_text || colors.bookmark_text),
-    "--chrome-theme-link": color(colors.ntp_link, foreground(background, "#1558d6")),
+    "--chrome-theme-link": foreground(panel, colors.ntp_link || "#1558d6"),
     "--chrome-theme-section": panel,
   };
   const themeImages = {
@@ -1503,6 +1533,7 @@ async function applyBrowserTheme(theme, refreshGeneration = null) {
     attribution: ["--chrome-theme-attribution-image", selected.attribution_url],
   };
   const stagedImages = {};
+  let incomplete = false;
   const revokeStaged = () => Object.values(stagedImages).forEach((url) => {
     if (url) URL.revokeObjectURL(url);
   });
@@ -1511,11 +1542,13 @@ async function applyBrowserTheme(theme, refreshGeneration = null) {
     try {
       const response = await fetch(imageUrl, {
         headers: { "X-PilferedParrot-Capability": state.capability },
+        signal: AbortSignal.timeout(10_000),
       });
       if (!response.ok) throw new Error(`Theme image failed (${response.status})`);
       stagedImages[name] = URL.createObjectURL(await response.blob());
     } catch (_error) {
       stagedImages[name] = null;
+      incomplete = true;
     }
   }));
   if (!current()) { revokeStaged(); return; }
@@ -1524,17 +1557,24 @@ async function applyBrowserTheme(theme, refreshGeneration = null) {
     try {
       const response = await fetch(selected.background_url, {
         headers: { "X-PilferedParrot-Capability": state.capability },
+        signal: AbortSignal.timeout(10_000),
       });
       if (!response.ok) throw new Error(`Theme background failed (${response.status})`);
       stagedBackground = URL.createObjectURL(await response.blob());
     } catch (_error) {
       stagedBackground = null;
+      incomplete = true;
     }
   }
   if (!current()) {
     revokeStaged();
     if (stagedBackground) URL.revokeObjectURL(stagedBackground);
     return;
+  }
+  if (selected.active && (incomplete || (selected.background && !selected.background_url))) {
+    revokeStaged();
+    if (stagedBackground) URL.revokeObjectURL(stagedBackground);
+    return false;
   }
   body.style.colorScheme = selected.active && luminance(background) > .179 ? "light" : "dark";
   Object.entries(properties).forEach(([name, value]) => {
@@ -1567,19 +1607,29 @@ async function applyBrowserTheme(theme, refreshGeneration = null) {
   );
   $("#chromeThemeLabel").textContent = "Change theme";
   state.browser_theme = selected;
+  return true;
 }
 
 async function refreshBrowserTheme(notify = false) {
-  const generation = ++themeRefreshGeneration;
-  const previous = document.body.dataset.chromeTheme || "";
-  const theme = await api("/api/browser/theme");
-  if (generation !== themeRefreshGeneration) return;
-  await applyBrowserTheme(theme, generation);
-  if (generation !== themeRefreshGeneration) return;
-  const current = document.body.dataset.chromeTheme || "";
-  if (notify && current && current !== previous) {
-    toast(`Applied ${theme.name || "Chrome theme"} to PilferedParrot.`);
-  }
+  if (themeRefreshPending) return themeRefreshPending;
+  themeRefreshPending = (async () => {
+    const generation = ++themeRefreshGeneration;
+    const previous = document.body.dataset.chromeTheme || "";
+    const theme = await api("/api/browser/theme", { signal: AbortSignal.timeout(10_000) });
+    if (generation !== themeRefreshGeneration) return;
+    const descriptor = themeDescriptor(theme);
+    if (descriptor === appliedThemeDescriptor) return;
+    const applied = await applyBrowserTheme(theme, generation);
+    if (generation !== themeRefreshGeneration) return;
+    if (!applied) return;
+    appliedThemeDescriptor = descriptor;
+    const current = document.body.dataset.chromeTheme || "";
+    if (notify && current && current !== previous) {
+      toast(`Applied ${theme.name || "Chrome theme"} to PilferedParrot.`);
+    }
+  })();
+  try { return await themeRefreshPending; }
+  finally { themeRefreshPending = null; }
 }
 
 async function createChat(requestedModel = "") {
@@ -1890,6 +1940,8 @@ async function init() {
     scheduleBudgetPoll();
   } catch (error) {
     toast(error.message);
+  } finally {
+    scheduleThemeRefresh();
   }
 }
 
@@ -2386,7 +2438,12 @@ function syncSidebarAccessibility() {
 }
 $("#openSidebar").addEventListener("click", () => setSidebarOpen(true));
 $("#closeSidebar").addEventListener("click", () => setSidebarOpen(false));
-window.addEventListener("resize", syncSidebarAccessibility);
+window.addEventListener("resize", () => {
+  syncSidebarAccessibility();
+  const current = parseFloat(getComputedStyle($(".shell"))
+    .getPropertyValue(PANE_LIMITS.sidebar.variable));
+  setPaneWidth("sidebar", current);
+});
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && $("#sidebar").classList.contains("open")) {
     setSidebarOpen(false);
@@ -2395,12 +2452,17 @@ document.addEventListener("keydown", (event) => {
 });
 window.addEventListener("focus", () => {
   initializeNativeWindow().catch(() => {});
-  setTimeout(() => refreshBrowserTheme(true).catch(() => {}), 250);
-  setTimeout(() => refreshBrowserTheme(true).catch(() => {}), 1200);
+  refreshBrowserTheme(true).catch(() => {});
+  scheduleThemeRefresh(0);
   setTimeout(() => refreshBudgets(false), 400);
 });
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) { refreshBudgets(false); scheduleBudgetPoll(); }
+  if (!document.hidden) {
+    refreshBudgets(false); scheduleBudgetPoll();
+    refreshBrowserTheme(false).catch(() => {}); scheduleThemeRefresh(0);
+  } else if (themePollTimer !== null) {
+    clearTimeout(themePollTimer); themePollTimer = null;
+  }
 });
 window.addEventListener("pagehide", () => {
   saveActiveDraft();

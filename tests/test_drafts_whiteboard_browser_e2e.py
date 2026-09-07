@@ -103,7 +103,7 @@ class DraftWhiteboardBrowserTests(unittest.TestCase):
           background_alignment: 'right bottom', background_repeat: 'repeat'
         })''')
         palette = self.page.evaluate('''() => {
-          const main = getComputedStyle(document.querySelector('.main'));
+          const main = getComputedStyle(document.querySelector('.shell'));
           const composer = getComputedStyle(document.querySelector('.composer'));
           const prompt = getComputedStyle(document.querySelector('#prompt'));
           return {background: main.backgroundColor, image: main.backgroundImage,
@@ -165,15 +165,15 @@ class DraftWhiteboardBrowserTests(unittest.TestCase):
             await second;
             const afterNew = {
               theme: document.body.dataset.chromeTheme,
-              background: getComputedStyle(document.querySelector('.main')).backgroundColor,
-              image: getComputedStyle(document.querySelector('.main')).backgroundImage,
+              background: getComputedStyle(document.querySelector('.shell')).backgroundColor,
+              image: getComputedStyle(document.querySelector('.shell')).backgroundImage,
             };
             requests.get('/theme-old.png')(response('old'));
             await first;
             const afterOld = {
               theme: document.body.dataset.chromeTheme,
-              background: getComputedStyle(document.querySelector('.main')).backgroundColor,
-              image: getComputedStyle(document.querySelector('.main')).backgroundImage,
+              background: getComputedStyle(document.querySelector('.shell')).backgroundColor,
+              image: getComputedStyle(document.querySelector('.shell')).backgroundImage,
             };
             return { afterNew, afterOld, revoked };
           } finally {
@@ -213,8 +213,8 @@ class DraftWhiteboardBrowserTests(unittest.TestCase):
           });
           const palette = () => ({
             theme: document.body.dataset.chromeTheme,
-            background: getComputedStyle(document.querySelector('.main')).backgroundColor,
-            image: getComputedStyle(document.querySelector('.main')).backgroundImage,
+            background: getComputedStyle(document.querySelector('.shell')).backgroundColor,
+            image: getComputedStyle(document.querySelector('.shell')).backgroundImage,
           });
           try {
             const first = applyBrowserTheme(theme('old-atomic', '#112233'));
