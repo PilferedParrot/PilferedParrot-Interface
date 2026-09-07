@@ -6,6 +6,7 @@ import json
 import ipaddress
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -351,6 +352,17 @@ def selected_chrome_theme() -> tuple[dict[str, Any], Path | None]:
         return inactive, None
 
 
+def chrome_theme_version(theme: dict[str, Any]) -> str | None:
+    """Return the stable cache-busting token for a selected theme."""
+    theme_id = theme.get("id")
+    version = theme.get("version")
+    if not isinstance(theme_id, str) or not CHROME_THEME_ID.fullmatch(theme_id):
+        return None
+    if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9._-]{0,40}", version):
+        return None
+    return f"{theme_id}-{version}"
+
+
 def browser_url(
     url: str, capability: str, *, api_generation: int,
     asset_version: str, runtime_version: str,
@@ -360,6 +372,12 @@ def browser_url(
         f"{url}/?generation={api_generation}&assets={asset_version}"
         f"&runtime={runtime_version}#capability={capability}"
     )
+
+
+def native_app_url(url: str) -> str:
+    """Mark a URL as a browser app window without exposing the marker to servers."""
+    separator = "&" if "#" in url else "#"
+    return f"{url}{separator}native-window=1"
 
 
 def open_browser(url: str) -> bool:
@@ -391,7 +409,7 @@ def open_app_browser(url: str, *, browser: str | None = None) -> bool:
             browser, f"--user-data-dir={profile}", "--no-first-run",
             "--no-default-browser-check", "--disable-background-mode",
             "--disable-session-crashed-bubble", "--start-maximized",
-            "--class=pilferedparrot", f"--app={url}",
+            "--class=pilferedparrot", f"--app={native_app_url(url)}",
         ],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True,
@@ -479,6 +497,67 @@ class NativeIntegration:
         self.chat_window_profile: Path | None = None
         self.provider_windows_lock = threading.RLock()
         self.provider_windows: dict[str, dict[str, Any]] = {}
+        self.native_window_lock = threading.RLock()
+        self.native_window_adapter: Any = None
+        self.native_window_markers: dict[str, str] = {}
+        self.native_windows: dict[str, Any] = {}
+
+    def native_window_action(
+        self, window_id: str, payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Bind or control the native window owned by one capability context."""
+        action = payload.get("action")
+        if not isinstance(action, str) or action not in {
+            "prepare", "bind", "minimize", "maximize", "close", "drag", "resize",
+        }:
+            raise ValueError("native window action is invalid")
+        allowed_fields = {"action", "direction"} if action == "resize" else {"action"}
+        if set(payload) - allowed_fields:
+            raise ValueError("native window action fields are invalid")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", window_id):
+            raise ValueError("native window id is invalid")
+        with self.native_window_lock:
+            if action == "prepare":
+                marker = f"PilferedParrot Native {secrets.token_hex(16)}"
+                self.native_window_markers[window_id] = marker
+                return {"ok": True, "marker": marker}
+            if action == "bind":
+                marker = self.native_window_markers.get(window_id)
+                if marker is None:
+                    raise ValueError("native window binding was not prepared")
+                if self.native_window_adapter is None:
+                    from .native_window import NativeWindowAdapter
+                    self.native_window_adapter = NativeWindowAdapter()
+                window = self.native_window_adapter.bind_active_window(marker)
+                if window is None:
+                    return {"ok": True, "supported": False}
+                self.native_window_markers.pop(window_id, None)
+                self.native_windows[window_id] = window
+                return {"ok": True, "supported": True}
+            window = self.native_windows.get(window_id)
+            if window is None:
+                return {"ok": False, "supported": False}
+            if action == "minimize":
+                ok = window.minimize()
+            elif action == "maximize":
+                ok = window.maximize_or_restore()
+            elif action == "close":
+                ok = window.close()
+                if ok:
+                    self.native_windows.pop(window_id, None)
+            elif action == "drag":
+                ok = window.drag()
+            else:
+                direction = payload.get("direction")
+                if not isinstance(direction, str):
+                    raise ValueError("native window resize direction is invalid")
+                ok = window.resize(direction)
+            return {"ok": bool(ok), "supported": True}
+
+    def forget_native_window(self, window_id: str) -> None:
+        with self.native_window_lock:
+            self.native_window_markers.pop(window_id, None)
+            self.native_windows.pop(window_id, None)
 
     @staticmethod
     def window_number(payload: dict[str, Any], name: str, minimum: int) -> int:
@@ -505,6 +584,7 @@ class NativeIntegration:
                 self.chat_window_capability = None
                 self.chat_window_provider = None
                 self._clean_chat_window_profile()
+                self.forget_native_window("chat")
 
     def _watch_provider_window(self, launch_id: str, process: subprocess.Popen[bytes]) -> None:
         process.wait()
@@ -531,6 +611,7 @@ class NativeIntegration:
         except (OSError, ValueError):
             pass
         self.revoke_capability(record.get("capability"))
+        self.forget_native_window(launch_id)
         profile = record.get("profile")
         if isinstance(profile, Path):
             shutil.rmtree(profile, ignore_errors=True)
@@ -555,7 +636,10 @@ class NativeIntegration:
             "dashboard", window_id=launch_id, provider=provider, history_id=history_id,
         )
         profile = Path(tempfile.mkdtemp(prefix=f"pilferedparrot-{provider}-"))
-        provider_url = f"{url}#capability={capability}&provider={provider}&window={history_id}"
+        provider_url = (
+            f"{url}#capability={capability}&provider={provider}"
+            f"&window={history_id}&native-window=1"
+        )
         if cwd is None:
             provider_url += "&pick=1"
         else:
@@ -629,11 +713,14 @@ class NativeIntegration:
                 browser_names = "Chrome, Chromium, or Edge" if WINDOWS else "Chrome or Chromium"
                 raise RuntimeError(f"{browser_names} is required for the Chat window")
             profile = Path(tempfile.mkdtemp(prefix="pilferedparrot-chat-"))
-            capability = issue_capability("chat", provider=provider, model=model)
+            capability = issue_capability(
+                "chat", window_id="chat", provider=provider, model=model,
+            )
             separator = "&" if "#" in url else "#"
             chat_url = (
                 f"{url}{separator}capability={capability}"
                 f"&provider={quote(provider, safe='')}&model={quote(model, safe='')}"
+                "&native-window=1"
             )
             try:
                 process = subprocess.Popen(
@@ -693,15 +780,23 @@ class NativeIntegration:
         return theme
 
     @staticmethod
-    def chrome_theme_background() -> tuple[bytes, str] | None:
-        return NativeIntegration.chrome_theme_image("theme_ntp_background")
+    def chrome_theme_background(
+        theme_version: str | None = None,
+    ) -> tuple[bytes, str] | None:
+        return NativeIntegration.chrome_theme_image(
+            "theme_ntp_background", theme_version=theme_version,
+        )
 
     @staticmethod
-    def chrome_theme_image(image_key: str) -> tuple[bytes, str] | None:
+    def chrome_theme_image(
+        image_key: str, *, theme_version: str | None = None,
+    ) -> tuple[bytes, str] | None:
         """Return one allowlisted image from the selected theme."""
         if image_key not in CHROME_THEME_IMAGE_KEYS:
             return None
-        _theme, background = selected_chrome_theme()
+        selected_theme, background = selected_chrome_theme()
+        if theme_version is not None and chrome_theme_version(selected_theme) != theme_version:
+            return None
         if background is None and image_key == "theme_ntp_background":
             return None
         # Re-read the selected pack and resolve the requested manifest image.
@@ -724,6 +819,12 @@ class NativeIntegration:
             if not manifest_path.is_relative_to(pack) or manifest_path.stat().st_size > 1_000_000:
                 return None
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if theme_version is not None:
+                current_version = re.sub(
+                    r"[^A-Za-z0-9._-]", "", str(manifest.get("version") or "")
+                )[:40]
+                if f"{theme_id}-{current_version}" != theme_version:
+                    return None
             theme = manifest.get("theme") if isinstance(manifest, dict) else None
             images = theme.get("images", {}) if isinstance(theme, dict) else {}
             path = _chrome_theme_image(pack, images.get(image_key) if isinstance(images, dict) else None)
@@ -740,6 +841,9 @@ class NativeIntegration:
     def shutdown(self, *, deadline: float | None = None, timeout: float = 3) -> None:
         if deadline is None:
             deadline = time.monotonic() + timeout
+        with self.native_window_lock:
+            self.native_window_markers.clear()
+            self.native_windows.clear()
         with self.chat_window_lock:
             process = self.chat_window_process
             if process is not None and process.poll() is None:

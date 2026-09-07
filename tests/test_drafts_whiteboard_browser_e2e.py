@@ -132,6 +132,114 @@ class DraftWhiteboardBrowserTests(unittest.TestCase):
         self.page.evaluate('applyBrowserTheme({active:false})')
         self.assertFalse(self.page.locator('body').evaluate("node => node.classList.contains('chrome-theme')"))
 
+    def test_out_of_order_theme_images_leave_the_newest_theme_applied(self):
+        result = self.page.evaluate('''async () => {
+          const originalFetch = window.fetch;
+          const originalCreateObjectURL = URL.createObjectURL;
+          const originalRevokeObjectURL = URL.revokeObjectURL;
+          const requests = new Map();
+          const blobs = new WeakMap();
+          const revoked = [];
+          window.fetch = (url) => new Promise((resolve) => requests.set(url, resolve));
+          URL.createObjectURL = (blob) => `blob:${blobs.get(blob)}`;
+          URL.revokeObjectURL = (url) => revoked.push(url);
+          const response = (name) => ({
+            ok: true,
+            blob: async () => {
+              const blob = new Blob([name]);
+              blobs.set(blob, name);
+              return blob;
+            },
+          });
+          const theme = (id, color) => ({
+            active: true, id, version: '1',
+            colors: { ntp_background: color, frame: color, toolbar: color },
+            background: true, background_url: `/theme-${id}.png`,
+          });
+          try {
+            const first = applyBrowserTheme(theme('old', '#112233'));
+            while (!requests.has('/theme-old.png')) await new Promise((resolve) => setTimeout(resolve, 0));
+            const second = applyBrowserTheme(theme('new', '#ddeeff'));
+            while (!requests.has('/theme-new.png')) await new Promise((resolve) => setTimeout(resolve, 0));
+            requests.get('/theme-new.png')(response('new'));
+            await second;
+            const afterNew = {
+              theme: document.body.dataset.chromeTheme,
+              background: getComputedStyle(document.querySelector('.main')).backgroundColor,
+              image: getComputedStyle(document.querySelector('.main')).backgroundImage,
+            };
+            requests.get('/theme-old.png')(response('old'));
+            await first;
+            const afterOld = {
+              theme: document.body.dataset.chromeTheme,
+              background: getComputedStyle(document.querySelector('.main')).backgroundColor,
+              image: getComputedStyle(document.querySelector('.main')).backgroundImage,
+            };
+            return { afterNew, afterOld, revoked };
+          } finally {
+            window.fetch = originalFetch;
+            URL.createObjectURL = originalCreateObjectURL;
+            URL.revokeObjectURL = originalRevokeObjectURL;
+          }
+        }''')
+        self.assertEqual(result['afterNew']['theme'], 'new:1')
+        self.assertEqual(result['afterOld'], result['afterNew'])
+        self.assertIn('rgb(221, 238, 255)', result['afterNew']['background'])
+        self.assertIn('blob:new', result['afterNew']['image'])
+        self.assertNotIn('blob:old', result['afterNew']['image'])
+
+    def test_theme_colors_wait_for_matching_artwork_before_commit(self):
+        result = self.page.evaluate('''async () => {
+          const originalFetch = window.fetch;
+          const originalCreateObjectURL = URL.createObjectURL;
+          const originalRevokeObjectURL = URL.revokeObjectURL;
+          const requests = new Map();
+          const blobs = new WeakMap();
+          window.fetch = (url) => new Promise((resolve) => requests.set(url, resolve));
+          URL.createObjectURL = (blob) => `blob:${blobs.get(blob)}`;
+          URL.revokeObjectURL = () => {};
+          const response = (name) => ({
+            ok: true,
+            blob: async () => {
+              const blob = new Blob([name]);
+              blobs.set(blob, name);
+              return blob;
+            },
+          });
+          const theme = (id, color) => ({
+            active: true, id, version: '1',
+            colors: { ntp_background: color, frame: color, toolbar: color },
+            background: true, background_url: `/theme-${id}.png`,
+          });
+          const palette = () => ({
+            theme: document.body.dataset.chromeTheme,
+            background: getComputedStyle(document.querySelector('.main')).backgroundColor,
+            image: getComputedStyle(document.querySelector('.main')).backgroundImage,
+          });
+          try {
+            const first = applyBrowserTheme(theme('old-atomic', '#112233'));
+            while (!requests.has('/theme-old-atomic.png')) await new Promise((resolve) => setTimeout(resolve, 0));
+            requests.get('/theme-old-atomic.png')(response('old'));
+            await first;
+            const second = applyBrowserTheme(theme('new-atomic', '#ddeeff'));
+            while (!requests.has('/theme-new-atomic.png')) await new Promise((resolve) => setTimeout(resolve, 0));
+            const whilePending = palette();
+            requests.get('/theme-new-atomic.png')(response('new'));
+            await second;
+            return { whilePending, committed: palette() };
+          } finally {
+            window.fetch = originalFetch;
+            URL.createObjectURL = originalCreateObjectURL;
+            URL.revokeObjectURL = originalRevokeObjectURL;
+          }
+        }''')
+        self.assertEqual(result['whilePending']['theme'], 'old-atomic:1')
+        self.assertIn('rgb(17, 34, 51)', result['whilePending']['background'])
+        self.assertIn('blob:old', result['whilePending']['image'])
+        self.assertEqual(result['committed']['theme'], 'new-atomic:1')
+        self.assertIn('rgb(221, 238, 255)', result['committed']['background'])
+        self.assertIn('blob:new', result['committed']['image'])
+
     def test_recovered_submission_does_not_restore_already_sent_draft(self):
         self.page.evaluate('''() => {
           const original = api;

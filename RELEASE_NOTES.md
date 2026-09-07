@@ -1,3 +1,18 @@
+## PilferedParrot Interface 0.7.0-rc.3 preview
+
+Theme changes now replace colors and artwork together in Work and Chat. Background requests
+use the selected theme version, outdated image requests cannot return a different theme's
+artwork, and delayed refreshes cannot overwrite the current selection. Removing a theme clears
+its images. Dialogs, controls and activity panels use the selected theme's readable colors.
+
+Desktop app windows on Linux/X11 and Windows now have a themed title bar with minimize,
+maximize/restore and close controls, title-bar dragging and resizing. Browser tabs and unsupported
+window systems retain their normal native controls.
+
+The Linux source and Windows x64 package include the same application changes. Close the old
+application after current jobs finish and reopen it to load the updated desktop integration.
+This remains a preview alongside stable 0.6.1.
+
 ## PilferedParrot Interface 0.7.0-rc.2 preview
 
 Chrome theme artwork now loads in Work and Chat: the content security policy permits the

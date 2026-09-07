@@ -22,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib.error import HTTPError
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 from urllib.request import urlopen
 
 
@@ -48,9 +48,10 @@ class ServerApp(Protocol):
     def budgets(self) -> dict[str, Any]: ...
     def poll_provider_models(self, provider: str) -> Any: ...
     def provider_update(self, provider: str) -> Any: ...
+    def native_window_action(self, window_id: str, payload: dict[str, Any]) -> Any: ...
     def browser_theme(self) -> Any: ...
-    def chrome_theme_background(self) -> tuple[bytes, str] | None: ...
-    def chrome_theme_image(self, image_key: str) -> tuple[bytes, str] | None: ...
+    def chrome_theme_background(self, *, theme_version: str | None = None) -> tuple[bytes, str] | None: ...
+    def chrome_theme_image(self, image_key: str, *, theme_version: str | None = None) -> tuple[bytes, str] | None: ...
     def whiteboard_read(self) -> Any: ...
     def whiteboard_post(self, payload: dict[str, Any]) -> Any: ...
     def set_draft(self, chat_id: str, payload: dict[str, Any], *, window_id: str) -> Any: ...
@@ -387,7 +388,7 @@ def make_handler(
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "private, max-age=300")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.end_headers()
@@ -493,7 +494,13 @@ def make_handler(
                 if self._request_capability_scope() not in {"dashboard", "chat"}:
                     self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
                 else:
-                    asset = app.chrome_theme_image(path.rsplit("/", 1)[1])
+                    values = parse_qs(urlparse(self.path).query, keep_blank_values=True).get("v", [])
+                    if len(values) != 1 or not re.fullmatch(
+                            r"[a-p]{32}-[A-Za-z0-9._-]{0,40}", values[0]):
+                        raise ValueError("invalid theme version")
+                    asset = app.chrome_theme_image(
+                        path.rsplit("/", 1)[1], theme_version=values[0],
+                    )
                     if asset is None:
                         self.send_error(HTTPStatus.NOT_FOUND)
                     else:
@@ -507,7 +514,11 @@ def make_handler(
                 if self._request_capability_scope() not in {"dashboard", "chat"}:
                     self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
                 else:
-                    asset = app.chrome_theme_background()
+                    values = parse_qs(urlparse(self.path).query, keep_blank_values=True).get("v", [])
+                    if len(values) != 1 or not re.fullmatch(
+                            r"[a-p]{32}-[A-Za-z0-9._-]{0,40}", values[0]):
+                        raise ValueError("invalid theme version")
+                    asset = app.chrome_theme_background(theme_version=values[0])
                     if asset is None:
                         self.send_error(HTTPStatus.NOT_FOUND)
                     else:
@@ -531,12 +542,17 @@ def make_handler(
             try:
                 path = urlparse(self.path).path
                 chat_control = path.startswith("/api/chat/") and path != "/api/chat/window"
-                required_scope = "chat" if chat_control else "dashboard"
-                if not self._control_allowed(required_scope):
-                    self._json({"error": "local control authorization failed"}, HTTPStatus.FORBIDDEN)
-                    return
-                context = self._request_capability_context(require_origin=True)
-                if context is None:
+                native_control = path == "/api/window/native"
+                if native_control:
+                    context = self._request_capability_context(require_origin=True)
+                    authorized = context is not None \
+                        and context.get("scope") in {"dashboard", "chat"}
+                else:
+                    required_scope = "chat" if chat_control else "dashboard"
+                    authorized = self._control_allowed(required_scope)
+                    context = self._request_capability_context(require_origin=True) \
+                        if authorized else None
+                if not authorized or context is None:
                     self._json({"error": "local control authorization failed"}, HTTPStatus.FORBIDDEN)
                     return
                 lifecycle_window_id = context.get("window_id") or "main"
@@ -600,6 +616,8 @@ def make_handler(
                     self._json(app.submit_provider_auth_code(parts[2], payload))
                 elif path == "/api/browser/theme":
                     self._json(app.open_chrome_theme_gallery())
+                elif path == "/api/window/native":
+                    self._json(app.native_window_action(lifecycle_window_id, payload))
                 elif path == "/api/window/open":
                     register_window(lifecycle_window_id, document_id(payload))
                     self._json({"ok": True})

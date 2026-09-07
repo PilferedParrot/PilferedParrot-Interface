@@ -10,12 +10,18 @@ from unittest.mock import MagicMock, call, patch
 
 from pilferedparrot.web_native import (
     CHROME_THEME_GALLERY_URL, NativeIntegration, browser_url, chromium_browser,
-    notify_window_closed, open_browser, persistent_browser_profile,
-    select_project_directory, selected_chrome_theme,
+    chrome_theme_version, notify_window_closed, open_browser, persistent_browser_profile,
+    native_app_url, select_project_directory, selected_chrome_theme,
 )
 
 
 class BrowserIntegrationTests(unittest.TestCase):
+    def test_native_marker_is_added_only_to_app_window_url(self):
+        self.assertEqual(
+            native_app_url("http://127.0.0.1/#capability=secret"),
+            "http://127.0.0.1/#capability=secret&native-window=1",
+        )
+
     @patch("pilferedparrot.web_native.shutil.which")
     def test_chromium_discovery_preserves_launcher_preference_order(self, which):
         which.side_effect = lambda candidate: (
@@ -93,6 +99,63 @@ class NativeChooserTests(unittest.TestCase):
 
 
 class NativeWindowManagerTests(unittest.TestCase):
+    @patch("pilferedparrot.web_native.secrets.token_hex", return_value="a" * 32)
+    def test_native_binding_uses_server_marker_and_capability_window(self, _token):
+        manager = NativeIntegration(MagicMock())
+        adapter = MagicMock()
+        window = MagicMock()
+        adapter.bind_active_window.return_value = window
+        manager.native_window_adapter = adapter
+
+        prepared = manager.native_window_action("provider-codex", {"action": "prepare"})
+        self.assertEqual(prepared, {
+            "ok": True, "marker": "PilferedParrot Native " + "a" * 32,
+        })
+        self.assertEqual(
+            manager.native_window_action("provider-codex", {"action": "bind"}),
+            {"ok": True, "supported": True},
+        )
+        adapter.bind_active_window.assert_called_once_with(prepared["marker"])
+        self.assertIs(manager.native_windows["provider-codex"], window)
+
+        self.assertEqual(
+            manager.native_window_action("provider-codex", {"action": "maximize"}),
+            {"ok": True, "supported": True},
+        )
+        window.maximize_or_restore.assert_called_once_with()
+
+    def test_native_actions_require_prepare_binding_and_allowlisted_data(self):
+        manager = NativeIntegration(MagicMock())
+        with self.assertRaisesRegex(ValueError, "action"):
+            manager.native_window_action("main", {"action": "launch-command"})
+        with self.assertRaisesRegex(ValueError, "fields"):
+            manager.native_window_action(
+                "main", {"action": "prepare", "handle": "another-window"},
+            )
+        with self.assertRaisesRegex(ValueError, "prepared"):
+            manager.native_window_action("main", {"action": "bind"})
+        self.assertEqual(
+            manager.native_window_action("main", {"action": "minimize"}),
+            {"ok": False, "supported": False},
+        )
+        manager.native_windows["main"] = MagicMock()
+        with self.assertRaisesRegex(ValueError, "resize direction"):
+            manager.native_window_action(
+                "main", {"action": "resize", "direction": ["north"]},
+            )
+
+    def test_failed_native_close_keeps_the_verified_binding(self):
+        manager = NativeIntegration(MagicMock())
+        window = MagicMock()
+        window.close.return_value = False
+        manager.native_windows["main"] = window
+
+        self.assertEqual(
+            manager.native_window_action("main", {"action": "close"}),
+            {"ok": False, "supported": True},
+        )
+        self.assertIs(manager.native_windows["main"], window)
+
     @patch("pilferedparrot.web_native.threading.Thread")
     @patch("pilferedparrot.web_native.subprocess.Popen")
     @patch("pilferedparrot.web_native.tempfile.mkdtemp", return_value="/tmp/provider-profile")
@@ -205,6 +268,16 @@ class BrowserThemeTests(unittest.TestCase):
                 self.assertEqual(theme["background_alignment"], "right bottom")
                 self.assertEqual(theme["background_repeat"], "repeat-x")
                 self.assertEqual(background, pack / "background.png")
+                version = chrome_theme_version(theme)
+                self.assertEqual(
+                    NativeIntegration.chrome_theme_image(
+                        "theme_frame", theme_version=version,
+                    ),
+                    (b"image", "image/png"),
+                )
+                self.assertIsNone(NativeIntegration.chrome_theme_image(
+                    "theme_frame", theme_version=f"{theme['id']}-stale",
+                ))
 
     def test_theme_image_rejects_unallowlisted_key(self):
         self.assertIsNone(NativeIntegration.chrome_theme_image("../../Preferences"))

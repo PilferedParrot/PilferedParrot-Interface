@@ -2535,11 +2535,22 @@ class PilferedParrotApp(HarnessWorkflow):
     def browser_theme(self) -> dict[str, Any]:
         return self.native.browser_theme()
 
-    def chrome_theme_background(self) -> tuple[bytes, str] | None:
-        return self.native.chrome_theme_background()
+    def native_window_action(
+        self, window_id: str, payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.native.native_window_action(window_id, payload)
 
-    def chrome_theme_image(self, image_key: str) -> tuple[bytes, str] | None:
-        return self.native.chrome_theme_image(image_key)
+    def chrome_theme_background(
+        self, *, theme_version: str | None = None,
+    ) -> tuple[bytes, str] | None:
+        return self.native.chrome_theme_background(theme_version=theme_version)
+
+    def chrome_theme_image(
+        self, image_key: str, *, theme_version: str | None = None,
+    ) -> tuple[bytes, str] | None:
+        return self.native.chrome_theme_image(
+            image_key, theme_version=theme_version,
+        )
 
     def whiteboard_read(self) -> dict[str, Any]:
         from .whiteboard import Whiteboard

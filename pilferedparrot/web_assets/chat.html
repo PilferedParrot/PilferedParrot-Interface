@@ -10,6 +10,22 @@
   <link rel="stylesheet" href="/app.css">
 </head>
 <body class="chat-window-body">
+  <header class="native-titlebar" id="nativeTitlebar" hidden>
+    <div class="native-titlebar-drag" data-native-drag>
+      <img src="/pilferedparrot-icon.png" alt=""><span>PilferedParrot Chat</span>
+    </div>
+    <div class="native-titlebar-controls" aria-label="Window controls">
+      <button type="button" data-native-action="minimize" aria-label="Minimize window" title="Minimize">―</button>
+      <button type="button" data-native-action="maximize" aria-label="Maximize or restore window" title="Maximize or restore">□</button>
+      <button type="button" class="native-titlebar-close" data-native-action="close" aria-label="Close window" title="Close">×</button>
+    </div>
+  </header>
+  <div class="native-resize-handles" aria-hidden="true">
+    <i data-native-resize="north"></i><i data-native-resize="south"></i>
+    <i data-native-resize="east"></i><i data-native-resize="west"></i>
+    <i data-native-resize="northeast"></i><i data-native-resize="northwest"></i>
+    <i data-native-resize="southeast"></i><i data-native-resize="southwest"></i>
+  </div>
   <main class="chat-window" aria-label="Chat window">
     <aside class="chat-window-sidebar" id="chatWindowSidebar" aria-label="Chat controls and history">
       <div class="brand-row chat-window-brand">

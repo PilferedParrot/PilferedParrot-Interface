@@ -34,6 +34,76 @@
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body { margin: 0; overflow: hidden; background: var(--bg); color: var(--text); }
+body.native-window {
+  display: grid;
+  grid-template-rows: 32px minmax(0, 1fr);
+}
+.native-titlebar {
+  z-index: 40;
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--border);
+  color: var(--text);
+  user-select: none;
+}
+.chrome-theme .native-titlebar {
+  background: var(--chrome-theme-frame-overlay-image) top left / auto auto repeat-x,
+    var(--chrome-theme-frame-image) top left / auto auto repeat-x,
+    var(--chrome-theme-frame, #263342);
+  color: var(--chrome-theme-frame-text, #e8edf3);
+}
+.native-titlebar[hidden] { display: none; }
+.native-titlebar-drag {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  cursor: default;
+  font-size: 16px;
+  font-weight: 650;
+}
+.native-titlebar-drag img { width: 18px; height: 18px; object-fit: contain; }
+.native-titlebar-drag span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.native-titlebar-controls { display: flex; flex: none; }
+.native-titlebar-controls button {
+  width: 46px;
+  height: 31px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  cursor: default;
+  line-height: 1;
+}
+.native-titlebar-controls button:hover { background: rgba(127, 127, 127, .28); }
+.native-titlebar-controls .native-titlebar-close:hover { background: #c42b1c; color: #fff; }
+.native-resize-handles { display: none; position: fixed; inset: 0; pointer-events: none; }
+body.native-window .native-resize-handles { display: block; }
+.native-resize-handles i { position: fixed; z-index: 50; pointer-events: auto; }
+.native-resize-handles [data-native-resize="north"],
+.native-resize-handles [data-native-resize="south"] { left: 10px; right: 10px; height: 5px; }
+.native-resize-handles [data-native-resize="north"] { top: 0; cursor: n-resize; }
+.native-resize-handles [data-native-resize="south"] { bottom: 0; cursor: s-resize; }
+.native-resize-handles [data-native-resize="east"],
+.native-resize-handles [data-native-resize="west"] { top: 10px; bottom: 10px; width: 5px; }
+.native-resize-handles [data-native-resize="east"] { right: 0; cursor: e-resize; }
+.native-resize-handles [data-native-resize="west"] { left: 0; cursor: w-resize; }
+.native-resize-handles [data-native-resize="northeast"],
+.native-resize-handles [data-native-resize="northwest"],
+.native-resize-handles [data-native-resize="southeast"],
+.native-resize-handles [data-native-resize="southwest"] { width: 10px; height: 10px; }
+.native-resize-handles [data-native-resize="northeast"] { top: 0; right: 0; cursor: ne-resize; }
+.native-resize-handles [data-native-resize="northwest"] { top: 0; left: 0; cursor: nw-resize; }
+.native-resize-handles [data-native-resize="southeast"] { right: 0; bottom: 0; cursor: se-resize; }
+.native-resize-handles [data-native-resize="southwest"] { bottom: 0; left: 0; cursor: sw-resize; }
+body.native-window > .shell,
+body.native-window > .chat-window { height: auto; min-height: 0; }
 body.chrome-theme {
   --bg: var(--chrome-theme-background, #ffffff);
   --panel: var(--chrome-theme-section, #111821);
@@ -89,6 +159,15 @@ body.chrome-theme .chat-window { position: relative; }
 body.chrome-theme .chat-composer,
 body.chrome-theme .chat-model-card,
 body.chrome-theme .chat-model-card select { background: var(--panel); }
+body.chrome-theme .chat-empty {
+  width: min(520px, calc(100% - 32px));
+  margin: 24px auto;
+  padding: 16px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--chrome-theme-panel-text, var(--text));
+}
 button, input, textarea, select { font: inherit; }
 button { color: inherit; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
@@ -907,7 +986,8 @@ dialog::backdrop { background: rgba(0, 0, 0, .62); }
 /* Theme surfaces use their own foregrounds, including light and vivid themes. */
 body.chrome-theme { --muted: var(--text); --faint: var(--text); }
 body.chrome-theme :is(.sidebar, .chat-window-sidebar) {
-  color: var(--chrome-theme-frame-text); --sidebar-muted: currentColor; --sidebar-faint: currentColor;
+  color: var(--chrome-theme-frame-text); --muted: var(--chrome-theme-frame-text); --faint: var(--chrome-theme-frame-text);
+  --sidebar-muted: var(--chrome-theme-frame-text); --sidebar-faint: var(--chrome-theme-frame-text);
 }
 body.chrome-theme :is(.topbar, .chat-window-conversation .chat-header) { color: var(--chrome-theme-toolbar-text); backdrop-filter: none; }
 body.chrome-theme :is(.chat-title, .project-path, .chat-item-title, .chat-item-meta, .brand, .chat-subtitle) { color: inherit; }
@@ -922,6 +1002,49 @@ body.chrome-theme :is(.message-content, .chat-message-body) :is(h1, h2, h3, h4, 
 body.chrome-theme .composer select { background: var(--panel); color: var(--chrome-theme-panel-text); }
 body.chrome-theme .chat-item:is(:hover, .active) { color: var(--chrome-theme-panel-text); }
 body.chrome-theme .send-button:not(:disabled) { background: var(--chrome-theme-toolbar); color: var(--chrome-theme-toolbar-text); }
+body.chrome-theme :is(input, textarea, select) {
+  border-color: var(--border);
+  background: var(--panel-2);
+  color: var(--chrome-theme-panel-text);
+}
+body.chrome-theme dialog {
+  border-color: var(--border);
+  background: var(--panel);
+  color: var(--chrome-theme-panel-text);
+}
+body.chrome-theme :is(.new-work-session, .open-chat-button, .chat-new-chat, .provider-window-button,
+  .run-command, .harness-button, .dialog-actions button:not(.secondary),
+  .provider-connection-actions button:not(.secondary), .add-provider-button) {
+  border-color: var(--chrome-theme-toolbar);
+  background: var(--chrome-theme-toolbar);
+  color: var(--chrome-theme-toolbar-text);
+}
+body.chrome-theme :is(.new-work-session, .open-chat-button, .chat-new-chat, .provider-window-button,
+  .run-command, .harness-button, .dialog-actions button:not(.secondary),
+  .provider-connection-actions button:not(.secondary), .add-provider-button):hover {
+  filter: brightness(1.08);
+}
+body.chrome-theme :is(.message-content, .chat-message-body) th {
+  background: var(--panel-2);
+  color: var(--chrome-theme-panel-text);
+}
+body.chrome-theme :is(.message-content, .chat-message-body) pre {
+  background: var(--panel-2);
+  color: var(--chrome-theme-panel-text);
+}
+body.chrome-theme :is(.message-content, .chat-message-body) code {
+  background: var(--panel-3);
+  color: var(--chrome-theme-panel-text);
+}
+body.chrome-theme :is(.message-content, .chat-message-body) pre code { color: inherit; }
+body.chrome-theme .work-log {
+  background: var(--panel-2);
+  color: var(--chrome-theme-panel-text);
+}
+body.chrome-theme .work-log summary,
+body.chrome-theme .work-item > div,
+body.chrome-theme .work-item > span { color: var(--chrome-theme-panel-text); }
+body.chrome-theme .terminal-command { background: var(--panel-2); color: var(--chrome-theme-panel-text); }
 #whiteboardButton { margin-left: auto; }
 #whiteboardButton + #harnessButton { margin-left: 0; }
 
