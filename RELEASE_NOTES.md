@@ -1,3 +1,15 @@
+## PilferedParrot Interface 0.7.0-rc.4 preview
+
+Work and Chat now center the parrot branding in the top bar and remove the duplicate
+sidebar logo. Desktop windows with custom controls center the branding in the window title
+bar; browser tabs and Windows use the application header. Narrow layouts keep session
+information and actions accessible. Sidebar spacing and control styling are refined while
+preserving selected theme colors and artwork.
+
+Linux/source and Windows x64 downloads contain the same interface update. Close the previous
+app after current jobs finish and reopen the updated application. This remains a preview
+alongside stable 0.6.1.
+
 ## PilferedParrot Interface 0.7.0-rc.3 preview
 
 Theme changes now replace colors and artwork together in Work and Chat. Background requests
