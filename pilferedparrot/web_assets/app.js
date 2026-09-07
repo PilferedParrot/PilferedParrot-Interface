@@ -45,7 +45,7 @@ let pollTimer = null;
 let budgetPollTimer = null;
 let budgetRefresh = null;
 let themeBackgroundObjectUrl = null;
-const themeImageObjectUrls = { frame: null, toolbar: null, attribution: null };
+const themeImageObjectUrls = { frame: null, frame_overlay: null, toolbar: null, attribution: null };
 let themeApplyGeneration = 0;
 let themeRefreshGeneration = 0;
 let themePollTimer = null;
@@ -1511,9 +1511,12 @@ async function applyBrowserTheme(theme, refreshGeneration = null) {
     }
     return light > .179 ? "#000000" : "#ffffff";
   };
+  const opposite = (value) => luminance(value) > .179 ? "#000000" : "#ffffff";
   const background = color(colors.ntp_background, "#ffffff");
   const frame = color(colors.frame, "#dee1e6");
   const toolbar = color(colors.toolbar, "#ffffff");
+  const frameForeground = foreground(frame, colors.tab_background_text);
+  const toolbarForeground = foreground(toolbar, colors.toolbar_text || colors.bookmark_text);
   const panel = color(colors.ntp_section, background);
   const properties = {
     "--chrome-theme-background": background,
@@ -1521,8 +1524,12 @@ async function applyBrowserTheme(theme, refreshGeneration = null) {
     "--chrome-theme-toolbar": toolbar,
     "--chrome-theme-text": foreground(background, colors.ntp_text),
     "--chrome-theme-panel-text": foreground(panel, colors.ntp_section_text || colors.ntp_text),
-    "--chrome-theme-frame-text": foreground(frame, colors.tab_background_text),
-    "--chrome-theme-toolbar-text": foreground(toolbar, colors.toolbar_text || colors.bookmark_text),
+    "--chrome-theme-frame-text": frameForeground,
+    "--chrome-theme-toolbar-text": toolbarForeground,
+    "--chrome-theme-frame-image-text": frameForeground,
+    "--chrome-theme-toolbar-image-text": toolbarForeground,
+    "--chrome-theme-frame-art-contrast": opposite(frameForeground),
+    "--chrome-theme-toolbar-art-contrast": opposite(toolbarForeground),
     "--chrome-theme-link": foreground(panel, colors.ntp_link || "#1558d6"),
     "--chrome-theme-section": panel,
   };
@@ -1576,6 +1583,17 @@ async function applyBrowserTheme(theme, refreshGeneration = null) {
     if (stagedBackground) URL.revokeObjectURL(stagedBackground);
     return false;
   }
+  const frameArtwork = Boolean(stagedImages.frame || stagedImages.frame_overlay);
+  const toolbarArtwork = Boolean(stagedImages.toolbar);
+  if (frameArtwork && valid(colors.tab_background_text)) {
+    properties["--chrome-theme-frame-image-text"] = colors.tab_background_text;
+    properties["--chrome-theme-frame-art-contrast"] = opposite(colors.tab_background_text);
+  }
+  if (toolbarArtwork && valid(colors.toolbar_text || colors.bookmark_text)) {
+    const authoredToolbarForeground = colors.toolbar_text || colors.bookmark_text;
+    properties["--chrome-theme-toolbar-image-text"] = authoredToolbarForeground;
+    properties["--chrome-theme-toolbar-art-contrast"] = opposite(authoredToolbarForeground);
+  }
   body.style.colorScheme = selected.active && luminance(background) > .179 ? "light" : "dark";
   Object.entries(properties).forEach(([name, value]) => {
     if (/^#[0-9a-f]{6}$/i.test(value || "")) root.style.setProperty(name, value);
@@ -1600,6 +1618,8 @@ async function applyBrowserTheme(theme, refreshGeneration = null) {
     root.style.removeProperty("--chrome-theme-background-repeat");
   }
   body.classList.toggle("chrome-theme", selected.active);
+  body.classList.toggle("chrome-theme-frame-art", selected.active && frameArtwork);
+  body.classList.toggle("chrome-theme-toolbar-art", selected.active && toolbarArtwork);
   body.dataset.chromeTheme = selected.active ? `${selected.id}:${selected.version}` : "";
   document.querySelector('meta[name="theme-color"]')?.setAttribute(
     "content", /^#[0-9a-f]{6}$/i.test(selected.colors?.frame || "")

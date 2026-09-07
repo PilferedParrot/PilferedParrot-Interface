@@ -16,6 +16,10 @@
   --shadow: 0 18px 48px rgba(0, 0, 0, .26);
   --chrome-theme-frame: #263342;
   --chrome-theme-toolbar: #67a8ff;
+  --chrome-theme-frame-image-text: #e8edf3;
+  --chrome-theme-toolbar-image-text: #e8edf3;
+  --chrome-theme-frame-art-contrast: #000000;
+  --chrome-theme-toolbar-art-contrast: #000000;
   --chrome-theme-text: #e8edf3;
   --chrome-theme-link: #67a8ff;
   --chrome-theme-section: #151e29;
@@ -51,8 +55,12 @@ body.native-window {
   user-select: none;
 }
 .chrome-theme .native-titlebar {
-  background: color-mix(in srgb, var(--chrome-theme-frame, #263342) 68%, transparent);
-  color: var(--chrome-theme-frame-text, #e8edf3);
+  background-color: var(--chrome-theme-frame, #263342);
+  background-image: var(--chrome-theme-frame-overlay-image), var(--chrome-theme-frame-image);
+  background-position: top left, top left;
+  background-repeat: no-repeat, repeat-x;
+  background-size: auto auto, auto auto;
+  color: var(--chrome-theme-frame-image-text, var(--chrome-theme-frame-text, #e8edf3));
 }
 .native-titlebar[hidden] { display: none; }
 .native-titlebar-drag {
@@ -123,7 +131,7 @@ body.chrome-theme {
     var(--chrome-theme-background-image) var(--chrome-theme-background-position) / auto auto var(--chrome-theme-background-repeat),
     var(--bg);
 }
-/* Keep theme artwork in one coordinate space across the titlebar and content.
+/* Keep new-tab artwork in one coordinate space across the content panes.
    Structural grid children stay clear so resizing either sidebar reveals the
    corresponding part of the same image. */
 body.chrome-theme :is(.shell, .chat-window) {
@@ -983,9 +991,19 @@ body.chrome-theme :is(.sidebar, .chat-window-sidebar) {
   --sidebar-muted: var(--chrome-theme-frame-text); --sidebar-faint: var(--chrome-theme-frame-text);
 }
 body.chrome-theme :is(.topbar, .chat-window-conversation .chat-header) {
-  background: color-mix(in srgb, var(--chrome-theme-toolbar, #263342) 68%, transparent);
-  color: var(--chrome-theme-toolbar-text);
+  background-color: var(--chrome-theme-toolbar, #263342);
+  background-image: var(--chrome-theme-toolbar-image);
+  background-position: top left;
+  background-repeat: repeat-x;
+  background-size: auto auto;
+  color: var(--chrome-theme-toolbar-image-text, var(--chrome-theme-toolbar-text));
   backdrop-filter: none;
+}
+body.chrome-theme-frame-art .native-titlebar :is(.native-titlebar-brand, .native-titlebar-controls button) {
+  text-shadow: 0 1px 2px var(--chrome-theme-frame-art-contrast);
+}
+body.chrome-theme-toolbar-art :is(.topbar, .chat-window-conversation .chat-header) :is(.header-context, .header-brand, .header-actions button) {
+  text-shadow: 0 1px 2px var(--chrome-theme-toolbar-art-contrast);
 }
 body.chrome-theme :is(.sidebar, .chat-window-sidebar) { border-right-color: transparent; }
 body.chrome-theme :is(.chat-title, .project-path, .chat-item-title, .chat-item-meta, .brand, .chat-subtitle) { color: inherit; }
@@ -1052,8 +1070,8 @@ body.chrome-theme .sidebar-disclosure summary { color: var(--chrome-theme-frame-
 body.chrome-theme .provider-update { background: var(--panel); color: var(--chrome-theme-panel-text); border-radius: 8px; padding: 6px 10px; width: fit-content; }
 body.chrome-theme :is(.section-heading, .history-heading, .sidebar-disclosure > summary) {
   border-radius: 7px;
-  background: var(--chrome-theme-frame, #263342);
-  color: var(--chrome-theme-frame-text);
+  background: var(--panel);
+  color: var(--chrome-theme-panel-text);
 }
 body.chrome-theme :is(.sidebar, .chat-window-sidebar) :is(
   .provider-card, .chat-item, .chrome-theme-button,

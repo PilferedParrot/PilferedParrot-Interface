@@ -152,8 +152,7 @@ class WindowsNativeControlsTests(unittest.TestCase):
                 }""")
                 for actual, expected in zip(toolbar_rgba[:3], color):
                     self.assertAlmostEqual(actual, expected, delta=1)
-                self.assertGreater(toolbar_rgba[3], 0)
-                self.assertLess(toolbar_rgba[3], 255)
+                self.assertEqual(toolbar_rgba[3], 255)
                 user32.ShowWindow(hwnd, 3)
                 self._wait(lambda: user32.IsZoomed(hwnd), "Native maximize did not work")
                 user32.ShowWindow(hwnd, 9)

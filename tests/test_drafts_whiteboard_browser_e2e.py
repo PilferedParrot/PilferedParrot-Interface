@@ -131,8 +131,7 @@ class DraftWhiteboardBrowserTests(unittest.TestCase):
         }""", palette['toolbar'])
         for actual, expected in zip(toolbar_rgba[:3], (255, 196, 66)):
             self.assertAlmostEqual(actual, expected, delta=1)
-        self.assertGreater(toolbar_rgba[3], 0)
-        self.assertLess(toolbar_rgba[3], 255)
+        self.assertEqual(toolbar_rgba[3], 255)
         self.assertEqual(palette['panel'], 'rgb(255, 250, 240)')
         self.assertEqual(palette['text'], 'rgb(24, 16, 32)')
         if os.environ.get('PPI_SCREENSHOTS'):

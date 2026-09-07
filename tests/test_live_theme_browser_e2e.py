@@ -40,6 +40,19 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
         self.addCleanup(self.context.close)
 
     @staticmethod
+    def _solid_png(color=(255, 255, 255), *, width=4, height=2):
+        """Small valid RGB PNG with a deterministic color for pixel assertions."""
+        rows = b"".join(b"\0" + bytes(color) * width for _ in range(height))
+
+        def chunk(kind, data):
+            return (struct.pack(">I", len(data)) + kind + data
+                    + struct.pack(">I", zlib.crc32(kind + data)))
+
+        return (b"\x89PNG\r\n\x1a\n"
+                + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+    @staticmethod
     def _png_bytes():
         """Small valid RGB PNG so image tests exercise decoding too."""
         width, height = 4, 2
@@ -55,6 +68,28 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
         return (b"\x89PNG\r\n\x1a\n"
                 + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
                 + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+    @staticmethod
+    def _screenshot_pixel(png):
+        """Read a 1x1 Chromium PNG; all first-pixel filter predictors are zero."""
+        offset = 8
+        idat = bytearray()
+        while offset < len(png):
+            length = struct.unpack(">I", png[offset:offset + 4])[0]
+            kind = png[offset + 4:offset + 8]
+            data = png[offset + 8:offset + 8 + length]
+            offset += length + 12
+            if kind == b"IHDR":
+                width, height, depth, color_type, _, _, interlace = struct.unpack(
+                    ">IIBBBBB", data,
+                )
+                assert (width, height, depth, interlace) == (1, 1, 8, 0)
+                assert color_type in (2, 6)
+            elif kind == b"IDAT":
+                idat.extend(data)
+        raw = zlib.decompress(bytes(idat))
+        assert raw[0] in range(5)
+        return tuple(raw[1:4])
 
     @staticmethod
     def _theme(name, color, *, background=False):
@@ -152,8 +187,8 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
         self.assertNotEqual(surfaces["bodyImage"], "none")
         self.assertIn("0, 0, 0, 0", surfaces["shellColor"])
         self.assertIn("0, 0, 0, 0", surfaces["paneColor"])
-        self.assertLess(surfaces["headerAlpha"], 1)
-        self.assertLess(surfaces["titlebarAlpha"], 1)
+        self.assertEqual(surfaces["headerAlpha"], 1)
+        self.assertEqual(surfaces["titlebarAlpha"], 1)
         self.assertIn("0, 0, 0, 0", surfaces["dividerColor"])
         self.assertIn("0, 0, 0, 0", surfaces["dividerPillColor"])
 
@@ -205,7 +240,158 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
                 fallback = page.evaluate("() => getComputedStyle(document.body).backgroundImage")
                 self.assertTrue(fallback.startswith("none"), fallback)
                 self.assertIn("51, 68, 85", page.evaluate("() => getComputedStyle(document.body).backgroundColor"))
-                page.close()
+                # Keep Work registered until context cleanup so its window-close
+                # grace timer cannot shut down the fixture during Chat checks.
+
+    def test_original_theme_assets_are_native_size_opaque_and_removed_live(self):
+        assets = {
+            "/theme-frame.png": self._solid_png((21, 71, 121), width=7, height=4),
+            "/theme-overlay.png": self._solid_png((211, 47, 103), width=5, height=3),
+            "/theme-toolbar.png": self._solid_png((43, 157, 94), width=6, height=4),
+            "/theme-background.png": self._solid_png((238, 171, 42), width=9, height=7),
+        }
+        for kind in ("work", "chat"):
+            with self.subTest(kind=kind):
+                theme = self._theme(f"asset-fidelity-{kind}", "#f0e0d0", background=True)
+                theme.update({
+                    "frame_url": "/api/browser/theme/image/theme_frame",
+                    "frame_overlay_url": "/api/browser/theme/image/theme_frame_overlay",
+                    "toolbar_url": "/api/browser/theme/image/theme_toolbar",
+                    "background_url": "/theme-background.png",
+                    "background_alignment": "left top",
+                    "background_repeat": "repeat-x",
+                    "colors": {
+                        **theme["colors"], "frame": "#f0e0d0", "toolbar": "#e0d0c0",
+                        "tab_background_text": "#fafafa", "toolbar_text": "#fefefe",
+                    },
+                })
+                capability = (
+                    self.fixture.app.issue_capability("chat", provider="codex")
+                    if kind == "chat" else None
+                )
+                page = self.context.new_page()
+
+                def route_asset(route):
+                    name = route.request.url.split("/api/browser/theme/image/", 1)[-1].split("?", 1)[0]
+                    path = {
+                        "theme_frame": "/theme-frame.png",
+                        "theme_frame_overlay": "/theme-overlay.png",
+                        "theme_toolbar": "/theme-toolbar.png",
+                    }[name]
+                    route.fulfill(status=200, content_type="image/png", body=assets[path])
+
+                # The fixture's normal background endpoint is separate from the
+                # image endpoint used by frame/toolbar artwork.
+                page.route("**/api/browser/theme/image/*", route_asset)
+                page.route(
+                    "**/theme-*.png",
+                    lambda route: route.fulfill(
+                        status=200, content_type="image/png",
+                        body=assets["/theme-background.png"],
+                    ),
+                )
+                self.fixture.app.browser_theme = lambda theme=theme: theme
+                if kind == "work":
+                    page.goto(self.fixture.browser_url, wait_until="domcontentloaded")
+                    expect(page.locator("#prompt")).to_be_enabled(timeout=5_000)
+                else:
+                    page.goto(
+                        f"{self.fixture.base_url}/chat#capability={capability}&provider=codex",
+                        wait_until="domcontentloaded",
+                    )
+                    expect(page.locator("#chatPrompt")).to_be_enabled(timeout=5_000)
+                page.wait_for_function(
+                    "() => document.body.dataset.chromeTheme === 'asset-fidelity-%s:1'" % kind,
+                    timeout=5_000,
+                )
+                header = ".topbar" if kind == "work" else ".chat-header"
+                styles = page.evaluate(
+                    """header => {
+                        const root = getComputedStyle(document.documentElement);
+                        const titlebar = getComputedStyle(document.querySelector('#nativeTitlebar'));
+                        const bar = getComputedStyle(document.querySelector(header));
+                        return {
+                            frame: root.getPropertyValue('--chrome-theme-frame').trim(),
+                            toolbar: root.getPropertyValue('--chrome-theme-toolbar').trim(),
+                            bodyImage: root.getPropertyValue('--chrome-theme-background-image').trim(),
+                            titleImage: titlebar.backgroundImage,
+                            titleRepeat: titlebar.backgroundRepeat,
+                            titleSize: titlebar.backgroundSize,
+                            barImage: bar.backgroundImage,
+                            barRepeat: bar.backgroundRepeat,
+                            barSize: bar.backgroundSize,
+                            barColor: bar.backgroundColor,
+                            titleColor: titlebar.color,
+                            barTextColor: bar.color,
+                        };
+                    }""",
+                    header,
+                )
+                self.assertEqual(styles["frame"], "#f0e0d0")
+                self.assertEqual(styles["toolbar"], "#e0d0c0")
+                self.assertIn("url", styles["bodyImage"])
+                self.assertIn("no-repeat, repeat-x", styles["titleRepeat"])
+                self.assertIn("auto", styles["titleSize"])
+                self.assertEqual(styles["barRepeat"], "repeat-x")
+                self.assertIn("auto", styles["barSize"])
+                self.assertIn("rgb(224, 208, 192)", styles["barColor"])
+                self.assertIn("rgb(250, 250, 250)", styles["titleColor"])
+                self.assertIn("rgb(254, 254, 254)", styles["barTextColor"])
+
+                page.evaluate("""() => {
+                    document.body.classList.add('native-window');
+                    document.querySelector('#nativeTitlebar').hidden = false;
+                }""")
+                page.wait_for_timeout(100)
+                box = page.locator(header).bounding_box()
+                self.assertIsNotNone(box)
+                points = [(2, 2), (12, 2), (2, 8),
+                          (int(box["x"]) + 12, int(box["y"]) + 2),
+                          (int(box["x"]) + 2, int(box["y"]) + 6)]
+                pixels = [self._screenshot_pixel(
+                    page.screenshot(clip={"x": x, "y": y, "width": 1, "height": 1}),
+                ) for x, y in points]
+                self.assertEqual(pixels[0][:3], (211, 47, 103))
+                self.assertEqual(pixels[1][:3], (21, 71, 121))
+                self.assertEqual(pixels[2][:3], (240, 224, 208))
+                self.assertEqual(
+                    pixels[3][:3],
+                    (43, 157, 94),
+                )
+                self.assertEqual(
+                    pixels[4][:3],
+                    (224, 208, 192),
+                )
+
+                theme.clear()
+                theme.update(self._theme(f"color-only-{kind}", "#334455"))
+                page.wait_for_function(
+                    "() => document.body.dataset.chromeTheme === 'color-only-%s:1'" % kind,
+                    timeout=10_000,
+                )
+                cleared = page.evaluate(
+                    """header => {
+                        const root = getComputedStyle(document.documentElement);
+                        return {
+                            body: root.getPropertyValue('--chrome-theme-background-image').trim(),
+                            title: getComputedStyle(document.querySelector('#nativeTitlebar')).backgroundImage,
+                            bar: getComputedStyle(document.querySelector(header)).backgroundImage,
+                        };
+                    }""",
+                    header,
+                )
+                self.assertNotIn("url(", cleared["body"])
+                self.assertNotIn("url(", cleared["title"])
+                self.assertNotIn("url(", cleared["bar"])
+                theme.clear()
+                theme.update({"active": False})
+                page.wait_for_function("() => !document.body.classList.contains('chrome-theme')", timeout=5_000)
+                self.assertEqual(
+                    page.evaluate("header => getComputedStyle(document.querySelector(header)).backgroundImage", header),
+                    "none",
+                )
+                # Keep Work open until context cleanup: closing the final Work
+                # window starts the production server's shutdown grace period.
 
     def test_live_theme_update_and_removal_preserve_work_draft_without_reload(self):
         theme = self._theme("first-live", "#112233")
