@@ -91,6 +91,8 @@ class WindowsNativeControlsTests(unittest.TestCase):
                 self.assertTrue(user32.GetWindowLongPtrW(hwnd, -16) & 0x00C00000)
                 user32.SetForegroundWindow(hwnd)
                 page.goto(fixture.browser_url + "&native-window=1")
+                # A fragment-only navigation does not reload the existing app.
+                page.reload()
                 expect(page.locator("#nativeTitlebar")).to_be_visible(timeout=15000)
                 after_gap = page.evaluate("window.outerHeight - window.innerHeight")
                 self.assertFalse(user32.GetWindowLongPtrW(hwnd, -16) & 0x00C00000)
