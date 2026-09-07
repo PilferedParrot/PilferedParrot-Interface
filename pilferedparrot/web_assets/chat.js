@@ -14,6 +14,7 @@ const NATIVE_WINDOW_SESSION_KEY = "pilferedparrot-native-window";
 const CHAT_PANE_WIDTHS_KEY = "pilferedparrot-pane-widths";
 const CHAT_SIDEBAR_LIMITS = { min: 230, max: 520, variable: "--chat-sidebar-width" };
 const CHAT_CONVERSATION_MIN_WIDTH = 300;
+const THEME_POLL_MS = 1_000;
 const fragment = new URLSearchParams(location.hash.slice(1));
 const fragmentCapability = fragment.get("capability") || "";
 const fragmentProvider = fragment.get("provider") || "";
@@ -34,6 +35,9 @@ let themeBackgroundObjectUrl = null;
 const themeImageObjectUrls = { frame: null, toolbar: null, attribution: null };
 let themeApplyGeneration = 0;
 let themeRefreshGeneration = 0;
+let themePollTimer = null;
+let themeRefreshPending = null;
+let appliedThemeDescriptor = null;
 let toastTimer = null;
 let notificationPermissionPending = false;
 let resetPending = false;
@@ -45,6 +49,26 @@ function chatSidebarMaximum() {
   const shellWidth = $(".chat-window")?.getBoundingClientRect().width || window.innerWidth;
   return Math.max(CHAT_SIDEBAR_LIMITS.min, Math.min(CHAT_SIDEBAR_LIMITS.max,
     shellWidth - CHAT_CONVERSATION_MIN_WIDTH - 6));
+}
+
+function themeDescriptor(theme) {
+  if (!theme?.active) return "inactive";
+  return JSON.stringify({
+    id: theme.id, version: theme.version, colors: theme.colors,
+    frame_url: theme.frame_url, frame_overlay_url: theme.frame_overlay_url,
+    toolbar_url: theme.toolbar_url, attribution_url: theme.attribution_url,
+    background: theme.background, background_url: theme.background_url,
+    background_alignment: theme.background_alignment, background_repeat: theme.background_repeat,
+  });
+}
+
+function scheduleThemeRefresh(delay = THEME_POLL_MS) {
+  if (themePollTimer !== null || document.hidden) return;
+  themePollTimer = setTimeout(async () => {
+    themePollTimer = null;
+    await refreshBrowserTheme(false).catch(() => {});
+    scheduleThemeRefresh();
+  }, delay);
 }
 
 function clampChatSidebarWidth(value) {
@@ -868,7 +892,7 @@ async function applyBrowserTheme(theme, refreshGeneration = null) {
     "--chrome-theme-panel-text": foreground(panel, colors.ntp_section_text || colors.ntp_text),
     "--chrome-theme-frame-text": foreground(frame, colors.tab_background_text),
     "--chrome-theme-toolbar-text": foreground(toolbar, colors.toolbar_text || colors.bookmark_text),
-    "--chrome-theme-link": color(colors.ntp_link, foreground(background, "#1558d6")),
+    "--chrome-theme-link": foreground(panel, colors.ntp_link || "#1558d6"),
     "--chrome-theme-section": panel,
   };
   const themeImages = {
@@ -878,6 +902,7 @@ async function applyBrowserTheme(theme, refreshGeneration = null) {
     attribution: ["--chrome-theme-attribution-image", selected.attribution_url],
   };
   const stagedImages = {};
+  let incomplete = false;
   const revokeStaged = () => Object.values(stagedImages).forEach((url) => {
     if (url) URL.revokeObjectURL(url);
   });
@@ -886,11 +911,13 @@ async function applyBrowserTheme(theme, refreshGeneration = null) {
     try {
       const response = await fetch(imageUrl, {
         headers: { "X-PilferedParrot-Capability": state.capability },
+        signal: AbortSignal.timeout(10_000),
       });
       if (!response.ok) throw new Error(`Theme image failed (${response.status})`);
       stagedImages[name] = URL.createObjectURL(await response.blob());
     } catch (_error) {
       stagedImages[name] = null;
+      incomplete = true;
     }
   }));
   if (!current()) { revokeStaged(); return; }
@@ -899,17 +926,24 @@ async function applyBrowserTheme(theme, refreshGeneration = null) {
     try {
       const response = await fetch(selected.background_url, {
         headers: { "X-PilferedParrot-Capability": state.capability },
+        signal: AbortSignal.timeout(10_000),
       });
       if (!response.ok) throw new Error(`Theme background failed (${response.status})`);
       stagedBackground = URL.createObjectURL(await response.blob());
     } catch (_error) {
       stagedBackground = null;
+      incomplete = true;
     }
   }
   if (!current()) {
     revokeStaged();
     if (stagedBackground) URL.revokeObjectURL(stagedBackground);
     return;
+  }
+  if (selected.active && (incomplete || (selected.background && !selected.background_url))) {
+    revokeStaged();
+    if (stagedBackground) URL.revokeObjectURL(stagedBackground);
+    return false;
   }
   body.style.colorScheme = selected.active && luminance(background) > .179 ? "light" : "dark";
   Object.entries(properties).forEach(([name, value]) => {
@@ -941,14 +975,24 @@ async function applyBrowserTheme(theme, refreshGeneration = null) {
       ? selected.colors.frame : "#0b1017",
   );
   state.browser_theme = selected;
+  return true;
 }
 
 async function refreshBrowserTheme() {
-  const generation = ++themeRefreshGeneration;
-  const theme = await api("/api/browser/theme");
-  if (generation !== themeRefreshGeneration) return;
-  await applyBrowserTheme(theme, generation);
-  if (generation !== themeRefreshGeneration) return;
+  if (themeRefreshPending) return themeRefreshPending;
+  themeRefreshPending = (async () => {
+    const generation = ++themeRefreshGeneration;
+    const theme = await api("/api/browser/theme", { signal: AbortSignal.timeout(10_000) });
+    if (generation !== themeRefreshGeneration) return;
+    const descriptor = themeDescriptor(theme);
+    if (descriptor === appliedThemeDescriptor) return;
+    const applied = await applyBrowserTheme(theme, generation);
+    if (generation !== themeRefreshGeneration) return;
+    if (!applied) return;
+    appliedThemeDescriptor = descriptor;
+  })();
+  try { return await themeRefreshPending; }
+  finally { themeRefreshPending = null; }
 }
 
 async function init() {
@@ -961,6 +1005,7 @@ async function init() {
     render();
     schedulePoll();
   } catch (error) { toast(error.message); }
+  finally { scheduleThemeRefresh(); }
 }
 
 $("#chatComposer").addEventListener("submit", sendChatMessage);
@@ -1015,6 +1060,16 @@ window.addEventListener("focus", () => {
   initializeNativeWindow().catch(() => {});
   refreshState().catch(() => {});
   refreshBrowserTheme().catch(() => {});
+  scheduleThemeRefresh(0);
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    refreshBrowserTheme().catch(() => {});
+    scheduleThemeRefresh(0);
+  } else if (themePollTimer !== null) {
+    clearTimeout(themePollTimer); themePollTimer = null;
+  }
 });
 
 init();

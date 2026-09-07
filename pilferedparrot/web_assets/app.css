@@ -51,9 +51,7 @@ body.native-window {
   user-select: none;
 }
 .chrome-theme .native-titlebar {
-  background: var(--chrome-theme-frame-overlay-image) top left / auto auto repeat-x,
-    var(--chrome-theme-frame-image) top left / auto auto repeat-x,
-    var(--chrome-theme-frame, #263342);
+  background: var(--chrome-theme-frame, #263342);
   color: var(--chrome-theme-frame-text, #e8edf3);
 }
 .native-titlebar[hidden] { display: none; }
@@ -122,33 +120,15 @@ body.chrome-theme {
   --blue-strong: var(--chrome-theme-link, #1558d6);
   --text: var(--chrome-theme-text, #e8edf3);
 }
-body.chrome-theme .main {
+/* Keep theme artwork in one coordinate space.  The grid children stay clear so
+   resizing either sidebar reveals the corresponding part of the same image. */
+body.chrome-theme :is(.shell, .chat-window) {
   background:
     var(--chrome-theme-background-image) var(--chrome-theme-background-position) / auto auto var(--chrome-theme-background-repeat),
     var(--bg);
 }
-body.chrome-theme .sidebar {
-  background: var(--chrome-theme-frame-overlay-image) top left / auto auto repeat-x,
-    var(--chrome-theme-frame-image) top left / auto auto repeat-x,
-    var(--chrome-theme-frame, #0e151e);
-}
-body.chrome-theme .topbar {
-  background: var(--chrome-theme-toolbar-image) center / auto auto repeat-x,
-    var(--chrome-theme-toolbar, #263342);
-}
-body.chrome-theme .chat-window {
-  background:
-    var(--chrome-theme-background-image) var(--chrome-theme-background-position) / auto auto var(--chrome-theme-background-repeat),
-    var(--bg);
-}
-body.chrome-theme .chat-window-sidebar {
-  background: var(--chrome-theme-frame-overlay-image) top left / auto auto repeat-x,
-    var(--chrome-theme-frame-image) top left / auto auto repeat-x,
-    var(--chrome-theme-frame, #0e151e);
-}
-body.chrome-theme .chat-window-conversation .chat-header {
-  background: var(--chrome-theme-toolbar-image) center / auto auto repeat-x,
-    var(--chrome-theme-toolbar, #263342);
+body.chrome-theme :is(.main, .sidebar, .pane-resizer, .chat-window-sidebar, .chat-window-conversation) {
+  background: transparent;
 }
 body.chrome-theme .main::after,
 body.chrome-theme .chat-window::after {
@@ -198,11 +178,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   touch-action: none;
   background: var(--bg);
 }
+.pane-resizer::before { content: ""; position: absolute; inset: 0 -3px; }
 .pane-resizer::after {
   content: "";
   position: absolute;
-  inset: 0 2px;
-  background: var(--border-soft);
+  inset: calc(50% - 24px) 1px;
+  border-radius: 4px;
+  background: var(--muted);
   transition: background .15s ease;
 }
 .pane-resizer:hover::after, .pane-resizer:focus-visible::after, .pane-resizer.dragging::after {
@@ -860,6 +842,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .62); }
   .shell { display: block; }
   .pane-resizer { display: none; }
   .sidebar { position: fixed; z-index: 20; inset: 0 auto 0 0; width: min(310px, 86vw); transform: translateX(-105%); box-shadow: var(--shadow); transition: transform .2s ease; }
+  body.chrome-theme .sidebar { background: var(--chrome-theme-frame, #0e151e); }
   .sidebar.open { transform: translateX(0); }
   .mobile-close, .menu-button { display: inline-grid; place-items: center; }
   .topbar { padding: 0 10px; }
@@ -897,6 +880,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .62); }
     transition: transform .2s ease;
   }
   .chat-window-sidebar.open { transform: translateX(0); }
+  body.chrome-theme .chat-window-sidebar { background: var(--chrome-theme-frame, #0e151e); }
   .chat-sidebar-toggle, .chat-sidebar-close { display: inline-grid; place-items: center; flex: none; }
   .chat-window-conversation .chat-header { justify-content: flex-start; padding: 0 10px; }
   .chat-window-conversation .chat-messages { width: 100%; max-width: 100%; padding: 18px 12px 30px; }
@@ -996,7 +980,11 @@ body.chrome-theme :is(.sidebar, .chat-window-sidebar) {
   color: var(--chrome-theme-frame-text); --muted: var(--chrome-theme-frame-text); --faint: var(--chrome-theme-frame-text);
   --sidebar-muted: var(--chrome-theme-frame-text); --sidebar-faint: var(--chrome-theme-frame-text);
 }
-body.chrome-theme :is(.topbar, .chat-window-conversation .chat-header) { color: var(--chrome-theme-toolbar-text); backdrop-filter: none; }
+body.chrome-theme :is(.topbar, .chat-window-conversation .chat-header) {
+  background: var(--chrome-theme-toolbar, #263342);
+  color: var(--chrome-theme-toolbar-text);
+  backdrop-filter: none;
+}
 body.chrome-theme :is(.chat-title, .project-path, .chat-item-title, .chat-item-meta, .brand, .chat-subtitle) { color: inherit; }
 body.chrome-theme :is(.composer-wrap, .chat-composer-wrap) { background: transparent; }
 body.chrome-theme :is(.composer, .chat-composer, .message, .chat-message, .welcome, .dialog-card) {
@@ -1008,6 +996,8 @@ body.chrome-theme :is(.message-content, .chat-message-body, .message-name, .chat
 body.chrome-theme :is(.message-content, .chat-message-body) :is(h1, h2, h3, h4, h5, h6, blockquote) { color: inherit; }
 body.chrome-theme .composer select { background: var(--panel); color: var(--chrome-theme-panel-text); }
 body.chrome-theme .chat-item:is(:hover, .active) { color: var(--chrome-theme-panel-text); }
+body.chrome-theme .chat-item.active { box-shadow: inset 3px 0 var(--chrome-theme-panel-text); }
+body.chrome-theme :is(#prompt, #chatPrompt)::placeholder { color: var(--chrome-theme-panel-text); opacity: 1; }
 body.chrome-theme .send-button:not(:disabled) { background: var(--chrome-theme-toolbar); color: var(--chrome-theme-toolbar-text); }
 body.chrome-theme :is(input, textarea, select) {
   border-color: var(--border);
@@ -1057,6 +1047,23 @@ body.chrome-theme .terminal-command { background: var(--panel-2); color: var(--c
 
 body.chrome-theme .sidebar-disclosure summary { color: var(--chrome-theme-frame-text); }
 body.chrome-theme .provider-update { background: var(--panel); color: var(--chrome-theme-panel-text); border-radius: 8px; padding: 6px 10px; width: fit-content; }
+body.chrome-theme :is(.section-heading, .history-heading, .sidebar-disclosure > summary) {
+  border-radius: 7px;
+  background: var(--chrome-theme-frame, #263342);
+  color: var(--chrome-theme-frame-text);
+}
+body.chrome-theme :is(.sidebar, .chat-window-sidebar) :is(
+  .provider-card, .chat-item, .chrome-theme-button,
+  .context-pie-card, .chat-model-card
+) {
+  background: var(--panel);
+  color: var(--chrome-theme-panel-text);
+  --text: var(--chrome-theme-panel-text);
+  --muted: var(--chrome-theme-panel-text);
+  --faint: var(--chrome-theme-panel-text);
+  --sidebar-muted: var(--chrome-theme-panel-text);
+  --sidebar-faint: var(--chrome-theme-panel-text);
+}
 
 /* Equal outer columns keep branding centered even with unequal title/actions. */
 .topbar, .chat-window-conversation .chat-header {

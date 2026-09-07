@@ -1,3 +1,17 @@
+## PilferedParrot Interface 0.7.0-rc.5 preview
+
+Work and Chat share one theme background across session history and the conversation. Drag the
+sidebar divider to change its width and the portion of the artwork inside it; keyboard resizing
+and saved widths are supported. Text and controls retain readable surfaces over vivid artwork.
+
+Theme selections and removal update automatically in visible windows after Chrome saves them.
+Unchanged themes reuse their images, failed image loads retry, and theme updates preserve drafts
+and session state. No page refresh is needed for subsequent theme changes.
+
+Linux/source and Windows x64 packages contain the same interface update. Reopen the updated
+application after current jobs finish to load this version. This remains a preview alongside
+stable 0.6.1.
+
 ## PilferedParrot Interface 0.7.0-rc.4 preview
 
 Work and Chat now center the parrot branding in the top bar and remove the duplicate

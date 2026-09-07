@@ -705,7 +705,7 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertIn('const stagedImages = {}', apply_theme)
         self.assertIn('revokeStaged()', apply_theme)
         refresh_theme = _function_body(self.app_js, "refreshBrowserTheme")
-        self.assertIn('api("/api/browser/theme")', refresh_theme)
+        self.assertIn('api("/api/browser/theme"', refresh_theme)
         self.assertIn('const generation = ++themeRefreshGeneration', refresh_theme)
         self.assertIn('generation !== themeRefreshGeneration', refresh_theme)
         self.assertIn('window.addEventListener("focus"', self.app_js)
@@ -785,7 +785,7 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertIn('revokeStaged()', apply_theme)
         self.assertIn('meta[name="theme-color"]', apply_theme)
         refresh_theme = _function_body(self.chat_js, "refreshBrowserTheme")
-        self.assertIn('api("/api/browser/theme")', refresh_theme)
+        self.assertIn('api("/api/browser/theme"', refresh_theme)
         init = _function_body(self.chat_js, "init")
         self.assertIn('refreshBrowserTheme()', init)
         for selector in (
@@ -798,7 +798,7 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertIn('--sidebar-muted: var(--chrome-theme-frame-text)', self.app_css)
         self.assertRegex(
             self.app_css,
-            r"body\.chrome-theme\s+\.chat-window\s*\{[^}]*--chrome-theme-background-image",
+            r"body\.chrome-theme\s+:is\(\.shell, \.chat-window\)\s*\{[^}]*--chrome-theme-background-image",
         )
 
     def test_unneeded_delete_and_composer_labels_are_absent(self):
