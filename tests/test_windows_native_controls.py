@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import os
-import subprocess
+import secrets
 import sys
 import tempfile
 import time
@@ -56,24 +56,18 @@ class WindowsNativeControlsTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         profile = Path(temporary.name)
         with sync_playwright() as playwright:
-            process = subprocess.Popen([
-                playwright.chromium.executable_path,
-                f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
-                "--disable-background-mode", "--remote-debugging-port=0",
-                "--window-size=900,700", f"--app={fixture.browser_url}",
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            browser = None
+            context = playwright.chromium.launch_persistent_context(
+                str(profile), headless=False, timeout=15000,
+                args=["--window-size=900,700", f"--app={fixture.browser_url}"],
+            )
             try:
-                port_file = profile / "DevToolsActivePort"
-                self._wait(port_file.exists, "Chromium debugging endpoint did not start")
-                port = port_file.read_text().splitlines()[0]
-                browser = playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
-                page = next(page for context in browser.contexts for page in context.pages
-                            if page.url.startswith(fixture.base_url))
+                page = next(page for page in context.pages if page.url.startswith(fixture.base_url))
                 expect(page.locator("#prompt")).to_be_enabled()
                 expect(page.locator("#nativeTitlebar")).to_be_hidden()
 
                 windows = []
+                test_title = "PilferedParrot Test " + secrets.token_hex(16)
+                page.evaluate("title => { document.title = title; }", test_title)
 
                 @callback_type
                 def collect(hwnd, _parameter):
@@ -81,11 +75,16 @@ class WindowsNativeControlsTests(unittest.TestCase):
                     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
                     title = ctypes.create_unicode_buffer(512)
                     user32.GetWindowTextW(hwnd, title, len(title))
-                    if pid.value == process.pid and title.value == "PilferedParrot":
+                    if pid.value and title.value == test_title:
                         windows.append(hwnd)
                     return True
 
-                user32.EnumWindows(collect, 0)
+                def find_window():
+                    windows.clear()
+                    user32.EnumWindows(collect, 0)
+                    return bool(windows)
+
+                self._wait(find_window, "Chromium did not expose this test's native window")
                 self.assertEqual(len(windows), 1, "Expected only this test's app window")
                 hwnd = windows[0]
                 before_gap = page.evaluate("window.outerHeight - window.innerHeight")
@@ -103,6 +102,8 @@ class WindowsNativeControlsTests(unittest.TestCase):
                 self._wait(lambda: user32.IsZoomed(hwnd), "Maximize button did not maximize")
                 maximize.click()
                 self._wait(lambda: not user32.IsZoomed(hwnd), "Restore button did not restore")
+                self.assertFalse(user32.GetWindowLongPtrW(hwnd, -16) & 0x00C00000,
+                                 "Restoring the window reinstated its old caption")
                 page.get_by_role("button", name="Minimize window", exact=True).click()
                 self._wait(lambda: user32.IsIconic(hwnd), "Minimize button did not minimize")
                 user32.ShowWindow(hwnd, 9)
@@ -113,12 +114,4 @@ class WindowsNativeControlsTests(unittest.TestCase):
                 page.get_by_role("button", name="Close window", exact=True).click(no_wait_after=True)
                 self._wait(lambda: not user32.IsWindow(hwnd), "Close button did not close")
             finally:
-                if browser is not None:
-                    browser.close()
-                try:
-                    process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                    process.wait(timeout=10)
-
+                context.close()
