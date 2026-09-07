@@ -844,12 +844,11 @@ class FrontendInvariantTests(unittest.TestCase):
             )
             self.assertIsNotNone(named, f".{selector} must be a named inline-size container")
 
-    def test_workspace_actions_are_grouped_below_the_sidebar_brand(self):
+    def test_workspace_actions_lead_the_sidebar_without_duplicate_branding(self):
         sidebar = self.index_html.split('<aside class="sidebar"', 1)[1].split("</aside>", 1)[0]
-        brand_end = sidebar.index('</div>')
+        self.assertNotIn('/pilferedparrot-icon.png', sidebar)
         actions_start = sidebar.index('<nav class="sidebar-actions"')
         provider_status_start = sidebar.index('<section class="provider-status"')
-        self.assertLess(brand_end, actions_start)
         self.assertLess(actions_start, provider_status_start)
         for control in ('newWorkSession', 'providerWindows', 'openChat'):
             self.assertEqual(sidebar.count(f'id="{control}"'), 1)

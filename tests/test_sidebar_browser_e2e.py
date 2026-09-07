@@ -60,6 +60,46 @@ class SidebarBrowserEndToEndTests(unittest.TestCase):
         expect(page.get_by_role("textbox", name="Message Chat")).to_be_enabled(timeout=5_000)
         return page
 
+    def test_header_branding_stays_centered_without_obscuring_controls(self):
+        for mode, load, header, sidebar, title in (
+            ("work", self._load_work, ".topbar", "#sidebar", "#chatTitle"),
+            ("chat", self._load_chat, ".chat-header", "#chatWindowSidebar", "#chatThreadTitle"),
+        ):
+            page = load()
+            self.assertEqual(page.locator(f'{sidebar} img[src="/pilferedparrot-icon.png"]').count(), 0)
+            page.locator(title).evaluate("node => node.textContent = 'A long session title '.repeat(20)")
+            for native in (False, True):
+                page.evaluate("""native => {
+                    document.body.classList.toggle('native-window', native);
+                    document.querySelector('#nativeTitlebar').hidden = !native;
+                }""", native)
+                brand = ".native-titlebar-brand" if native else ".header-brand"
+                bar = "#nativeTitlebar" if native else header
+                for width in (320, 390, 600, 900, 1280, 1920):
+                    with self.subTest(mode=mode, native=native, width=width):
+                        page.set_viewport_size({"width": width, "height": 844})
+                        expect(page.locator(brand)).to_be_visible()
+                        metrics = page.evaluate("""({brand, bar}) => {
+                            const b = document.querySelector(brand).getBoundingClientRect();
+                            const h = document.querySelector(bar).getBoundingClientRect();
+                            const overlaps = [...document.querySelectorAll(`${bar} button, ${bar} .chat-meta, ${bar} #chatThreadTitle`)].filter(node => {
+                                const r = node.getBoundingClientRect();
+                                return r.width && r.height && r.left < b.right && r.right > b.left &&
+                                    r.top < b.bottom && r.bottom > b.top;
+                            }).map(node => node.id || node.getAttribute('aria-label'));
+                            return {offset: Math.abs((b.left + b.right - h.left - h.right) / 2),
+                                left: b.left, right: b.right, overlaps,
+                                scroll: document.documentElement.scrollWidth};
+                        }""", {"brand": brand, "bar": bar})
+                        self.assertLessEqual(metrics["offset"], 1)
+                        self.assertGreaterEqual(metrics["left"], 0)
+                        self.assertLessEqual(metrics["right"], width)
+                        self.assertEqual(metrics["overlaps"], [])
+                        self.assertLessEqual(metrics["scroll"], width)
+                if native:
+                    expect(page.locator(".header-brand")).to_be_hidden()
+            page.close()
+
     def _assert_resize_state(self, page, *, sidebar, toggle, close, conversation, input_selector):
         page.locator(toggle).click()
         expect(page.locator(sidebar)).to_have_class(re.compile(r"\bopen\b"))

@@ -1,9 +1,10 @@
 # PilferedParrot Interface
 
-This checkout is the **0.7.0-rc.3 preview**, with consistent Chrome themes, saved Work drafts,
-daily empty-session cleanup, and a shared model whiteboard alongside Harness.
-[Download the preview](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.3) ·
-[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.3/PilferedParrot-0.7.0-rc.3-windows-x64.zip).
+This checkout is the **0.7.0-rc.4 preview**, with centered header branding, a cleaner sidebar,
+consistent Chrome themes, saved Work drafts, daily empty-session cleanup, and a shared model
+whiteboard alongside Harness.
+[Download the preview](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.4) ·
+[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.4/PilferedParrot-0.7.0-rc.4-windows-x64.zip).
 The stable download links below remain on 0.6.1.
 
 > **v0.6.1 · stable Linux release and Windows 10/11 x64 preview**

@@ -14,7 +14,7 @@
 <body>
   <header class="native-titlebar" id="nativeTitlebar" hidden>
     <div class="native-titlebar-drag" data-native-drag>
-      <img src="/pilferedparrot-icon.png" alt=""><span>PilferedParrot</span>
+      <span class="native-titlebar-brand"><img src="/pilferedparrot-icon.png" alt=""><span>PilferedParrot</span></span>
     </div>
     <div class="native-titlebar-controls" aria-label="Window controls">
       <button type="button" data-native-action="minimize" aria-label="Minimize window" title="Minimize">―</button>
@@ -31,9 +31,6 @@
   <div class="shell">
     <aside class="sidebar" id="sidebar">
       <div class="brand-row">
-        <div class="brand" aria-label="PilferedParrot home">
-          <img class="brand-mark" src="/pilferedparrot-icon.png" alt=""><span>PilferedParrot</span>
-        </div>
         <button class="icon-button mobile-close" id="closeSidebar" aria-label="Close sidebar">×</button>
       </div>
 
@@ -103,17 +100,24 @@
 
     <main class="main" aria-label="Work session">
       <header class="topbar">
-        <button class="icon-button menu-button" id="openSidebar" aria-label="Open sidebar"
-                aria-controls="sidebar" aria-expanded="false">☰</button>
-        <div class="chat-meta">
-          <div class="technical-heading">
-            <div id="chatTitle" class="chat-title">New work session</div>
-            <button type="button" id="harnessReturn" class="harness-return" hidden>↩ Return to parent</button>
+        <div class="header-context">
+          <button class="icon-button menu-button" id="openSidebar" aria-label="Open sidebar"
+                  aria-controls="sidebar" aria-expanded="false">☰</button>
+          <div class="chat-meta">
+            <div class="technical-heading">
+              <div id="chatTitle" class="chat-title">New work session</div>
+              <button type="button" id="harnessReturn" class="harness-return" hidden>↩ Return to parent</button>
+            </div>
+            <button id="projectButton" class="project-path" disabled title="Change the folder this session is authorized to modify"></button>
           </div>
-          <button id="projectButton" class="project-path" disabled title="Change the folder this session is authorized to modify"></button>
         </div>
-        <button type="button" class="harness-button" id="whiteboardButton" aria-haspopup="dialog" aria-controls="whiteboardDialog">Whiteboard</button>
-        <button type="button" class="harness-button" id="harnessButton" aria-haspopup="dialog" aria-controls="harnessDialog" disabled>Harness</button>
+        <div class="header-brand" aria-label="PilferedParrot home">
+          <img src="/pilferedparrot-icon.png" alt=""><span>PilferedParrot</span>
+        </div>
+        <div class="header-actions">
+          <button type="button" class="harness-button" id="whiteboardButton" aria-haspopup="dialog" aria-controls="whiteboardDialog">Whiteboard</button>
+          <button type="button" class="harness-button" id="harnessButton" aria-haspopup="dialog" aria-controls="harnessDialog" disabled>Harness</button>
+        </div>
       </header>
 
       <section class="conversation" id="conversation" aria-live="polite">
