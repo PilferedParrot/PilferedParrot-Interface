@@ -55,6 +55,7 @@ class DraftWhiteboardBrowserTests(unittest.TestCase):
         self.page.route('**/api/chats/*/messages', lambda route: route.fulfill(status=400, content_type='application/json', body='{"error":"Rejected"}'))
         self.prompt.fill('  Keep this draft  ')
         self.page.locator('#sendButton').click()
+        expect(self.page.locator('#toast')).to_contain_text('Rejected')
         expect(self.prompt).to_have_value('  Keep this draft  ')
         self.page.unroute('**/api/chats/*/messages')
         self.page.evaluate('''() => {
@@ -130,3 +131,24 @@ class DraftWhiteboardBrowserTests(unittest.TestCase):
             self.page.screenshot(path=str(folder / 'bright-theme.png'))
         self.page.evaluate('applyBrowserTheme({active:false})')
         self.assertFalse(self.page.locator('body').evaluate("node => node.classList.contains('chrome-theme')"))
+
+    def test_recovered_submission_does_not_restore_already_sent_draft(self):
+        self.page.evaluate('''() => {
+          const original = api;
+          let lost = false;
+          api = async (path, options) => {
+            const result = await original(path, options);
+            if (path.endsWith('/messages') && !lost) {
+              lost = true;
+              throw new Error('Simulated lost response after acceptance');
+            }
+            return result;
+          };
+        }''')
+        self.prompt.fill('Send exactly once')
+        self.page.locator('#sendButton').click()
+        expect(self.page.locator('#toast')).to_contain_text('Connection recovered')
+        self.page.evaluate('flushDraft(state.activeId)')
+        self.page.reload()
+        expect(self.prompt).to_have_value('')
+        self.assertEqual(len(self.fixture.provider.requests), 1)

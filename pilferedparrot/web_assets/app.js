@@ -47,6 +47,7 @@ let projectSubmitPending = false;
 let createChatPending = false;
 let selectionSavePending = false;
 const pendingDrafts = new Map();
+const draftValues = new Map();
 let messageSubmissionPending = false;
 let draftReasoningEffort = null;
 let toastTimer = null;
@@ -83,6 +84,7 @@ function rememberDraft(chatId, draft) {
   } catch (_error) {}
 }
 function cachedDraft(chat) {
+  if (draftValues.has(chat.id)) return draftValues.get(chat.id);
   const item = draftCache()[chat.id];
   return item && typeof item.draft === "string" ? item.draft : (chat.draft || "");
 }
@@ -93,6 +95,7 @@ function forgetDraft(chatId) {
   } catch (_error) {}
 }
 function queueDraft(chatId, draft) {
+  draftValues.set(chatId, draft);
   const chat = state.chats.find((item) => item.id === chatId);
   if (chat) chat.draft = draft;
   rememberDraft(chatId, draft);
@@ -1494,6 +1497,7 @@ async function sendMessage(event) {
   if (["New technical activity", "New conversation", "New work session"].includes(chat.title)) {
     chat.title = content.replace(/\s+/g, " ").slice(0, 54);
   }
+  if (cachedDraft(chat) === originalDraft) draftValues.set(chat.id, "");
   if (state.activeId === chat.id && $("#prompt").value === originalDraft) $("#prompt").value = "";
   choosePromptSuggestion();
   resizePrompt();
@@ -1509,8 +1513,8 @@ async function sendMessage(event) {
       }),
     });
     state.chats = state.chats.map((item) => item.id === updated.id ? updated : item);
-    const newerDraft = pendingDrafts.get(chat.id)?.draft
-      ?? (state.activeId === chat.id ? $("#prompt").value : "");
+    const newerDraft = state.activeId === chat.id
+      ? $("#prompt").value : (draftValues.get(chat.id) || "");
     queueDraft(chat.id, newerDraft);
     state.chats.sort((a, b) => b.updated_at - a.updated_at);
     // A Qwen request may start its local server. Update the dashboard as soon
@@ -1524,6 +1528,7 @@ async function sendMessage(event) {
       const accepted = state.chats.find((item) => item.id === chat.id)?.messages
         ?.some((message) => message.id === requestId);
       if (!accepted) throw error;
+      queueDraft(chat.id, draftValues.get(chat.id) || "");
       toast(pendingMessage(activeChat())
         ? "Connection recovered; the response is still running."
         : "Connection recovered; the response completed.");
@@ -1532,7 +1537,7 @@ async function sendMessage(event) {
       const current = state.chats.find((item) => item.id === chat.id) || chat;
       current.messages = current.messages.filter((message) =>
         message !== optimisticAssistant && message.id !== requestId);
-      const restore = pendingDrafts.get(chat.id)?.draft || originalDraft;
+      const restore = draftValues.get(chat.id) || originalDraft;
       queueDraft(chat.id, restore);
       if (state.activeId === chat.id && !$("#prompt").value) $("#prompt").value = restore;
       resizePrompt();
