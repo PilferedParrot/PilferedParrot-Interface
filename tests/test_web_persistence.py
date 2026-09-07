@@ -140,6 +140,59 @@ class PersistentChatPersistenceTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
             self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["version"], 8)
 
+    def test_work_draft_round_trips_and_protects_session_from_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "chats.json"
+            store = PersistentChatStore(path, context_usage=self._usage)
+            chat = store.create(Path(directory), "codex")
+            updated = store.set_draft(chat["id"], "keep this")
+            self.assertEqual(updated["draft"], "keep this")
+            reloaded = PersistentChatStore(path, context_usage=self._usage)
+            self.assertEqual(reloaded.get(chat["id"])["draft"], "keep this")
+            reloaded.get(chat["id"])["updated_at"] = 0
+            reloaded.save()
+            self.assertEqual(reloaded.cleanup_stale_empty_sessions(
+                now=86_400, protected_chat_ids=(chat["id"],)), 0)
+
+    def test_daily_cleanup_removes_only_old_strictly_empty_sessions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "chats.json"
+            store = PersistentChatStore(path, context_usage=self._usage)
+            empty = store.create(Path(directory), "codex")
+            draft = store.create(Path(directory), "codex")
+            store.get(draft["id"])["draft"] = "typed"
+            active = store.create(Path(directory), "codex")
+            store.get(active["id"])["provider_session_id"] = "session"
+            for chat in (empty, draft, active): store.get(chat["id"])["updated_at"] = 0
+            store.save()
+            self.assertEqual(store.cleanup_stale_empty_sessions(now=86_400), 1)
+            self.assertNotIn(empty["id"], {chat["id"] for chat in store.data["chats"]})
+            self.assertEqual(len(store.data["chats"]), 2)
+            self.assertEqual(store.cleanup_stale_empty_sessions(now=86_401), 0)
+
+    def test_cleanup_preserves_selected_sessions_and_all_activity_across_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = PersistentChatStore(Path(directory) / "chats.json", context_usage=self._usage)
+            kept = []
+            for field, value in (("draft", " "), ("messages", [{"role": "user", "content": "keep"}]),
+                                 ("harness_tasks", [{"id": "task"}]), ("attachments", ["file"]),
+                                 ("provider_messages", [{"role": "user", "content": "keep"}]),
+                                 ("title", "Named by user")):
+                chat = store.create(Path(directory), "codex")
+                raw = store.get(chat["id"]); raw[field] = value; raw["updated_at"] = 0
+                kept.append(chat["id"])
+            for _ in range(2):
+                chat = store.create(Path(directory), "codex")
+                store.get(chat["id"])["updated_at"] = 0
+                kept.append(chat["id"])
+            empty = store.create(Path(directory), "codex")
+            store.get(empty["id"])["updated_at"] = 0
+            self.assertEqual(store.cleanup_stale_empty_sessions(now=86400, protected_chat_ids=kept[-2:]), 1)
+            self.assertEqual({c["id"] for c in store.data["chats"]}, set(kept))
+            reloaded = PersistentChatStore(store.path, context_usage=self._usage)
+            self.assertEqual(reloaded.cleanup_stale_empty_sessions(now=86401), 0)
+            self.assertEqual(reloaded.cleanup_stale_empty_sessions(now=172800), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

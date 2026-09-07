@@ -171,7 +171,7 @@ class CompatibleCodingTests(unittest.TestCase):
                 )
 
             names = [item["function"]["name"] for item in requests[0]["tools"]]
-            self.assertEqual(names, ["read_file", "diff"])
+            self.assertEqual(names, ["whiteboard_read", "read_file", "diff"])
             self.assertEqual(result, "Read-only.")
             self.assertFalse((root / "x").exists())
             self.assertIn("tool_error: PermissionError", requests[1]["messages"][-1]["content"])

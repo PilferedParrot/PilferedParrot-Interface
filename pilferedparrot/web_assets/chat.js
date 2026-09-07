@@ -25,6 +25,7 @@ try {
 if (fragmentCapability) history.replaceState(null, "", location.pathname + location.search);
 let pollTimer = null;
 let themeBackgroundObjectUrl = null;
+const themeImageObjectUrls = { frame: null, toolbar: null, attribution: null };
 let toastTimer = null;
 let notificationPermissionPending = false;
 let resetPending = false;
@@ -689,19 +690,73 @@ function toast(message, variant = "info") {
 }
 
 async function applyBrowserTheme(theme) {
+  const body = document.body;
   const selected = theme?.active ? theme : { active: false };
   const root = document.documentElement;
-  const properties = {
-    "--chrome-theme-frame": selected.colors?.frame,
-    "--chrome-theme-toolbar": selected.colors?.toolbar,
-    "--chrome-theme-text": selected.colors?.ntp_text,
-    "--chrome-theme-link": selected.colors?.ntp_link,
-    "--chrome-theme-section": selected.colors?.ntp_section,
+  const colors = selected.colors || {};
+  const valid = (value) => /^#[0-9a-f]{6}$/i.test(value || "");
+  const color = (value, fallback) => valid(value) ? value : fallback;
+  const luminance = (value) => {
+    const rgb = value.slice(1).match(/../g).map((part) => parseInt(part, 16) / 255)
+      .map((v) => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4);
+    return rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722;
   };
+  const foreground = (background, requested) => {
+    const light = luminance(background);
+    if (valid(requested)) {
+      const text = luminance(requested);
+      if ((Math.max(light, text) + .05) / (Math.min(light, text) + .05) >= 4.5) return requested;
+    }
+    return light > .179 ? "#000000" : "#ffffff";
+  };
+  const background = color(colors.ntp_background, "#ffffff");
+  const frame = color(colors.frame, "#dee1e6");
+  const toolbar = color(colors.toolbar, "#ffffff");
+  const panel = color(colors.ntp_section, background);
+  const properties = {
+    "--chrome-theme-background": background,
+    "--chrome-theme-frame": frame,
+    "--chrome-theme-toolbar": toolbar,
+    "--chrome-theme-text": foreground(background, colors.ntp_text),
+    "--chrome-theme-panel-text": foreground(panel, colors.ntp_section_text || colors.ntp_text),
+    "--chrome-theme-frame-text": foreground(frame, colors.tab_background_text),
+    "--chrome-theme-toolbar-text": foreground(toolbar, colors.toolbar_text || colors.bookmark_text),
+    "--chrome-theme-link": color(colors.ntp_link, foreground(background, "#1558d6")),
+    "--chrome-theme-section": panel,
+  };
+  body.style.colorScheme = selected.active && luminance(background) > .179 ? "light" : "dark";
   Object.entries(properties).forEach(([name, value]) => {
     if (/^#[0-9a-f]{6}$/i.test(value || "")) root.style.setProperty(name, value);
     else root.style.removeProperty(name);
   });
+  const themeImages = {
+    frame: ["--chrome-theme-frame-image", selected.frame_url],
+    frame_overlay: ["--chrome-theme-frame-overlay-image", selected.frame_overlay_url],
+    toolbar: ["--chrome-theme-toolbar-image", selected.toolbar_url],
+    attribution: ["--chrome-theme-attribution-image", selected.attribution_url],
+  };
+  await Promise.all(Object.entries(themeImages).map(async ([name, [property, imageUrl]]) => {
+    if (imageUrl) {
+      try {
+        const response = await fetch(imageUrl, {
+          headers: { "X-PilferedParrot-Capability": state.capability },
+        });
+        if (!response.ok) throw new Error(`Theme image failed (${response.status})`);
+        const nextUrl = URL.createObjectURL(await response.blob());
+        if (themeImageObjectUrls[name]) URL.revokeObjectURL(themeImageObjectUrls[name]);
+        themeImageObjectUrls[name] = nextUrl;
+        root.style.setProperty(property, `url("${nextUrl}")`);
+      } catch (_error) {
+        if (themeImageObjectUrls[name]) URL.revokeObjectURL(themeImageObjectUrls[name]);
+        themeImageObjectUrls[name] = null;
+        root.style.removeProperty(property);
+      }
+    } else {
+      if (themeImageObjectUrls[name]) URL.revokeObjectURL(themeImageObjectUrls[name]);
+      themeImageObjectUrls[name] = null;
+      root.style.removeProperty(property);
+    }
+  }));
   if (selected.background && selected.background_url) {
     try {
       const response = await fetch("/api/browser/theme/background", {

@@ -12,6 +12,7 @@ const state = {
 const CAPABILITY_SESSION_KEY = "pilferedparrot-dashboard-capability";
 const WINDOW_ID_SESSION_KEY = "pilferedparrot-dashboard-window-id";
 const ACTIVE_CHAT_SESSION_KEY = "pilferedparrot-dashboard-active-chat";
+const DRAFT_CACHE_KEY = "pilferedparrot-dashboard-drafts";
 const fragment = new URLSearchParams(location.hash.slice(1));
 const fragmentCapability = fragment.get("capability") || "";
 const fragmentProvider = fragment.get("provider") || "";
@@ -38,12 +39,16 @@ let pollTimer = null;
 let budgetPollTimer = null;
 let budgetRefresh = null;
 let themeBackgroundObjectUrl = null;
+const themeImageObjectUrls = { frame: null, toolbar: null, attribution: null };
 let terminalTarget = null;
 let providerLogoutTarget = null;
 let pendingLaunchModel = null;
 let projectSubmitPending = false;
 let createChatPending = false;
 let selectionSavePending = false;
+const pendingDrafts = new Map();
+const draftValues = new Map();
+let messageSubmissionPending = false;
 let draftReasoningEffort = null;
 let toastTimer = null;
 let notificationPermissionPending = false;
@@ -65,6 +70,74 @@ const PANE_LIMITS = {
 };
 
 function activeChat() { return state.chats.find((chat) => chat.id === state.activeId); }
+function draftCache() {
+  try {
+    const value = JSON.parse(localStorage.getItem(DRAFT_CACHE_KEY) || "{}");
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch (_error) { return {}; }
+}
+function rememberDraft(chatId, draft) {
+  try {
+    const cache = draftCache();
+    cache[chatId] = { draft, at: Date.now() };
+    localStorage.setItem(DRAFT_CACHE_KEY, JSON.stringify(cache));
+  } catch (_error) {}
+}
+function cachedDraft(chat) {
+  if (draftValues.has(chat.id)) return draftValues.get(chat.id);
+  const item = draftCache()[chat.id];
+  return item && typeof item.draft === "string" ? item.draft : (chat.draft || "");
+}
+function forgetDraft(chatId) {
+  try {
+    const cache = draftCache(); delete cache[chatId];
+    localStorage.setItem(DRAFT_CACHE_KEY, JSON.stringify(cache));
+  } catch (_error) {}
+}
+function queueDraft(chatId, draft) {
+  draftValues.set(chatId, draft);
+  const chat = state.chats.find((item) => item.id === chatId);
+  if (chat) chat.draft = draft;
+  rememberDraft(chatId, draft);
+  const pending = pendingDrafts.get(chatId) || { revision: 0, promise: null };
+  pending.draft = draft;
+  pending.revision += 1;
+  clearTimeout(pending.timer);
+  pending.timer = setTimeout(() => flushDraft(chatId).catch(() => {}), 350);
+  pendingDrafts.set(chatId, pending);
+}
+async function flushDraft(chatId) {
+  const pending = pendingDrafts.get(chatId);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  if (pending.promise) return pending.promise;
+  pending.promise = (async () => {
+    while (pendingDrafts.has(chatId)) {
+      const { draft, revision } = pending;
+      await api(`/api/chats/${encodeURIComponent(chatId)}/draft`, {
+        method: "POST", body: JSON.stringify({ draft }), keepalive: true,
+      });
+      if (pending.revision === revision) {
+        pendingDrafts.delete(chatId);
+        // Keep the current value in memory; only unsaved drafts need browser storage.
+        const chat = state.chats.find((item) => item.id === chatId);
+        if (chat) chat.draft = draft;
+        forgetDraft(chatId);
+      }
+    }
+  })();
+  try { await pending.promise; } finally { pending.promise = null; }
+}
+function saveActiveDraft() {
+  const chat = activeChat();
+  if (chat && state.initialized) queueDraft(chat.id, $("#prompt").value);
+}
+function reportActiveSession() {
+  if (!state.initialized || !state.activeId) return;
+  api("/api/window/active", { method: "POST", body: JSON.stringify({
+    document_id: documentId, chat_id: state.activeId, draft_ids: [...pendingDrafts.keys()],
+  }) }).then((result) => { if (result.removed) return refreshState(); }).catch(() => {});
+}
 function latestUsedChat(chats) {
   return [...chats].sort((a, b) =>
     (Number(b.last_used_order) || 0) - (Number(a.last_used_order) || 0)
@@ -432,10 +505,14 @@ function renderChats() {
       <div class="chat-item-meta"><span>${escapeHtml(providerLabel(chat.provider || chat.requested_provider))}</span><span>${chat.context_status !== "normal" ? '<i class="limit-dot" title="Near practical limit" aria-label="Near practical limit">!</i>' : ""}${relativeTime(chat.updated_at)}</span></div>
     </button>`).join("");
   list.querySelectorAll("[data-chat]").forEach((button) => button.addEventListener("click", async () => {
+    saveActiveDraft();
     const chatId = button.dataset.chat;
     state.activeId = chatId;
     try { sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, state.activeId); } catch (_error) {}
     state.draftCwd = activeChat().cwd;
+    reportActiveSession();
+    $("#prompt").value = cachedDraft(activeChat());
+    resizePrompt();
     render();
     setSidebarOpen(false);
     try {
@@ -695,6 +772,7 @@ async function refreshBudgets(showErrors = false) {
 }
 
 function scheduleBudgetPoll() {
+  reportActiveSession();
   if (budgetPollTimer !== null) clearTimeout(budgetPollTimer);
   budgetPollTimer = setTimeout(async () => {
     budgetPollTimer = null;
@@ -1240,17 +1318,70 @@ async function applyBrowserTheme(theme) {
   const selected = theme?.active ? theme : { active: false };
   const root = document.documentElement;
   const body = document.body;
-  const properties = {
-    "--chrome-theme-frame": selected.colors?.frame,
-    "--chrome-theme-toolbar": selected.colors?.toolbar,
-    "--chrome-theme-text": selected.colors?.ntp_text,
-    "--chrome-theme-link": selected.colors?.ntp_link,
-    "--chrome-theme-section": selected.colors?.ntp_section,
+  const colors = selected.colors || {};
+  const valid = (value) => /^#[0-9a-f]{6}$/i.test(value || "");
+  const color = (value, fallback) => valid(value) ? value : fallback;
+  const luminance = (value) => {
+    const rgb = value.slice(1).match(/../g).map((part) => parseInt(part, 16) / 255)
+      .map((v) => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4);
+    return rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722;
   };
+  const foreground = (background, requested) => {
+    const light = luminance(background);
+    if (valid(requested)) {
+      const text = luminance(requested);
+      if ((Math.max(light, text) + .05) / (Math.min(light, text) + .05) >= 4.5) return requested;
+    }
+    return light > .179 ? "#000000" : "#ffffff";
+  };
+  const background = color(colors.ntp_background, "#ffffff");
+  const frame = color(colors.frame, "#dee1e6");
+  const toolbar = color(colors.toolbar, "#ffffff");
+  const panel = color(colors.ntp_section, background);
+  const properties = {
+    "--chrome-theme-background": background,
+    "--chrome-theme-frame": frame,
+    "--chrome-theme-toolbar": toolbar,
+    "--chrome-theme-text": foreground(background, colors.ntp_text),
+    "--chrome-theme-panel-text": foreground(panel, colors.ntp_section_text || colors.ntp_text),
+    "--chrome-theme-frame-text": foreground(frame, colors.tab_background_text),
+    "--chrome-theme-toolbar-text": foreground(toolbar, colors.toolbar_text || colors.bookmark_text),
+    "--chrome-theme-link": color(colors.ntp_link, foreground(background, "#1558d6")),
+    "--chrome-theme-section": panel,
+  };
+  body.style.colorScheme = selected.active && luminance(background) > .179 ? "light" : "dark";
   Object.entries(properties).forEach(([name, value]) => {
     if (/^#[0-9a-f]{6}$/i.test(value || "")) root.style.setProperty(name, value);
     else root.style.removeProperty(name);
   });
+  const themeImages = {
+    frame: ["--chrome-theme-frame-image", selected.frame_url],
+    frame_overlay: ["--chrome-theme-frame-overlay-image", selected.frame_overlay_url],
+    toolbar: ["--chrome-theme-toolbar-image", selected.toolbar_url],
+    attribution: ["--chrome-theme-attribution-image", selected.attribution_url],
+  };
+  await Promise.all(Object.entries(themeImages).map(async ([name, [property, imageUrl]]) => {
+    if (imageUrl) {
+      try {
+        const response = await fetch(imageUrl, {
+          headers: { "X-PilferedParrot-Capability": state.capability },
+        });
+        if (!response.ok) throw new Error(`Theme image failed (${response.status})`);
+        const nextUrl = URL.createObjectURL(await response.blob());
+        if (themeImageObjectUrls[name]) URL.revokeObjectURL(themeImageObjectUrls[name]);
+        themeImageObjectUrls[name] = nextUrl;
+        root.style.setProperty(property, `url("${nextUrl}")`);
+      } catch (_error) {
+        if (themeImageObjectUrls[name]) URL.revokeObjectURL(themeImageObjectUrls[name]);
+        themeImageObjectUrls[name] = null;
+        root.style.removeProperty(property);
+      }
+    } else {
+      if (themeImageObjectUrls[name]) URL.revokeObjectURL(themeImageObjectUrls[name]);
+      themeImageObjectUrls[name] = null;
+      root.style.removeProperty(property);
+    }
+  }));
   if (selected.background && selected.background_url) {
     try {
       const response = await fetch("/api/browser/theme/background", {
@@ -1293,6 +1424,7 @@ async function refreshBrowserTheme(notify = false) {
 
 async function createChat(requestedModel = "") {
   if (createChatPending || selectionSavePending) return null;
+  saveActiveDraft();
   createChatPending = true;
   $("#newWorkSession").disabled = true;
   const provider = state.windowProvider;
@@ -1310,6 +1442,7 @@ async function createChat(requestedModel = "") {
     });
     state.chats.unshift(chat);
     state.activeId = chat.id;
+    reportActiveSession();
     try { sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, chat.id); } catch (_error) {}
     state.draftCwd = chat.cwd;
     $("#prompt").value = "";
@@ -1325,8 +1458,9 @@ async function createChat(requestedModel = "") {
 
 async function sendMessage(event) {
   event.preventDefault();
-  const content = $("#prompt").value.trim();
-  if (!state.initialized || !content || activeRunning() || harnessRunning() || activeChat()?.harness_parent || createChatPending || selectionSavePending) return;
+  const originalDraft = $("#prompt").value;
+  const content = originalDraft.trim();
+  if (!state.initialized || messageSubmissionPending || !content || activeRunning() || harnessRunning() || activeChat()?.harness_parent || createChatPending || selectionSavePending) return;
   if (pendingLaunchModel !== null) {
     openProjectDialog(true);
     return;
@@ -1346,6 +1480,9 @@ async function sendMessage(event) {
     }
   }
   const chat = activeChat();
+  messageSubmissionPending = true;
+  // Finish older saves before submission can clear the sent draft.
+  try { await flushDraft(chat.id); } catch (_error) {}
   const requestId = globalThis.crypto?.randomUUID?.()
     || `request-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const optimisticUser = {
@@ -1360,7 +1497,8 @@ async function sendMessage(event) {
   if (["New technical activity", "New conversation", "New work session"].includes(chat.title)) {
     chat.title = content.replace(/\s+/g, " ").slice(0, 54);
   }
-  $("#prompt").value = "";
+  if (cachedDraft(chat) === originalDraft) draftValues.set(chat.id, "");
+  if (state.activeId === chat.id && $("#prompt").value === originalDraft) $("#prompt").value = "";
   choosePromptSuggestion();
   resizePrompt();
   render();
@@ -1371,10 +1509,13 @@ async function sendMessage(event) {
       body: JSON.stringify({
         content, provider: selectedProvider, model: selectedModel, cwd: state.draftCwd,
         reasoning_effort: reasoningEffort,
-        request_id: requestId,
+        request_id: requestId, draft: originalDraft,
       }),
     });
     state.chats = state.chats.map((item) => item.id === updated.id ? updated : item);
+    const newerDraft = state.activeId === chat.id
+      ? $("#prompt").value : (draftValues.get(chat.id) || "");
+    queueDraft(chat.id, newerDraft);
     state.chats.sort((a, b) => b.updated_at - a.updated_at);
     // A Qwen request may start its local server. Update the dashboard as soon
     // as submission returns instead of waiting for the minute poll interval.
@@ -1387,6 +1528,7 @@ async function sendMessage(event) {
       const accepted = state.chats.find((item) => item.id === chat.id)?.messages
         ?.some((message) => message.id === requestId);
       if (!accepted) throw error;
+      queueDraft(chat.id, draftValues.get(chat.id) || "");
       toast(pendingMessage(activeChat())
         ? "Connection recovered; the response is still running."
         : "Connection recovered; the response completed.");
@@ -1395,11 +1537,14 @@ async function sendMessage(event) {
       const current = state.chats.find((item) => item.id === chat.id) || chat;
       current.messages = current.messages.filter((message) =>
         message !== optimisticAssistant && message.id !== requestId);
-      if (!$("#prompt").value) $("#prompt").value = content;
+      const restore = draftValues.get(chat.id) || originalDraft;
+      queueDraft(chat.id, restore);
+      if (state.activeId === chat.id && !$("#prompt").value) $("#prompt").value = restore;
       resizePrompt();
       toast(error.message);
     }
   } finally {
+    messageSubmissionPending = false;
     render();
     $("#conversation").scrollTop = $("#conversation").scrollHeight;
     $("#prompt").focus();
@@ -1423,6 +1568,7 @@ function applyServerState(initial) {
   state.windowId = initial.window_id || state.windowId;
   state.windowProvider = initial.window_provider || state.windowProvider;
   const chats = visibleChats();
+  chats.forEach((chat) => { chat.draft = cachedDraft(chat); });
   state.activeId = chats.some((chat) => chat.id === activeId)
     ? activeId : chats[0]?.id || null;
   try {
@@ -1556,6 +1702,7 @@ async function init() {
       method: "POST", body: JSON.stringify({ document_id: documentId }),
     });
     state.initialized = true;
+    reportActiveSession();
     await refreshBrowserTheme(false).catch(() => {});
     if (launchedFromApp) {
       state.activeId = null;
@@ -1573,6 +1720,7 @@ async function init() {
       state.activeId = chats.some((chat) => chat.id === savedActiveId)
         ? savedActiveId : latestUsedChat(chats)?.id || null;
       state.draftCwd = activeChat()?.cwd || state.defaultCwd;
+      if (activeChat()) { $("#prompt").value = cachedDraft(activeChat()); resizePrompt(); }
       if (!state.activeId) await createChat(fragmentModel);
     }
     render();
@@ -1767,6 +1915,7 @@ $("#harnessTasks").addEventListener("click", async (event) => {
   button.disabled = false;
 });
 $("#prompt").addEventListener("input", resizePrompt);
+$("#prompt").addEventListener("input", saveActiveDraft);
 $("#prompt").addEventListener("click", (event) => {
   if (clickedAfterPromptSuggestion(event)) acceptPromptSuggestion();
 });
@@ -2091,6 +2240,8 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) { refreshBudgets(false); scheduleBudgetPoll(); }
 });
 window.addEventListener("pagehide", () => {
+  saveActiveDraft();
+  for (const chatId of pendingDrafts.keys()) flushDraft(chatId).catch(() => {});
   if (!state.capability) return;
   fetch("/api/window/close", {
     method: "POST",

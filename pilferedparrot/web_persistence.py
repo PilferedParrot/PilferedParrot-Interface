@@ -25,6 +25,8 @@ _PROVIDER_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 NOTIFICATION_PERMISSION_STATES = frozenset({
     "unasked", "granted", "denied", "dismissed", "unavailable",
 })
+STALE_EMPTY_SESSION_SECONDS = 24 * 60 * 60
+WORK_CLEANUP_LAST_RUN = "work_cleanup_last_run"
 
 
 def _atomic_json_write(
@@ -236,6 +238,10 @@ class PersistentChatStore:
             ):
                 raise RuntimeError(f"chat history contains invalid messages: {source}")
             chat["messages"] = messages
+            draft = chat.get("draft", "")
+            if not isinstance(draft, str):
+                raise RuntimeError(f"chat history contains an invalid draft: {source}")
+            chat["draft"] = draft[:40_000]
             now = int(time.time())
             created = chat.get("created_at")
             chat["created_at"] = int(created) if isinstance(created, (int, float)) \
@@ -336,11 +342,58 @@ class PersistentChatStore:
             self.data["preferences"]["notification_permission"] = notification_permission
         else:
             self.data["preferences"]["notification_permission"] = "unasked"
+        cleanup_last_run = preferences.get(WORK_CLEANUP_LAST_RUN)
+        if isinstance(cleanup_last_run, (int, float)) and not isinstance(cleanup_last_run, bool) \
+                and cleanup_last_run >= 0:
+            self.data["preferences"][WORK_CLEANUP_LAST_RUN] = int(cleanup_last_run)
         self.data["version"] = 8
 
     def preferences_public(self) -> dict[str, Any]:
         with self.lock:
             return deepcopy(self.data["preferences"])
+
+    @staticmethod
+    def _is_strictly_empty_work_session(chat: dict[str, Any]) -> bool:
+        if chat.get("messages") or chat.get("draft"):
+            return False
+        if chat.get("title") not in {None, "", "New work session", "New technical activity", "New conversation"}:
+            return False
+        if chat.get("attachments") or chat.get("provider_session_id") \
+                or chat.get("provider_messages"):
+            return False
+        return not any(chat.get(key) for key in (
+            "provider_job_id", "job_id", "job", "run_id", "active_job",
+            "last_turn_usage", "live_context_usage", "context_chars",
+            "harness_tasks", "harness_parent", "harness_child", "harness_reference",
+        ))
+
+    def cleanup_stale_empty_sessions(
+        self, *, now: int | None = None, protected_window_ids: Iterable[str] = (),
+        protected_chat_ids: Iterable[str] = (),
+    ) -> int:
+        """Delete stale empty sessions once daily, protecting live selections."""
+        current = int(time.time() if now is None else now)
+        with self.lock:
+            last_run = self.data["preferences"].get(WORK_CLEANUP_LAST_RUN, 0)
+            if isinstance(last_run, int) and current - last_run < STALE_EMPTY_SESSION_SECONDS:
+                return 0
+            windows, chats = set(protected_window_ids), set(protected_chat_ids)
+            cutoff = current - STALE_EMPTY_SESSION_SECONDS
+            retained = []
+            removed = 0
+            for chat in self.data["chats"]:
+                stale = isinstance(chat.get("updated_at"), (int, float)) \
+                    and not isinstance(chat.get("updated_at"), bool) \
+                    and chat["updated_at"] <= cutoff
+                protected = chat.get("window_id", "main") in windows or chat.get("id") in chats
+                if stale and not protected and self._is_strictly_empty_work_session(chat):
+                    removed += 1
+                else:
+                    retained.append(chat)
+            self.data["chats"] = retained
+            self.data["preferences"][WORK_CLEANUP_LAST_RUN] = current
+            self.save()
+            return removed
 
     def set_notification_permission(self, decision: Any) -> dict[str, Any]:
         """Persist a browser notification decision using the shared preference store."""
@@ -368,6 +421,7 @@ class PersistentChatStore:
             "provider_session_id": None,
             "provider_messages": [],
             "messages": [],
+            "draft": "",
             "context_chars": 0,
             "context_warning": False,
             "warning_announced": False,
@@ -635,6 +689,7 @@ class PersistentChatStore:
             "provider_session_id": None,
             "provider_messages": [],
             "messages": [],
+            "draft": "",
             "context_overhead_tokens": max(0, int(context_overhead_tokens)),
             "output_reservation_tokens": max(0, int(output_reservation_tokens)),
         }
@@ -648,6 +703,18 @@ class PersistentChatStore:
             self.mark_used(chat)
             self.save()
         return self.public(chat)
+
+    def set_draft(self, chat_id: str, draft: Any) -> dict[str, Any]:
+        if not isinstance(draft, str):
+            raise ValueError("draft must be text")
+        if len(draft) > 40_000:
+            raise ValueError("draft is too long")
+        with self.lock:
+            chat = self.get(chat_id)
+            chat["draft"] = draft
+            chat["updated_at"] = int(time.time())
+            self.save()
+            return self.public(chat)
 
     def mark_used(self, chat: dict[str, Any]) -> None:
         """Persist selection order while holding ``lock`` without changing timestamps."""

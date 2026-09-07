@@ -278,6 +278,7 @@ class GeminiAdapter(ProviderAdapter):
     def _command(self, conversation: Any) -> list[str]:
         cfg = self.config.get("gemini", {})
         from .dispatch import provider_command
+        from .whiteboard import whiteboard_directory
         # A piped stdin puts Gemini in headless mode without exposing the user
         # prompt in the process list. Gemini's JSONL formatter then supplies a
         # stable provider-neutral stream to normalize below.
@@ -286,6 +287,10 @@ class GeminiAdapter(ProviderAdapter):
         if approval_mode not in {"default", "auto_edit", "yolo", "plan"}:
             raise ValueError(f"unsupported Gemini approval mode: {approval_mode}")
         command += ["--approval-mode", approval_mode]
+        if approval_mode != "plan":
+            board = whiteboard_directory(self.config)
+            board.mkdir(parents=True, exist_ok=True, mode=0o700)
+            command += ["--include-directories", str(board)]
         if cfg.get("model"):
             command += ["--model", str(cfg["model"])]
         if conversation.provider_session_id:

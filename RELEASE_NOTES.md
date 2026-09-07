@@ -1,3 +1,24 @@
+## PilferedParrot Interface 0.7.0-rc.2 preview
+
+Chrome theme artwork now loads in Work and Chat: the content security policy permits the
+locally fetched image blobs. New-tab, frame, toolbar, overlay and attribution artwork retain
+native size, alignment and tiling. Theme colors replace the previous dark color mixing;
+text surfaces choose a readable foreground. Chrome controls the actual browser frame.
+
+Work drafts survive session switching and reloads, with debounced local persistence and a
+browser recovery cache. Failed submissions retain the original draft; successful submission
+preserves text typed for the next message. Once every 24 hours while the app is open, cleanup
+removes unused, empty sessions at least 24 hours old. Drafts, messages, named sessions,
+provider continuations, running jobs and Harness activity are retained, as are live selections.
+
+The new **Whiteboard** button opens persistent notes shared across models and jobs. Every new
+provider conversation gets a compact discovery note, with no board history injected and no
+background model calls. Native Work CLIs receive the dedicated board directory; compatible
+models receive bounded read/post tools. Read-only Chat cannot post. See [whiteboard usage](docs/whiteboard.md).
+
+The Windows x64 preview includes the same fixes. This remains a preview alongside the existing
+stable 0.6.1 release; Windows provider accounts are still installed and authenticated separately.
+
 ## PilferedParrot Interface 0.7.0-rc.1 preview
 
 Removed the 30-minute total runtime cutoff for Codex, Claude, Gemini, and Antigravity jobs.

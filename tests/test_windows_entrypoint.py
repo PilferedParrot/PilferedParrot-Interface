@@ -76,8 +76,8 @@ class WindowsEntrypointTests(unittest.TestCase):
     def test_windows_compatible_tools_exclude_shell_and_enforce_read_only(self):
         config = deepcopy(DEFAULTS)
         for read_only, expected in (
-            (False, {"read_file", "write_file", "edit_file", "diff"}),
-            (True, {"read_file", "diff"}),
+            (False, {"read_file", "write_file", "edit_file", "diff", "whiteboard_read", "whiteboard_post"}),
+            (True, {"read_file", "diff", "whiteboard_read"}),
         ):
             config["qwen"]["read_only"] = read_only
             response = io.BytesIO(json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode())

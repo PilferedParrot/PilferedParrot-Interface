@@ -1247,6 +1247,17 @@ class PilferedParrotApp(HarnessWorkflow):
             "preferences": self.store.preferences_public(),
         }
 
+    def cleanup_stale_sessions(
+        self, *, protected_window_ids: tuple[str, ...] = (),
+        protected_chat_ids: tuple[str, ...] = (),
+    ) -> int:
+        with self.runs_lock:
+            running = tuple(self.runs)
+        return self.store.cleanup_stale_empty_sessions(
+            protected_window_ids=protected_window_ids,
+            protected_chat_ids=tuple({*protected_chat_ids, *running}),
+        )
+
     def create_chat(
         self, payload: dict[str, Any], *, window_id: str = "main",
         window_provider: str | None = None,
@@ -1402,6 +1413,7 @@ class PilferedParrotApp(HarnessWorkflow):
                 except ValueError:
                     chat_thread["reasoning_effort"] = None
                 chat_thread.pop("provider_session_id", None)
+                chat_thread.pop("whiteboard_discovered", None)
                 chat_thread.pop("live_context_usage", None)
                 chat_thread.pop("last_turn_usage", None)
                 if limit is not None:
@@ -1514,6 +1526,7 @@ class PilferedParrotApp(HarnessWorkflow):
                         raise ValueError("start a new chat before changing the chat model")
                     chat["model"] = model
                     chat.pop("provider_session_id", None)
+                    chat.pop("whiteboard_discovered", None)
                 chat["reasoning_effort"] = effort
                 self.store.save()
                 return self.store.chat_public()
@@ -1527,6 +1540,13 @@ class PilferedParrotApp(HarnessWorkflow):
                 if any(task.get("status") == "running" for task in chat.get("harness_tasks", [])):
                     raise ValueError("cancel the running harness package before deleting its parent")
             self.store.delete(chat_id)
+
+    def set_draft(
+        self, chat_id: str, payload: dict[str, Any], *, window_id: str | None = None,
+    ) -> dict[str, Any]:
+        with self.store.lock:
+            chat = self._owned_chat(chat_id, window_id)
+            return self.store.set_draft(chat["id"], payload.get("draft"))
 
     def send_message(
         self, chat_id: str, payload: dict[str, Any], *,
@@ -1626,6 +1646,8 @@ class PilferedParrotApp(HarnessWorkflow):
                 now = int(time.time())
                 if not chat["messages"]:
                     chat["title"] = " ".join(prompt.split())[:54]
+                if "draft" not in payload or chat.get("draft") == payload["draft"]:
+                    chat["draft"] = ""
                 chat["messages"].append({
                     "id": request_id,
                     "role": "user",
@@ -1734,6 +1756,8 @@ class PilferedParrotApp(HarnessWorkflow):
                 provider=provider,
                 response_identity=configured_identity(run_config, provider),
                 provider_session_id=session_id if same_session else None,
+                whiteboard_discovered=bool(chat.get("whiteboard_discovered"))
+                if same_session and (session_id or provider_messages) else False,
                 messages=provider_messages
                 if (provider == "qwen" or
                     self.config.get(provider, {}).get("adapter") == "openai_compatible")
@@ -1803,6 +1827,7 @@ class PilferedParrotApp(HarnessWorkflow):
                     chat["model"] = selected_model
                     chat["provider_session_id"] = conversation.provider_session_id
                     chat["provider_messages"] = conversation.messages
+                    chat["whiteboard_discovered"] = conversation.whiteboard_discovered
                     if result.input_tokens is not None and result.output_tokens is not None:
                         chat["last_turn_usage"] = {
                             "input_tokens": result.input_tokens,
@@ -1926,6 +1951,7 @@ class PilferedParrotApp(HarnessWorkflow):
                     chat_thread["provider"] = selected_provider
                     chat_thread["model"] = None
                     chat_thread["provider_session_id"] = None
+                    chat_thread.pop("whiteboard_discovered", None)
                     chat_thread["provider_messages"] = []
                 if any(message.get("pending") for message in chat_thread["messages"]):
                     raise ValueError("Chat is already responding")
@@ -1953,6 +1979,7 @@ class PilferedParrotApp(HarnessWorkflow):
                     # A Codex resume token is model-specific. Never carry it
                     # across a model picker change.
                     chat_thread.pop("provider_session_id", None)
+                    chat_thread.pop("whiteboard_discovered", None)
                     chat_thread.pop("live_context_usage", None)
                     chat_thread.pop("last_turn_usage", None)
                 chat_thread["reasoning_effort"] = reasoning_effort
@@ -2077,6 +2104,8 @@ class PilferedParrotApp(HarnessWorkflow):
                 run_config["codex"]["context_window_limit_tokens"] = context_limit
             conversation = Conversation(
                 provider=provider, provider_session_id=session_id,
+                whiteboard_discovered=bool(chat_thread.get("whiteboard_discovered"))
+                if session_id or provider_messages else False,
                 response_identity=configured_identity(run_config, provider),
                 messages=provider_messages
                 if provider == "qwen" or run_config.get(provider, {}).get("adapter") \
@@ -2094,6 +2123,7 @@ class PilferedParrotApp(HarnessWorkflow):
                 chat_thread["provider_session_id"] = result.session_id \
                     or conversation.provider_session_id
                 chat_thread["provider_messages"] = conversation.messages
+                chat_thread["whiteboard_discovered"] = conversation.whiteboard_discovered
                 if result.input_tokens is not None and result.output_tokens is not None:
                     chat_thread["last_turn_usage"] = {
                         "input_tokens": result.input_tokens,
@@ -2508,6 +2538,17 @@ class PilferedParrotApp(HarnessWorkflow):
     def chrome_theme_background(self) -> tuple[bytes, str] | None:
         return self.native.chrome_theme_background()
 
+    def chrome_theme_image(self, image_key: str) -> tuple[bytes, str] | None:
+        return self.native.chrome_theme_image(image_key)
+
+    def whiteboard_read(self) -> dict[str, Any]:
+        from .whiteboard import Whiteboard
+        return Whiteboard(self.config).read()
+
+    def whiteboard_post(self, payload: dict[str, Any]) -> dict[str, Any]:
+        from .whiteboard import Whiteboard
+        return Whiteboard(self.config).post(payload.get("text"), author="User")
+
     def open_chat_window(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Open Chat in a normal native window, isolated from the maximized main profile."""
         provider = str(payload.get("provider") or self.default_provider)
@@ -2538,6 +2579,7 @@ class PilferedParrotApp(HarnessWorkflow):
                     private_chat["cwd"] = str(cwd)
                     if model_changed:
                         private_chat["provider_session_id"] = None
+                        private_chat.pop("whiteboard_discovered", None)
                         private_chat["provider_messages"] = []
                     self.store.save()
         return self.native.open_chat_window(
