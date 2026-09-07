@@ -393,6 +393,83 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
                 # Keep Work open until context cleanup: closing the final Work
                 # window starts the production server's shutdown grace period.
 
+    def test_theme_frame_artwork_survives_reload_and_chat_reopen(self):
+        assets = {
+            "theme_frame": self._solid_png((17, 34, 204), width=7, height=4),
+            "theme_toolbar": self._solid_png((204, 34, 17), width=6, height=4),
+        }
+        theme = self._theme("reload-frame-art", "#ffffff")
+        theme["colors"].update({
+            "ntp_section": "#4a4a4a",
+            "ntp_section_text": "#ffffff",
+            "frame": "#000000",
+            "toolbar": "#000000",
+            "tab_background_text": "#ffffff",
+            "toolbar_text": "#ffffff",
+        })
+        theme.update({
+            "frame_url": "/api/browser/theme/image/theme_frame",
+            "toolbar_url": "/api/browser/theme/image/theme_toolbar",
+        })
+        self.fixture.app.browser_theme = lambda: theme
+
+        def route_asset(route):
+            name = route.request.url.split("/api/browser/theme/image/", 1)[-1].split("?", 1)[0]
+            route.fulfill(status=200, content_type="image/png", body=assets[name])
+
+        def assert_page(page, prompt_selector, header_selector):
+            page.wait_for_function(
+                "() => document.body.dataset.chromeTheme === 'reload-frame-art:1'",
+                timeout=5_000,
+            )
+            page.evaluate("""() => {
+                document.body.classList.add('native-window');
+                document.querySelector('#nativeTitlebar').hidden = false;
+            }""")
+            expect(page.locator(prompt_selector)).to_be_enabled(timeout=5_000)
+            styles = page.evaluate("""header => ({
+                titleImage: getComputedStyle(document.querySelector('#nativeTitlebar')).backgroundImage,
+                toolbarImage: getComputedStyle(document.querySelector(header)).backgroundImage,
+                labelColor: getComputedStyle(document.querySelector('.composer-setting > span')).color,
+            })""", header_selector)
+            self.assertIn("url(", styles["titleImage"])
+            self.assertIn("url(", styles["toolbarImage"])
+            self.assertNotEqual(styles["titleImage"], styles["toolbarImage"])
+            self.assertEqual(styles["labelColor"], "rgb(255, 255, 255)")
+
+            title_pixel = self._screenshot_pixel(
+                page.screenshot(clip={"x": 2, "y": 2, "width": 1, "height": 1}),
+            )
+            header = page.locator(header_selector)
+            box = header.bounding_box()
+            self.assertIsNotNone(box)
+            toolbar_pixel = self._screenshot_pixel(page.screenshot(clip={
+                "x": int(box["x"]) + 2, "y": int(box["y"]) + 2,
+                "width": 1, "height": 1,
+            }))
+            self.assertEqual(title_pixel[:3], (17, 34, 204))
+            self.assertEqual(toolbar_pixel[:3], (204, 34, 17))
+
+        work = self.context.new_page()
+        work.route("**/api/browser/theme/image/*", route_asset)
+        work.goto(self.fixture.browser_url, wait_until="domcontentloaded")
+        work.reload(wait_until="domcontentloaded")
+        assert_page(work, "#prompt", ".topbar")
+
+        # Keep Work open while opening Chat: closing the last Work page starts
+        # the production server's shutdown grace period.
+        for _ in range(2):
+            chat = self.context.new_page()
+            chat.route("**/api/browser/theme/image/*", route_asset)
+            capability = self.fixture.app.issue_capability("chat", provider="codex")
+            chat.goto(
+                f"{self.fixture.base_url}/chat#capability={capability}&provider=codex",
+                wait_until="domcontentloaded",
+            )
+            chat.reload(wait_until="domcontentloaded")
+            assert_page(chat, "#chatPrompt", ".chat-header")
+            chat.close()
+
     def test_live_theme_update_and_removal_preserve_work_draft_without_reload(self):
         theme = self._theme("first-live", "#112233")
         page = self._work_page(theme)

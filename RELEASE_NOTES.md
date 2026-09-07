@@ -1,3 +1,17 @@
+## PilferedParrot Interface 0.7.0-rc.8 preview
+
+The original theme frame and toolbar artwork fix is included for Linux and Windows. A new
+regression checks that a blue frame image remains visible over its black fallback color after
+reopening Work and Chat. Themes with bright page backgrounds and dark content panels now keep
+composer labels readable using the panel's foreground color.
+
+Download and install this package before reopening the interface. Reopening an older copy does
+not install a GitHub release. On Linux, run `bin/install-pilferedparrot-desktop` from the new source
+directory to update the menu entry; on Windows, point shortcuts at the new extracted executable.
+Keep existing configuration and conversation stores. See the README upgrade instructions.
+
+This remains a preview alongside stable 0.6.1.
+
 ## PilferedParrot Interface 0.7.0-rc.7 preview
 
 Work and Chat top bars now display the selected Chrome theme's original toolbar image. The

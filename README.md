@@ -1,11 +1,14 @@
 # PilferedParrot Interface
 
-This checkout is the **0.7.0-rc.7 preview**, with the selected Chrome theme's original frame
+This checkout is the **0.7.0-rc.8 preview**, with the selected Chrome theme's original frame
 and toolbar artwork in the top bars, preserving its colors, image sizes and tiling.
 
-[Download the preview](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.7) ·
-[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.7/PilferedParrot-0.7.0-rc.7-windows-x64.zip).
+[Download the preview](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.8) ·
+[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.8/PilferedParrot-0.7.0-rc.8-windows-x64.zip).
 The stable download links below remain on 0.6.1.
+
+Reopening an older installation does not install this preview. See [upgrading an existing
+installation](#upgrading-an-existing-installation) to update the copy your shortcut launches.
 
 > **v0.6.1 · stable Linux release and Windows 10/11 x64 preview**
 >
@@ -77,6 +80,29 @@ provider uses API or local shell tools; it is not needed just to open the browse
 disabled on Windows. The Python application has no third-party package dependencies.
 
 ## Install and configure
+
+### Upgrading an existing installation
+
+Theme selections update automatically; application releases must be installed separately.
+Download and extract the desired [release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases)
+into a directory you control. Let current jobs finish, then close the previous interface.
+
+On Linux, open a terminal in the extracted source directory and run:
+
+```bash
+./bin/pilferedparrot --version
+./bin/install-pilferedparrot-desktop
+```
+
+Confirm the displayed version matches the download. The installer points the menu entry at this
+source directory; keep that directory in place and launch PilferedParrot from the menu.
+If you use a custom `--config` path or launcher, retain that configuration and update the
+launcher's program path. Preserve existing configuration, browser profiles and conversation stores.
+
+On Windows, keep the newly extracted package together, run its `PilferedParrot.exe --version`,
+and update any shortcut to this executable. Reopening an executable in an older extracted folder
+continues to run that older version. Keep the existing configuration and state under
+`%LOCALAPPDATA%\PilferedParrot`.
 
 ### Windows preview
 
