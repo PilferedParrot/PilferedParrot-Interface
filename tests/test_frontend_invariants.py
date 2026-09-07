@@ -798,7 +798,11 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertIn('--sidebar-muted: var(--chrome-theme-frame-text)', self.app_css)
         self.assertRegex(
             self.app_css,
-            r"body\.chrome-theme\s+:is\(\.shell, \.chat-window\)\s*\{[^}]*--chrome-theme-background-image",
+            r"body\.chrome-theme\s*\{[^}]*--chrome-theme-background-image",
+        )
+        self.assertRegex(
+            self.app_css,
+            r"body\.chrome-theme\s+:is\(\.shell, \.chat-window\)\s*\{[^}]*background:\s*transparent",
         )
 
     def test_unneeded_delete_and_composer_labels_are_absent(self):

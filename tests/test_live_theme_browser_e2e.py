@@ -89,23 +89,123 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
         }""")
         return width
 
-    def _work_page(self, theme):
+    def _work_page(self, theme, *, route_background=False):
         self.fixture.app.browser_theme = lambda: theme
         page = self.context.new_page()
+        if route_background:
+            self._route_background(page)
         page.goto(self.fixture.browser_url, wait_until="domcontentloaded")
         expect(page.locator("#prompt")).to_be_enabled(timeout=5_000)
         return page
 
-    def _chat_page(self, theme):
+    def _chat_page(self, theme, *, route_background=False):
         self.fixture.app.browser_theme = lambda: theme
         capability = self.fixture.app.issue_capability("chat", provider="codex")
         page = self.context.new_page()
+        if route_background:
+            self._route_background(page)
         page.goto(
             f"{self.fixture.base_url}/chat#capability={capability}&provider=codex",
             wait_until="domcontentloaded",
         )
         expect(page.locator("#chatPrompt")).to_be_enabled(timeout=5_000)
         return page
+
+    def _route_background(self, page):
+        page.route(
+            "**/api/browser/theme/background*",
+            lambda route: route.fulfill(
+                status=200, content_type="image/png", body=self._png_bytes(),
+            ),
+        )
+
+    def _assert_continuous_theme_surfaces(self, page, *, header):
+        """The root canvas owns artwork; structural chrome must let it show through."""
+        surfaces = page.evaluate(
+            """headerSelector => {
+                const style = selector => getComputedStyle(document.querySelector(selector));
+                const alpha = value => {
+                    const slash = value.lastIndexOf('/');
+                    if (slash >= 0) {
+                        const mixedAlpha = Number(value.slice(slash + 1).replace(')', '').trim());
+                        if (Number.isFinite(mixedAlpha)) return mixedAlpha;
+                    }
+                    const match = value.match(/rgba?\\(([^)]+)\\)/);
+                    if (!match) return 1;
+                    const channels = match[1].split(',').map(part => part.trim());
+                    return channels.length === 4 ? Number(channels[3]) : 1;
+                };
+                const pseudo = getComputedStyle(document.querySelector('#sidebarResizer, #chatResizer'), '::after');
+                return {
+                    bodyImage: style('body').backgroundImage,
+                    bodyColor: style('body').backgroundColor,
+                    shellColor: style('.shell, .chat-window').backgroundColor,
+                    paneColor: style('.main, .chat-window-conversation').backgroundColor,
+                    headerAlpha: alpha(style(headerSelector).backgroundColor),
+                    titlebarAlpha: alpha(style('#nativeTitlebar').backgroundColor),
+                    dividerColor: style('#sidebarResizer, #chatResizer').backgroundColor,
+                    dividerPillColor: pseudo.backgroundColor,
+                };
+            }""",
+            header,
+        )
+        self.assertNotEqual(surfaces["bodyImage"], "none")
+        self.assertIn("0, 0, 0, 0", surfaces["shellColor"])
+        self.assertIn("0, 0, 0, 0", surfaces["paneColor"])
+        self.assertLess(surfaces["headerAlpha"], 1)
+        self.assertLess(surfaces["titlebarAlpha"], 1)
+        self.assertIn("0, 0, 0, 0", surfaces["dividerColor"])
+        self.assertIn("0, 0, 0, 0", surfaces["dividerPillColor"])
+
+    def test_theme_artwork_continues_through_native_and_browser_work_chat_chrome(self):
+        for kind in ("work", "chat"):
+            with self.subTest(kind=kind):
+                theme = self._theme(f"continuous-{kind}", "#223344", background=True)
+                page = (self._work_page(theme, route_background=True)
+                        if kind == "work" else self._chat_page(theme, route_background=True))
+                page.wait_for_function(
+                    """() => document.body.classList.contains('chrome-theme') &&
+                        getComputedStyle(document.body).backgroundImage !== 'none'""",
+                    timeout=5_000,
+                )
+                header = ".topbar" if kind == "work" else ".chat-header"
+                self._assert_continuous_theme_surfaces(page, header=header)
+
+                page.evaluate("""() => {
+                    document.body.classList.add('native-window');
+                    document.querySelector('#nativeTitlebar').hidden = false;
+                }""")
+                self._assert_continuous_theme_surfaces(page, header=header)
+
+                if kind == "chat":
+                    handle = page.locator("#chatResizer")
+                    before = int(handle.get_attribute("aria-valuenow"))
+                    box = handle.bounding_box()
+                    self.assertIsNotNone(box)
+                    page.mouse.move(box["x"] + 3, box["y"] + box["height"] / 2)
+                    page.mouse.down()
+                    page.mouse.move(box["x"] + 70, box["y"] + box["height"] / 2)
+                    page.mouse.up()
+                    pointer_width = int(handle.get_attribute("aria-valuenow"))
+                    self.assertGreater(pointer_width, before)
+                    handle.focus()
+                    page.keyboard.press("ArrowRight")
+                    self.assertGreater(int(handle.get_attribute("aria-valuenow")), pointer_width)
+                    self.assertNotEqual(
+                        page.evaluate("() => getComputedStyle(document.body).backgroundImage"), "none",
+                    )
+
+                # A color-only theme keeps its color fallback when artwork is removed.
+                theme.clear()
+                theme.update(self._theme(f"color-only-{kind}", "#334455"))
+                page.wait_for_function(
+                    "() => document.body.dataset.chromeTheme === 'color-only-%s:1'" % kind,
+                    timeout=5_000,
+                )
+                fallback = page.evaluate("() => getComputedStyle(document.body).backgroundImage")
+                self.assertTrue(fallback.startswith("none"), fallback)
+                self.assertIn("51, 68, 85", page.evaluate("() => getComputedStyle(document.body).backgroundColor"))
+                page.close()
 
     def test_live_theme_update_and_removal_preserve_work_draft_without_reload(self):
         theme = self._theme("first-live", "#112233")
@@ -263,7 +363,7 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
                         }
                         backgroundNode = backgroundNode.parentElement;
                     }
-                    if (!background) background = getComputedStyle(document.querySelector('.shell')).backgroundColor;
+                    if (!background) background = getComputedStyle(document.body).backgroundColor;
                     const foregroundL = luminance(foreground);
                     const backgroundL = luminance(background);
                     return (Math.max(foregroundL, backgroundL) + .05) /
@@ -306,10 +406,10 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
         main = page.locator(".main")
         handle = page.locator("#sidebarResizer")
         expect(handle).to_be_visible()
-        before_image = shell.evaluate(
+        before_image = page.locator("body").evaluate(
             "node => getComputedStyle(node).backgroundImage"
         )
-        before_position = shell.evaluate(
+        before_position = page.locator("body").evaluate(
             "node => getComputedStyle(node).backgroundPosition"
         )
         before_main_left = main.bounding_box()["x"]
@@ -323,8 +423,8 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
         self.assertGreater(int(pointer_width), 290)
         self.assertAlmostEqual(sidebar.bounding_box()["width"], int(pointer_width), delta=1)
         self.assertGreater(main.bounding_box()["x"], before_main_left)
-        self.assertEqual(shell.evaluate("node => getComputedStyle(node).backgroundImage"), before_image)
-        self.assertEqual(shell.evaluate("node => getComputedStyle(node).backgroundPosition"), before_position)
+        self.assertEqual(page.locator("body").evaluate("node => getComputedStyle(node).backgroundImage"), before_image)
+        self.assertEqual(page.locator("body").evaluate("node => getComputedStyle(node).backgroundPosition"), before_position)
         self.assertIn("0, 0, 0, 0", sidebar.evaluate("node => getComputedStyle(node).backgroundColor"))
 
         handle.focus()
