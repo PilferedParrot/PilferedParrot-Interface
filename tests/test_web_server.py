@@ -38,6 +38,85 @@ def bare_handler(handler_type, *, path: str = "/api/status", port: int = 8765):
 
 
 class WebServerHTTPTests(unittest.TestCase):
+    def test_native_window_route_derives_identity_from_capability_context(self):
+        for scope, window_id in (("dashboard", "provider-launch"), ("chat", "chat")):
+            with self.subTest(scope=scope):
+                app = FakeApp()
+                app.native_window_action = MagicMock(return_value={"ok": True})
+                handler = bare_handler(
+                    web_server.make_handler(app), path="/api/window/native",
+                )
+                handler._request_capability_context = MagicMock(return_value={
+                    "scope": scope, "window_id": window_id, "provider": "codex",
+                })
+                handler._read_json = MagicMock(return_value={"action": "prepare"})
+                handler._json = MagicMock()
+
+                handler.do_POST()
+
+                app.native_window_action.assert_called_once_with(
+                    window_id, {"action": "prepare"},
+                )
+                handler._request_capability_context.assert_called_with(require_origin=True)
+
+    def test_native_window_route_rejects_missing_capability_before_binding(self):
+        app = FakeApp()
+        app.native_window_action = MagicMock()
+        handler = bare_handler(web_server.make_handler(app), path="/api/window/native")
+        handler._request_capability_context = MagicMock(return_value=None)
+        handler._json = MagicMock()
+
+        handler.do_POST()
+
+        app.native_window_action.assert_not_called()
+        handler._json.assert_called_once_with(
+            {"error": "local control authorization failed"}, HTTPStatus.FORBIDDEN,
+        )
+
+    def test_theme_binary_assets_are_not_cached(self):
+        handler = bare_handler(web_server.make_handler(FakeApp()))
+        headers: dict[str, str] = {}
+        handler.send_response = lambda _status: None
+        handler.send_header = headers.__setitem__
+        handler.end_headers = lambda: None
+        handler.wfile = io.BytesIO()
+
+        handler._binary(b"theme", "image/png")
+
+        self.assertEqual(headers["Cache-Control"], "no-store")
+
+    def test_theme_image_binds_request_to_version(self):
+        app = FakeApp()
+        app.chrome_theme_image = MagicMock(return_value=(b"theme", "image/png"))
+        token = "abcdefghijklmnopabcdefghijklmnop-1.0.0"
+        handler = bare_handler(web_server.make_handler(app), path=(
+            "/api/browser/theme/image/theme_frame?v=" + token
+        ))
+        handler.headers["X-PilferedParrot-Capability"] = "dashboard-token"
+        handler._binary = MagicMock()
+
+        handler.do_GET()
+
+        app.chrome_theme_image.assert_called_once_with(
+            "theme_frame", theme_version=token,
+        )
+
+    def test_theme_image_rejects_malformed_version(self):
+        app = FakeApp()
+        app.chrome_theme_image = MagicMock()
+        handler = bare_handler(web_server.make_handler(app), path=(
+            "/api/browser/theme/image/theme_frame?v=not-a-theme-version"
+        ))
+        handler.headers["X-PilferedParrot-Capability"] = "dashboard-token"
+        handler._json = MagicMock()
+
+        handler.do_GET()
+
+        app.chrome_theme_image.assert_not_called()
+        handler._json.assert_called_once_with(
+            {"error": "invalid theme version"}, HTTPStatus.BAD_REQUEST,
+        )
+
     def test_status_serializes_exact_metadata_and_headers(self):
         handler = bare_handler(web_server.make_handler(
             FakeApp(), asset_version="assets", runtime_version="runtime",

@@ -686,7 +686,7 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertNotIn("Appearance", self.index_html)
         self.assertNotIn("private Chrome window", self.index_html)
         self.assertNotIn("chromeThemeNote", self.index_html)
-        self.assertNotIn('name="theme-color"', self.index_html)
+        self.assertIn('name="theme-color"', self.index_html)
         self.assertNotIn('id="chromeTheme"', self.chat_html)
         picker = _function_body(self.app_js, "openChromeThemeGallery")
         self.assertIn('api("/api/browser/theme"', picker)
@@ -697,10 +697,45 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertNotIn('chromeThemeNote', apply_theme)
         self.assertNotIn("private Chrome window", apply_theme)
         self.assertIn('--chrome-theme-background-image', apply_theme)
+        self.assertIn('let themeApplyGeneration = 0', self.app_js)
+        self.assertIn('let themeRefreshGeneration = 0', self.app_js)
+        self.assertIn('const generation = ++themeApplyGeneration', apply_theme)
+        self.assertIn('if (!current())', apply_theme)
+        self.assertIn('fetch(selected.background_url', apply_theme)
+        self.assertIn('const stagedImages = {}', apply_theme)
+        self.assertIn('revokeStaged()', apply_theme)
         refresh_theme = _function_body(self.app_js, "refreshBrowserTheme")
         self.assertIn('api("/api/browser/theme")', refresh_theme)
+        self.assertIn('const generation = ++themeRefreshGeneration', refresh_theme)
+        self.assertIn('generation !== themeRefreshGeneration', refresh_theme)
         self.assertIn('window.addEventListener("focus"', self.app_js)
         self.assertRegex(self.app_css, r"body\.chrome-theme\s*\{")
+
+    def test_native_app_windows_replace_browser_chrome_with_themed_controls(self):
+        launcher = (ASSET_DIR.parents[1] / "bin" / "pilferedparrot-app-browser").read_text(
+            encoding="utf-8",
+        )
+        for markup in (self.index_html, self.chat_html):
+            self.assertIn('id="nativeTitlebar"', markup)
+            self.assertIn('data-native-action="minimize"', markup)
+            self.assertIn('data-native-action="maximize"', markup)
+            self.assertIn('data-native-action="close"', markup)
+            self.assertEqual(markup.count("data-native-resize="), 8)
+        for source in (self.app_js, self.chat_js):
+            initialize = _function_body(source, "initializeNativeWindow")
+            geometry = _function_body(source, "beginNativeGeometry")
+            self.assertIn('nativeWindowAction("prepare")', initialize)
+            self.assertIn('document.title = prepared.marker', initialize)
+            self.assertIn('nativeWindowAction("bind")', initialize)
+            self.assertIn('document.title = originalTitle', initialize)
+            self.assertIn('sessionStorage.getItem(NATIVE_WINDOW_SESSION_KEY)', source)
+            self.assertIn('"update-geometry"', geometry)
+            self.assertIn('"end-geometry"', geometry)
+            self.assertIn('lostpointercapture', geometry)
+            self.assertIn('if (pulseRunning)', geometry)
+        self.assertIn('native-window=1', launcher)
+        self.assertRegex(self.app_css, r"\.native-titlebar\[hidden\]\s*\{\s*display:\s*none")
+        self.assertRegex(self.app_css, r"body\.native-window\s*\{")
 
     def test_model_pickers_poll_the_selected_provider_when_opened(self):
         poll = _function_body(self.app_js, "pollProviderModels")
@@ -741,11 +776,26 @@ class FrontendInvariantTests(unittest.TestCase):
         apply_theme = _function_body(self.chat_js, "applyBrowserTheme")
         self.assertIn('classList.toggle("chrome-theme"', apply_theme)
         self.assertIn('--chrome-theme-background-image', apply_theme)
+        self.assertIn('let themeApplyGeneration = 0', self.chat_js)
+        self.assertIn('let themeRefreshGeneration = 0', self.chat_js)
+        self.assertIn('const generation = ++themeApplyGeneration', apply_theme)
+        self.assertIn('if (!current())', apply_theme)
+        self.assertIn('fetch(selected.background_url', apply_theme)
+        self.assertIn('const stagedImages = {}', apply_theme)
+        self.assertIn('revokeStaged()', apply_theme)
         self.assertIn('meta[name="theme-color"]', apply_theme)
         refresh_theme = _function_body(self.chat_js, "refreshBrowserTheme")
         self.assertIn('api("/api/browser/theme")', refresh_theme)
         init = _function_body(self.chat_js, "init")
-        self.assertIn('api("/api/browser/theme")', init)
+        self.assertIn('refreshBrowserTheme()', init)
+        for selector in (
+            'body.chrome-theme :is(input, textarea, select)',
+            'body.chrome-theme dialog',
+            'body.chrome-theme .work-log',
+            'body.chrome-theme :is(.message-content, .chat-message-body) pre',
+        ):
+            self.assertIn(selector, self.app_css)
+        self.assertIn('--sidebar-muted: var(--chrome-theme-frame-text)', self.app_css)
         self.assertRegex(
             self.app_css,
             r"body\.chrome-theme\s+\.chat-window\s*\{[^}]*--chrome-theme-background-image",

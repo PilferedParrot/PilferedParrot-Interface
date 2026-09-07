@@ -21,6 +21,10 @@ if [ -n "$browser" ]; then
     umask 077
     mkdir -p -- "$profile_dir" || exit 1
     browser_started_at=$(date +%s)
+    case "$url" in
+        *'#'*) app_url="${url}&native-window=1" ;;
+        *) app_url="${url}#native-window=1" ;;
+    esac
     "$browser" \
         --user-data-dir="$profile_dir" \
         --no-first-run \
@@ -28,7 +32,7 @@ if [ -n "$browser" ]; then
         --disable-background-mode \
         --start-maximized \
         --class=pilferedparrot \
-        --app="$url"
+        --app="$app_url"
     browser_status=$?
     browser_lifetime=$(($(date +%s) - browser_started_at))
     # Chrome returns immediately when an existing profile process accepts the

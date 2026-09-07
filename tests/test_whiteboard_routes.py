@@ -9,7 +9,11 @@ class WhiteboardRouteTests(TestCase):
         for scope in (None, 'chat', 'dashboard'):
             for path, method, allowed in (
                 ('/api/whiteboard', 'whiteboard_read', scope == 'dashboard'),
-                ('/api/browser/theme/image/theme_frame', 'chrome_theme_image', scope in {'chat', 'dashboard'}),
+                (
+                    '/api/browser/theme/image/theme_frame'
+                    '?v=abcdefghijklmnopabcdefghijklmnop-1.0',
+                    'chrome_theme_image', scope in {'chat', 'dashboard'},
+                ),
             ):
                 with self.subTest(scope=scope, path=path):
                     app = FakeApp()

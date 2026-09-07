@@ -13,6 +13,7 @@ const CAPABILITY_SESSION_KEY = "pilferedparrot-dashboard-capability";
 const WINDOW_ID_SESSION_KEY = "pilferedparrot-dashboard-window-id";
 const ACTIVE_CHAT_SESSION_KEY = "pilferedparrot-dashboard-active-chat";
 const DRAFT_CACHE_KEY = "pilferedparrot-dashboard-drafts";
+const NATIVE_WINDOW_SESSION_KEY = "pilferedparrot-native-window";
 const fragment = new URLSearchParams(location.hash.slice(1));
 const fragmentCapability = fragment.get("capability") || "";
 const fragmentProvider = fragment.get("provider") || "";
@@ -22,6 +23,7 @@ const fragmentCwd = fragment.get("cwd") || "";
 // the window still opens, and asks for a folder instead of starting a chat.
 const fragmentPickProject = fragment.get("pick") === "1";
 const fragmentModel = fragment.get("model") || "";
+const fragmentNativeWindow = fragment.get("native-window") === "1";
 // The launcher supplies the capability fragment on every explicit app open.
 // We remove it from the URL below, so a normal reload can be distinguished.
 const launchedFromApp = Boolean(fragmentCapability);
@@ -30,16 +32,22 @@ try {
   if (fragmentCapability) sessionStorage.setItem(CAPABILITY_SESSION_KEY, fragmentCapability);
   state.windowId = fragmentWindowId || sessionStorage.getItem(WINDOW_ID_SESSION_KEY) || "main";
   if (fragmentWindowId) sessionStorage.setItem(WINDOW_ID_SESSION_KEY, fragmentWindowId);
+  if (fragmentNativeWindow) sessionStorage.setItem(NATIVE_WINDOW_SESSION_KEY, "1");
 } catch {
   state.capability = fragmentCapability;
   state.windowId = fragmentWindowId || "main";
 }
+let nativeWindowRequested = fragmentNativeWindow;
+try { nativeWindowRequested ||= sessionStorage.getItem(NATIVE_WINDOW_SESSION_KEY) === "1"; } catch {}
+let nativeWindowInitializing = null;
 if (fragmentCapability) history.replaceState(null, "", location.pathname + location.search);
 let pollTimer = null;
 let budgetPollTimer = null;
 let budgetRefresh = null;
 let themeBackgroundObjectUrl = null;
 const themeImageObjectUrls = { frame: null, toolbar: null, attribution: null };
+let themeApplyGeneration = 0;
+let themeRefreshGeneration = 0;
 let terminalTarget = null;
 let providerLogoutTarget = null;
 let pendingLaunchModel = null;
@@ -241,6 +249,141 @@ async function api(path, options = {}) {
   }
   return data;
 }
+
+async function nativeWindowAction(action, details = {}) {
+  return api("/api/window/native", {
+    method: "POST", body: JSON.stringify({ action, ...details }),
+  });
+}
+
+function beginNativeGeometry(event, direction = "") {
+  if (event.button !== 0 || event.detail > 1) return;
+  event.preventDefault();
+  const target = event.currentTarget;
+  const startX = event.screenX;
+  const startY = event.screenY;
+  let moved = false;
+  let frame = null;
+  let pulseRunning = false;
+  let pulsePending = false;
+  let ended = false;
+  let endSent = false;
+  const begin = nativeWindowAction(
+    direction ? "begin-resize" : "begin-move",
+    direction ? { direction } : {},
+  );
+  const pulse = async () => {
+    frame = null;
+    if (pulseRunning) { pulsePending = true; return; }
+    pulseRunning = true;
+    try {
+      do {
+        pulsePending = false;
+        await begin;
+        await nativeWindowAction("update-geometry");
+      } while (pulsePending);
+    } catch (_error) {
+      // The native frame remains usable through standard keyboard shortcuts.
+    } finally {
+      pulseRunning = false;
+      if (ended && !endSent) {
+        endSent = true;
+        nativeWindowAction("end-geometry").catch(() => {});
+      }
+    }
+  };
+  const move = (nextEvent) => {
+    if ((nextEvent.buttons & 1) === 0) { finish(); return; }
+    if (Math.max(
+      Math.abs(nextEvent.screenX - startX), Math.abs(nextEvent.screenY - startY),
+    ) < 3) return;
+    moved = true;
+    if (frame === null) frame = requestAnimationFrame(pulse);
+  };
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    if (frame !== null) cancelAnimationFrame(frame);
+    target.removeEventListener("pointermove", move);
+    target.removeEventListener("pointerup", finish);
+    target.removeEventListener("pointercancel", finish);
+    target.removeEventListener("lostpointercapture", finish);
+    if (target.hasPointerCapture?.(event.pointerId)) target.releasePointerCapture(event.pointerId);
+    if (moved) pulse();
+    else begin.finally(() => {
+      if (!endSent) {
+        endSent = true;
+        nativeWindowAction("end-geometry").catch(() => {});
+      }
+    }).catch(() => {});
+  };
+  target.setPointerCapture?.(event.pointerId);
+  target.addEventListener("pointermove", move);
+  target.addEventListener("pointerup", finish);
+  target.addEventListener("pointercancel", finish);
+  target.addEventListener("lostpointercapture", finish);
+}
+
+
+function installNativeWindowControls() {
+  const bar = $("#nativeTitlebar");
+  if (!bar || document.body.classList.contains("native-window")) return;
+  bar.hidden = false;
+  document.body.classList.add("native-window");
+  bar.querySelector("[data-native-drag]")?.addEventListener("pointerdown", (event) => {
+    beginNativeGeometry(event);
+  });
+  bar.querySelector("[data-native-drag]")?.addEventListener("dblclick", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    nativeWindowAction("maximize").catch(() => {});
+  });
+  bar.querySelectorAll("[data-native-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      nativeWindowAction(button.dataset.nativeAction).then((result) => {
+        if (button.dataset.nativeAction === "close" && !result.ok) window.close();
+      }).catch(() => {
+        if (button.dataset.nativeAction === "close") window.close();
+      });
+    });
+  });
+  document.querySelectorAll("[data-native-resize]").forEach((handle) => {
+    handle.addEventListener("pointerdown", (event) => {
+      beginNativeGeometry(event, handle.dataset.nativeResize);
+    });
+  });
+}
+
+async function initializeNativeWindow() {
+  if (!nativeWindowRequested || document.body.classList.contains("native-window")) return;
+  if (nativeWindowInitializing) return nativeWindowInitializing;
+  nativeWindowInitializing = (async () => {
+    const originalTitle = document.title;
+    try {
+      const prepared = await nativeWindowAction("prepare");
+      if (!prepared.marker) return;
+      document.title = prepared.marker;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        const result = await nativeWindowAction("bind");
+        if (result.supported) {
+          installNativeWindowControls();
+          return;
+        }
+      }
+    } catch (_error) {
+      // Unsupported desktops retain the browser or window-manager title bar.
+    } finally {
+      document.title = originalTitle;
+    }
+  })();
+  try {
+    await nativeWindowInitializing;
+  } finally {
+    nativeWindowInitializing = null;
+  }
+}
+
 
 const CODE_BLOCK_LANGUAGES = new Set([
   "bash", "console", "fish", "powershell", "shell", "sh", "terminal", "zsh",
@@ -1314,7 +1457,11 @@ function clickedAfterPromptSuggestion(event) {
     && event.clientY >= end.top - 4 && event.clientY <= end.bottom + 4;
 }
 
-async function applyBrowserTheme(theme) {
+async function applyBrowserTheme(theme, refreshGeneration = null) {
+  if (refreshGeneration === null) themeRefreshGeneration++;
+  const generation = ++themeApplyGeneration;
+  const current = () => generation === themeApplyGeneration
+    && (refreshGeneration === null || refreshGeneration === themeRefreshGeneration);
   const selected = theme?.active ? theme : { active: false };
   const root = document.documentElement;
   const body = document.body;
@@ -1349,73 +1496,86 @@ async function applyBrowserTheme(theme) {
     "--chrome-theme-link": color(colors.ntp_link, foreground(background, "#1558d6")),
     "--chrome-theme-section": panel,
   };
-  body.style.colorScheme = selected.active && luminance(background) > .179 ? "light" : "dark";
-  Object.entries(properties).forEach(([name, value]) => {
-    if (/^#[0-9a-f]{6}$/i.test(value || "")) root.style.setProperty(name, value);
-    else root.style.removeProperty(name);
-  });
   const themeImages = {
     frame: ["--chrome-theme-frame-image", selected.frame_url],
     frame_overlay: ["--chrome-theme-frame-overlay-image", selected.frame_overlay_url],
     toolbar: ["--chrome-theme-toolbar-image", selected.toolbar_url],
     attribution: ["--chrome-theme-attribution-image", selected.attribution_url],
   };
-  await Promise.all(Object.entries(themeImages).map(async ([name, [property, imageUrl]]) => {
-    if (imageUrl) {
-      try {
-        const response = await fetch(imageUrl, {
-          headers: { "X-PilferedParrot-Capability": state.capability },
-        });
-        if (!response.ok) throw new Error(`Theme image failed (${response.status})`);
-        const nextUrl = URL.createObjectURL(await response.blob());
-        if (themeImageObjectUrls[name]) URL.revokeObjectURL(themeImageObjectUrls[name]);
-        themeImageObjectUrls[name] = nextUrl;
-        root.style.setProperty(property, `url("${nextUrl}")`);
-      } catch (_error) {
-        if (themeImageObjectUrls[name]) URL.revokeObjectURL(themeImageObjectUrls[name]);
-        themeImageObjectUrls[name] = null;
-        root.style.removeProperty(property);
-      }
-    } else {
-      if (themeImageObjectUrls[name]) URL.revokeObjectURL(themeImageObjectUrls[name]);
-      themeImageObjectUrls[name] = null;
-      root.style.removeProperty(property);
+  const stagedImages = {};
+  const revokeStaged = () => Object.values(stagedImages).forEach((url) => {
+    if (url) URL.revokeObjectURL(url);
+  });
+  await Promise.all(Object.entries(themeImages).map(async ([name, [_property, imageUrl]]) => {
+    if (!imageUrl) { stagedImages[name] = null; return; }
+    try {
+      const response = await fetch(imageUrl, {
+        headers: { "X-PilferedParrot-Capability": state.capability },
+      });
+      if (!response.ok) throw new Error(`Theme image failed (${response.status})`);
+      stagedImages[name] = URL.createObjectURL(await response.blob());
+    } catch (_error) {
+      stagedImages[name] = null;
     }
   }));
+  if (!current()) { revokeStaged(); return; }
+  let stagedBackground = null;
   if (selected.background && selected.background_url) {
     try {
-      const response = await fetch("/api/browser/theme/background", {
+      const response = await fetch(selected.background_url, {
         headers: { "X-PilferedParrot-Capability": state.capability },
       });
       if (!response.ok) throw new Error(`Theme background failed (${response.status})`);
-      const nextUrl = URL.createObjectURL(await response.blob());
-      if (themeBackgroundObjectUrl) URL.revokeObjectURL(themeBackgroundObjectUrl);
-      themeBackgroundObjectUrl = nextUrl;
-      root.style.setProperty("--chrome-theme-background-image", `url("${nextUrl}")`);
-      root.style.setProperty("--chrome-theme-background-position", selected.background_alignment || "center");
-      root.style.setProperty("--chrome-theme-background-repeat", selected.background_repeat || "no-repeat");
+      stagedBackground = URL.createObjectURL(await response.blob());
     } catch (_error) {
-      if (themeBackgroundObjectUrl) URL.revokeObjectURL(themeBackgroundObjectUrl);
-      themeBackgroundObjectUrl = null;
-      root.style.removeProperty("--chrome-theme-background-image");
+      stagedBackground = null;
     }
+  }
+  if (!current()) {
+    revokeStaged();
+    if (stagedBackground) URL.revokeObjectURL(stagedBackground);
+    return;
+  }
+  body.style.colorScheme = selected.active && luminance(background) > .179 ? "light" : "dark";
+  Object.entries(properties).forEach(([name, value]) => {
+    if (/^#[0-9a-f]{6}$/i.test(value || "")) root.style.setProperty(name, value);
+    else root.style.removeProperty(name);
+  });
+  Object.entries(themeImages).forEach(([name, [property]]) => {
+    if (themeImageObjectUrls[name]) URL.revokeObjectURL(themeImageObjectUrls[name]);
+    const nextUrl = stagedImages[name] || null;
+    themeImageObjectUrls[name] = nextUrl;
+    if (nextUrl) root.style.setProperty(property, `url("${nextUrl}")`);
+    else root.style.removeProperty(property);
+  });
+  if (themeBackgroundObjectUrl) URL.revokeObjectURL(themeBackgroundObjectUrl);
+  themeBackgroundObjectUrl = stagedBackground;
+  if (stagedBackground) {
+    root.style.setProperty("--chrome-theme-background-image", `url("${stagedBackground}")`);
+    root.style.setProperty("--chrome-theme-background-position", selected.background_alignment || "center");
+    root.style.setProperty("--chrome-theme-background-repeat", selected.background_repeat || "no-repeat");
   } else {
-    if (themeBackgroundObjectUrl) URL.revokeObjectURL(themeBackgroundObjectUrl);
-    themeBackgroundObjectUrl = null;
     root.style.removeProperty("--chrome-theme-background-image");
     root.style.removeProperty("--chrome-theme-background-position");
     root.style.removeProperty("--chrome-theme-background-repeat");
   }
   body.classList.toggle("chrome-theme", selected.active);
   body.dataset.chromeTheme = selected.active ? `${selected.id}:${selected.version}` : "";
+  document.querySelector('meta[name="theme-color"]')?.setAttribute(
+    "content", /^#[0-9a-f]{6}$/i.test(selected.colors?.frame || "")
+      ? selected.colors.frame : "#0b1017",
+  );
   $("#chromeThemeLabel").textContent = "Change theme";
   state.browser_theme = selected;
 }
 
 async function refreshBrowserTheme(notify = false) {
+  const generation = ++themeRefreshGeneration;
   const previous = document.body.dataset.chromeTheme || "";
   const theme = await api("/api/browser/theme");
-  await applyBrowserTheme(theme);
+  if (generation !== themeRefreshGeneration) return;
+  await applyBrowserTheme(theme, generation);
+  if (generation !== themeRefreshGeneration) return;
   const current = document.body.dataset.chromeTheme || "";
   if (notify && current && current !== previous) {
     toast(`Applied ${theme.name || "Chrome theme"} to PilferedParrot.`);
@@ -1701,8 +1861,7 @@ async function init() {
     await api("/api/window/open", {
       method: "POST", body: JSON.stringify({ document_id: documentId }),
     });
-    state.initialized = true;
-    reportActiveSession();
+    await initializeNativeWindow();
     await refreshBrowserTheme(false).catch(() => {});
     if (launchedFromApp) {
       state.activeId = null;
@@ -1723,6 +1882,8 @@ async function init() {
       if (activeChat()) { $("#prompt").value = cachedDraft(activeChat()); resizePrompt(); }
       if (!state.activeId) await createChat(fragmentModel);
     }
+    state.initialized = true;
+    reportActiveSession();
     render();
     schedulePoll();
     await refreshBudgets(true);
@@ -1887,6 +2048,7 @@ async function openChromeThemeGallery() {
 
 $("#composer").addEventListener("submit", sendMessage);
 $("#harnessButton").addEventListener("click", async () => {
+  if (!state.initialized) return;
   if (!activeChat()) {
     try { await createChat(); }
     catch (error) { toast(error.message); return; }
@@ -2232,6 +2394,7 @@ document.addEventListener("keydown", (event) => {
   }
 });
 window.addEventListener("focus", () => {
+  initializeNativeWindow().catch(() => {});
   setTimeout(() => refreshBrowserTheme(true).catch(() => {}), 250);
   setTimeout(() => refreshBrowserTheme(true).catch(() => {}), 1200);
   setTimeout(() => refreshBudgets(false), 400);

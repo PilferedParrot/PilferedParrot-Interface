@@ -91,7 +91,10 @@ class WindowsDesktopTests(unittest.TestCase):
             self.assertEqual(command[0], "chrome.exe")
             self.assertIn("--no-first-run", command)
             self.assertIn("--disable-background-mode", command)
-            self.assertEqual(command[-1], "--app=http://127.0.0.1:8000/#capability=x")
+            self.assertEqual(
+                command[-1],
+                "--app=http://127.0.0.1:8000/#capability=x",
+            )
 
     @patch("pilferedparrot.web_native.WINDOWS", True)
     @patch("pilferedparrot.web_native.subprocess.Popen")

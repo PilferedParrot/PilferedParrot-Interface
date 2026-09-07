@@ -1,9 +1,9 @@
 # PilferedParrot Interface
 
-This checkout is the **0.7.0-rc.2 preview**, with faithful Chrome theme artwork, saved Work drafts,
+This checkout is the **0.7.0-rc.3 preview**, with consistent Chrome themes, saved Work drafts,
 daily empty-session cleanup, and a shared model whiteboard alongside Harness.
-[Download the preview](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.2) ·
-[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.2/PilferedParrot-0.7.0-rc.2-windows-x64.zip).
+[Download the preview](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.3) ·
+[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.3/PilferedParrot-0.7.0-rc.3-windows-x64.zip).
 The stable download links below remain on 0.6.1.
 
 > **v0.6.1 · stable Linux release and Windows 10/11 x64 preview**
@@ -162,6 +162,13 @@ this control does not change the Chrome theme used for normal browsing. The sele
 PilferedParrot shows the original theme colors and available new-tab, frame, toolbar and attribution
 artwork when the user returns to the app. Artwork keeps its native size, alignment and tiling; readable
 text panels leave the surrounding artwork visible. The isolated Chat window uses the same selected theme without sharing browser state.
+Theme changes replace colors and artwork together. On Linux/X11, desktop app windows also use
+the selected frame artwork and colors for the title bar and window controls. Drag the title bar
+to move the window, double-click it to maximize or restore, or use its minimize, maximize/restore
+and close buttons. Window edges remain resizable. On Windows, the main app's dedicated Chrome
+profile supplies the theme to Chrome's own title bar and controls. Isolated provider and Chat
+windows keep their browser-owned frames; their page content uses the shared theme. Browser tabs
+and unsupported window systems retain their normal browser or desktop controls.
 Chrome theme installation requires Chrome or Chromium; it is unavailable when using Edge.
 
 The model picker sits beside **Reasoning** at the bottom of the composer in both work and Chat.
