@@ -1,3 +1,13 @@
+## PilferedParrot Interface 0.7.0-rc.9 preview
+
+The README, project website and Windows readme now explain what the app does in
+plain language, with clearer download and upgrade instructions for Linux and
+Windows. This release includes the same application features and theme fixes as
+rc.8; it does not change how providers or conversations work.
+
+Linux/source and Windows x64 packages include the updated documentation. This
+remains a preview alongside stable 0.6.1.
+
 ## PilferedParrot Interface 0.7.0-rc.8 preview
 
 The original theme frame and toolbar artwork fix is included for Linux and Windows. A new
