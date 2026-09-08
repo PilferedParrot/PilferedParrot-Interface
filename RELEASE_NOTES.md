@@ -1,3 +1,16 @@
+## PilferedParrot Interface 0.7.0-rc.10 preview
+
+Work session headers and Chat headers now have four rounded corners, matching the
+other interface panels. Window controls and dialog notices also have rounded corners.
+The Linux/X11 custom window title bar is transparent: it shares the page background color and
+lets theme pictures continue behind the logo, app name, and window controls without
+an extra image, tint, or divider.
+
+The README screenshot has been refreshed. Linux/source and Windows x64 preview
+packages include the updated interface and documentation. Windows receives the rounded
+interface headers, but its outer title bar remains controlled by Chrome or Edge;
+continuous page artwork there requires a different Windows window integration.
+
 ## PilferedParrot Interface 0.7.0-rc.9 preview
 
 The README, project website and Windows readme now explain what the app does in

@@ -178,6 +178,9 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
                     paneColor: style('.main, .chat-window-conversation').backgroundColor,
                     headerAlpha: alpha(style(headerSelector).backgroundColor),
                     titlebarAlpha: alpha(style('#nativeTitlebar').backgroundColor),
+                    titlebarImage: style('#nativeTitlebar').backgroundImage,
+                    titlebarBorder: style('#nativeTitlebar').borderBottomWidth,
+                    titlebarFilter: style('#nativeTitlebar').backdropFilter,
                     dividerColor: style('#sidebarResizer, #chatResizer').backgroundColor,
                     dividerPillColor: pseudo.backgroundColor,
                 };
@@ -188,9 +191,36 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
         self.assertIn("0, 0, 0, 0", surfaces["shellColor"])
         self.assertIn("0, 0, 0, 0", surfaces["paneColor"])
         self.assertEqual(surfaces["headerAlpha"], 1)
-        self.assertEqual(surfaces["titlebarAlpha"], 1)
+        self.assertEqual(surfaces["titlebarAlpha"], 0)
+        self.assertEqual(surfaces["titlebarImage"], "none")
+        self.assertEqual(surfaces["titlebarBorder"], "0px")
+        self.assertEqual(surfaces["titlebarFilter"], "none")
         self.assertIn("0, 0, 0, 0", surfaces["dividerColor"])
         self.assertIn("0, 0, 0, 0", surfaces["dividerPillColor"])
+
+    def _assert_rounded_chrome(self, page, *, header):
+        radii = page.evaluate(
+            """headerSelector => {
+                const corners = element => {
+                    const style = getComputedStyle(element);
+                    return [style.borderTopLeftRadius, style.borderTopRightRadius,
+                            style.borderBottomRightRadius, style.borderBottomLeftRadius]
+                        .map(value => parseFloat(value));
+                };
+                return {
+                    header: corners(document.querySelector(headerSelector)),
+                    controls: [...document.querySelectorAll('#nativeTitlebar .native-titlebar-controls button')]
+                        .map(corners),
+                };
+            }""",
+            header,
+        )
+        for radius in radii["header"]:
+            self.assertGreater(radius, 0)
+        self.assertEqual(len(radii["controls"]), 3)
+        for control in radii["controls"]:
+            for radius in control:
+                self.assertGreater(radius, 0)
 
     def test_theme_artwork_continues_through_native_and_browser_work_chat_chrome(self):
         for kind in ("work", "chat"):
@@ -205,12 +235,14 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
                 )
                 header = ".topbar" if kind == "work" else ".chat-header"
                 self._assert_continuous_theme_surfaces(page, header=header)
+                self._assert_rounded_chrome(page, header=header)
 
                 page.evaluate("""() => {
                     document.body.classList.add('native-window');
                     document.querySelector('#nativeTitlebar').hidden = false;
                 }""")
                 self._assert_continuous_theme_surfaces(page, header=header)
+                self._assert_rounded_chrome(page, header=header)
 
                 if kind == "chat":
                     handle = page.locator("#chatResizer")
@@ -242,6 +274,27 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
                 self.assertIn("51, 68, 85", page.evaluate("() => getComputedStyle(document.body).backgroundColor"))
                 # Keep Work registered until context cleanup so its window-close
                 # grace timer cannot shut down the fixture during Chat checks.
+
+    def test_default_native_titlebar_is_clear_and_controls_are_rounded(self):
+        page = self._work_page({"active": False})
+        page.evaluate("""() => {
+            document.body.classList.add('native-window');
+            document.querySelector('#nativeTitlebar').hidden = false;
+        }""")
+        styles = page.evaluate("""() => {
+            const titlebar = getComputedStyle(document.querySelector('#nativeTitlebar'));
+            return {
+                background: titlebar.backgroundColor,
+                image: titlebar.backgroundImage,
+                border: titlebar.borderBottomWidth,
+                filter: titlebar.backdropFilter,
+            };
+        }""")
+        self.assertIn("0, 0, 0, 0", styles["background"])
+        self.assertEqual(styles["image"], "none")
+        self.assertEqual(styles["border"], "0px")
+        self.assertEqual(styles["filter"], "none")
+        self._assert_rounded_chrome(page, header=".topbar")
 
     def test_original_theme_assets_are_native_size_opaque_and_removed_live(self):
         assets = {
@@ -315,13 +368,14 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
                             toolbar: root.getPropertyValue('--chrome-theme-toolbar').trim(),
                             bodyImage: root.getPropertyValue('--chrome-theme-background-image').trim(),
                             titleImage: titlebar.backgroundImage,
-                            titleRepeat: titlebar.backgroundRepeat,
-                            titleSize: titlebar.backgroundSize,
+                            titleColor: titlebar.backgroundColor,
+                            titleBorder: titlebar.borderBottomWidth,
+                            titleFilter: titlebar.backdropFilter,
                             barImage: bar.backgroundImage,
                             barRepeat: bar.backgroundRepeat,
                             barSize: bar.backgroundSize,
                             barColor: bar.backgroundColor,
-                            titleColor: titlebar.color,
+                            titleTextColor: titlebar.color,
                             barTextColor: bar.color,
                         };
                     }""",
@@ -330,12 +384,16 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
                 self.assertEqual(styles["frame"], "#f0e0d0")
                 self.assertEqual(styles["toolbar"], "#e0d0c0")
                 self.assertIn("url", styles["bodyImage"])
-                self.assertIn("no-repeat, repeat-x", styles["titleRepeat"])
-                self.assertIn("auto", styles["titleSize"])
+                self.assertEqual(styles["titleImage"], "none")
+                self.assertIn("0, 0, 0, 0", styles["titleColor"])
+                self.assertEqual(styles["titleBorder"], "0px")
+                self.assertEqual(styles["titleFilter"], "none")
                 self.assertEqual(styles["barRepeat"], "repeat-x")
                 self.assertIn("auto", styles["barSize"])
                 self.assertIn("rgb(224, 208, 192)", styles["barColor"])
-                self.assertIn("rgb(250, 250, 250)", styles["titleColor"])
+                # Native titlebar text follows the body/new-tab foreground;
+                # frame artwork no longer supplies a separate foreground.
+                self.assertIn("rgb(0, 0, 0)", styles["titleTextColor"])
                 self.assertIn("rgb(254, 254, 254)", styles["barTextColor"])
 
                 page.evaluate("""() => {
@@ -346,22 +404,18 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
                 box = page.locator(header).bounding_box()
                 self.assertIsNotNone(box)
                 points = [(2, 2), (12, 2), (2, 8),
-                          (int(box["x"]) + 12, int(box["y"]) + 2),
-                          (int(box["x"]) + 2, int(box["y"]) + 6)]
+                          # Sample inside the rounded toolbar, away from its
+                          # transparent corner.
+                          (int(box["x"]) + 20, int(box["y"]) + 2)]
                 pixels = [self._screenshot_pixel(
                     page.screenshot(clip={"x": x, "y": y, "width": 1, "height": 1}),
                 ) for x, y in points]
-                self.assertEqual(pixels[0][:3], (211, 47, 103))
-                self.assertEqual(pixels[1][:3], (21, 71, 121))
+                # The native titlebar has no frame artwork of its own: the
+                # page background image remains visible through it.
+                self.assertEqual(pixels[0][:3], (238, 171, 42))
+                self.assertEqual(pixels[1][:3], (238, 171, 42))
                 self.assertEqual(pixels[2][:3], (240, 224, 208))
-                self.assertEqual(
-                    pixels[3][:3],
-                    (43, 157, 94),
-                )
-                self.assertEqual(
-                    pixels[4][:3],
-                    (224, 208, 192),
-                )
+                self.assertEqual(pixels[3][:3], (43, 157, 94))
 
                 theme.clear()
                 theme.update(self._theme(f"color-only-{kind}", "#334455"))
@@ -429,12 +483,17 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
             expect(page.locator(prompt_selector)).to_be_enabled(timeout=5_000)
             styles = page.evaluate("""header => ({
                 titleImage: getComputedStyle(document.querySelector('#nativeTitlebar')).backgroundImage,
+                titleColor: getComputedStyle(document.querySelector('#nativeTitlebar')).backgroundColor,
+                titleBorder: getComputedStyle(document.querySelector('#nativeTitlebar')).borderBottomWidth,
+                titleFilter: getComputedStyle(document.querySelector('#nativeTitlebar')).backdropFilter,
                 toolbarImage: getComputedStyle(document.querySelector(header)).backgroundImage,
                 labelColor: getComputedStyle(document.querySelector('.composer-setting > span')).color,
             })""", header_selector)
-            self.assertIn("url(", styles["titleImage"])
+            self.assertEqual(styles["titleImage"], "none")
+            self.assertIn("0, 0, 0, 0", styles["titleColor"])
+            self.assertEqual(styles["titleBorder"], "0px")
+            self.assertEqual(styles["titleFilter"], "none")
             self.assertIn("url(", styles["toolbarImage"])
-            self.assertNotEqual(styles["titleImage"], styles["toolbarImage"])
             self.assertEqual(styles["labelColor"], "rgb(255, 255, 255)")
 
             title_pixel = self._screenshot_pixel(
@@ -444,10 +503,12 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
             box = header.bounding_box()
             self.assertIsNotNone(box)
             toolbar_pixel = self._screenshot_pixel(page.screenshot(clip={
-                "x": int(box["x"]) + 2, "y": int(box["y"]) + 2,
+                # The toolbar is rounded, so its top-left corner is
+                # transparent. Sample from its solid interior.
+                "x": int(box["x"]) + 20, "y": int(box["y"]) + 2,
                 "width": 1, "height": 1,
             }))
-            self.assertEqual(title_pixel[:3], (17, 34, 204))
+            self.assertEqual(title_pixel[:3], (255, 255, 255))
             self.assertEqual(toolbar_pixel[:3], (204, 34, 17))
 
         work = self.context.new_page()
