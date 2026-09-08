@@ -123,16 +123,15 @@ class DraftWhiteboardBrowserTests(unittest.TestCase):
         self.assertNotIn('gradient', palette['image'])
         self.assertNotIn('cover', palette['size'])
         self.assertIn('100% 100%', palette['position'])
-        toolbar_rgba = self.page.evaluate("""color => {
-          const context = document.createElement('canvas').getContext('2d');
-          context.fillStyle = color;
-          context.fillRect(0, 0, 1, 1);
-          return [...context.getImageData(0, 0, 1, 1).data];
-        }""", palette['toolbar'])
-        for actual, expected in zip(toolbar_rgba[:3], (255, 196, 66)):
+        self.assertEqual(palette['toolbar'], 'rgb(255, 196, 66)')
+        panel = self.page.evaluate("""value => {
+          const ctx = document.createElement('canvas').getContext('2d');
+          ctx.fillStyle = value; ctx.fillRect(0, 0, 1, 1);
+          return Array.from(ctx.getImageData(0, 0, 1, 1).data);
+        }""", palette['panel'])
+        for actual, expected in zip(panel[:3], (255, 250, 240)):
             self.assertAlmostEqual(actual, expected, delta=1)
-        self.assertEqual(toolbar_rgba[3], 255)
-        self.assertEqual(palette['panel'], 'rgb(255, 250, 240)')
+        self.assertAlmostEqual(panel[3] / 255, .9, delta=.01)
         self.assertEqual(palette['text'], 'rgb(24, 16, 32)')
         if os.environ.get('PPI_SCREENSHOTS'):
             folder = Path(os.environ['PPI_SCREENSHOTS']); folder.mkdir(parents=True, exist_ok=True)

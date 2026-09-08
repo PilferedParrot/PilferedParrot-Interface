@@ -129,6 +129,9 @@ body.chrome-theme {
   --blue: var(--chrome-theme-link, #67a8ff);
   --blue-strong: var(--chrome-theme-link, #1558d6);
   --text: var(--chrome-theme-text, #e8edf3);
+  --chrome-theme-sidebar-surface: color-mix(in srgb, var(--chrome-theme-section, #151e29) 72%, transparent);
+  --chrome-theme-message-surface: color-mix(in srgb, var(--chrome-theme-section, #151e29) 88%, transparent);
+  --chrome-theme-composer-surface: color-mix(in srgb, var(--chrome-theme-section, #151e29) 90%, transparent);
   background:
     var(--chrome-theme-background-image) var(--chrome-theme-background-position) / auto auto var(--chrome-theme-background-repeat),
     var(--bg);
@@ -350,7 +353,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .allowances { display: grid; gap: 9px; margin-top: 10px; }
 .allowance-head { display: flex; align-items: baseline; justify-content: space-between; gap: 7px; font-size: inherit; color: var(--sidebar-muted); }
 .allowance-label { min-width: 0; overflow: hidden; color: var(--sidebar-muted); line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
-.allowance-head strong { flex: none; color: #e6ebf1; font-size: inherit; }
+.allowance-head strong { flex: none; color: inherit; font-size: inherit; }
 .allowance-meter { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
 .allowance-track { height: 4px; min-width: 36px; flex: 1; overflow: hidden; border-radius: 5px; background: #27313d; }
 .allowance-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #3b86e9, #68b5ff); }
@@ -372,7 +375,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   background: rgba(17, 24, 33, .72);
 }
 .chat-list { min-width: 0; min-height: 0; overflow-y: auto; display: grid; align-content: start; gap: 3px; padding: 4px 5px 6px; }
-.sidebar-appearance { padding-top: 2px; }
 .chrome-theme-button {
   display: flex;
   align-items: center;
@@ -900,7 +902,6 @@ dialog::backdrop { background: rgba(0, 0, 0, .62); }
 #contextSummary { margin-left: auto; color: var(--muted); font-size: 16px; white-space: nowrap; }
 #contextSummary.near_limit { color: var(--orange); }
 #contextSummary.limit { color: var(--red); }
-.sidebar-disclosure .chrome-theme-button { border: 0; background: transparent; font-size: 16px; padding: 8px 6px; }
 .sidebar-disclosure .context-pie-card { margin: 2px 0 6px; }
 .welcome { margin-top: clamp(28px, 7vh, 80px); }
 .welcome-logo { width: min(230px, 60%); max-height: 175px; }
@@ -965,8 +966,8 @@ body.chrome-theme :is(.composer-wrap, .chat-composer-wrap) { background: transpa
 body.chrome-theme :is(.composer, .chat-composer, .message, .chat-message, .welcome, .dialog-card) {
   background: var(--panel); color: var(--chrome-theme-panel-text);
   --text: var(--chrome-theme-panel-text);
-  --muted: var(--chrome-theme-panel-text);
-  --faint: var(--chrome-theme-panel-text);
+  --muted: color-mix(in srgb, var(--chrome-theme-panel-text) 80%, var(--chrome-theme-section));
+  --faint: color-mix(in srgb, var(--chrome-theme-panel-text) 72%, var(--chrome-theme-section));
 }
 body.chrome-theme :is(.message, .chat-message) { padding: 16px; border-radius: 12px; margin-bottom: 12px; }
 body.chrome-theme .welcome { border-radius: 16px; padding: 22px; width: fit-content; max-width: 100%; margin-inline: auto; }
@@ -987,14 +988,12 @@ body.chrome-theme dialog {
   background: var(--panel);
   color: var(--chrome-theme-panel-text);
 }
-body.chrome-theme :is(.new-work-session, .open-chat-button, .chat-new-chat, .provider-window-button,
-  .run-command) {
+body.chrome-theme .run-command {
   border-color: var(--chrome-theme-toolbar);
   background: var(--chrome-theme-toolbar);
   color: var(--chrome-theme-toolbar-text);
 }
-body.chrome-theme :is(.new-work-session, .open-chat-button, .chat-new-chat, .provider-window-button,
-  .run-command):hover {
+body.chrome-theme .run-command:hover {
   filter: brightness(1.08);
 }
 body.chrome-theme :is(.message-content, .chat-message-body) th {
@@ -1038,6 +1037,15 @@ body.chrome-theme :is(.sidebar, .chat-window-sidebar) :is(
   --faint: var(--chrome-theme-panel-text);
   --sidebar-muted: var(--chrome-theme-panel-text);
   --sidebar-faint: var(--chrome-theme-panel-text);
+}
+
+/* Imported artwork remains visible through grouped surfaces while dialogs and
+   form fields stay solid enough to keep their boundaries clear. */
+body.chrome-theme :is(.message, .chat-message, .welcome) {
+  background: var(--chrome-theme-message-surface);
+}
+body.chrome-theme :is(.composer, .chat-composer) {
+  background: var(--chrome-theme-composer-surface);
 }
 
 /* Equal outer columns keep branding centered even with unequal title/actions. */
@@ -1094,8 +1102,21 @@ body.native-window .header-actions { grid-column: 2; }
 .chat-window-sidebar { gap: 16px; padding: 12px; }
 .sidebar > *,
 .chat-window-sidebar > * { flex-shrink: 0; }
-.sidebar > .history-group,
-.chat-window-sidebar > .chat-window-history { flex-shrink: 1; }
+/* Keep application settings reachable while workspace content scrolls. */
+.sidebar > .sidebar-content,
+.chat-window-sidebar > .sidebar-content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.sidebar-content > * { flex-shrink: 0; }
+.sidebar-content > .history-group { flex-shrink: 1; }
 
 .sidebar .provider-card,
 .chat-model-card { padding: 12px; }
@@ -1107,7 +1128,6 @@ body.native-window .header-actions { grid-column: 2; }
 .technical-history .chat-list { padding: 0; }
 .chat-list { gap: 8px; }
 .sidebar-disclosure .context-pie-card { margin: 8px 0 0; }
-.sidebar-disclosure .chrome-theme-button { margin-top: 8px; }
 .provider-update { margin-bottom: 8px; }
 .provider-connection-list { gap: 16px; }
 .provider-connection-actions { gap: 8px; }
@@ -1148,8 +1168,8 @@ body.native-window .header-actions { grid-column: 2; }
 body.chrome-theme {
   --action-bg: var(--chrome-theme-panel-text);
   --action-text: var(--panel);
-  --border: color-mix(in srgb, var(--chrome-theme-panel-text) 24%, var(--panel));
-  --border-soft: color-mix(in srgb, var(--chrome-theme-panel-text) 12%, var(--panel));
+  --border: color-mix(in srgb, var(--chrome-theme-panel-text) 20%, var(--panel));
+  --border-soft: color-mix(in srgb, var(--chrome-theme-panel-text) 10%, var(--panel));
 }
 :is(.sidebar-disclosure > summary, .section-heading, .history-heading) {
   border-radius: var(--radius-control);
@@ -1283,8 +1303,8 @@ dialog {
 }
 
 /* A filled primary must remain distinct even when a theme's toolbar and panel match. */
-:is(.new-work-session, .chat-new-chat, .send-button:not(:disabled)),
-body.chrome-theme :is(.new-work-session, .chat-new-chat, .send-button:not(:disabled)) {
+.send-button:not(:disabled),
+body.chrome-theme .send-button:not(:disabled) {
   background: var(--action-bg);
   color: var(--action-text);
   border-color: var(--action-bg);
@@ -1297,4 +1317,165 @@ body.chrome-theme :is(.new-work-session, .chat-new-chat, .send-button:not(:disab
 :is(.icon-button, .run-command, .send-button, .cancel-run, .response-identity, .work-log),
 .composer .composer-setting select, .chat-composer .composer-setting select {
   border-radius: var(--radius-control);
+}
+
+/* A single surface encloses each sidebar group; its children share the palette. */
+:is(.sidebar, .chat-window-sidebar) :is(.sidebar-group, .history-group) {
+  --muted: color-mix(in srgb, var(--text) 80%, var(--panel));
+  --faint: var(--muted);
+  --sidebar-muted: var(--muted);
+  --sidebar-faint: var(--faint);
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-surface);
+  background: var(--panel);
+  color: var(--text);
+}
+body.chrome-theme :is(.sidebar, .chat-window-sidebar) :is(.sidebar-group, .history-group) {
+  --text: var(--chrome-theme-panel-text);
+  --muted: color-mix(in srgb, var(--chrome-theme-panel-text) 72%, var(--chrome-theme-section));
+  --faint: color-mix(in srgb, var(--chrome-theme-panel-text) 58%, var(--chrome-theme-section));
+  --sidebar-muted: var(--muted);
+  --sidebar-faint: var(--faint);
+}
+.sidebar-group {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+}
+.sidebar-group .sidebar-actions { gap: 8px; padding: 0; }
+.sidebar-group :is(.sidebar-actions button, .chat-new-chat, .sidebar-whiteboard-button),
+.sidebar-preferences-button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.sidebar-group :is(.sidebar-actions button, .chat-new-chat, .sidebar-whiteboard-button):hover,
+.sidebar-preferences-button:hover {
+  border-color: color-mix(in srgb, currentColor 42%, transparent);
+  background: color-mix(in srgb, currentColor 9%, transparent);
+}
+.sidebar-group :is(.sidebar-actions button, .chat-new-chat, .sidebar-whiteboard-button):disabled,
+.sidebar-preferences-button:disabled {
+  opacity: .55;
+  cursor: default;
+}
+.sidebar-group :is(button, summary):focus-visible,
+.sidebar-preferences-button:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+.sidebar-group #whiteboardButton { margin: 0; }
+.sidebar-group .sidebar-whiteboard-button svg,
+.sidebar-preferences-button svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.sidebar-group .provider-list { grid-template-columns: minmax(0, 1fr); }
+:is(.sidebar, .chat-window-sidebar) .sidebar-group :is(.provider-card, .context-pie-card),
+body.chrome-theme :is(.sidebar, .chat-window-sidebar) .sidebar-group :is(.provider-card, .context-pie-card) {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+:is(.sidebar, .chat-window-sidebar) .sidebar-group :is(.section-heading, .sidebar-disclosure > summary, .chrome-theme-button, .provider-update) {
+  background: transparent;
+  color: var(--text);
+}
+.sidebar-group .section-heading { padding: 0; }
+.sidebar-group .sidebar-disclosure > summary { padding: 4px 8px; }
+.sidebar-group #contextDetails > summary {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  gap: 0 8px;
+  padding: 4px 0;
+}
+.sidebar-group #contextSummary { grid-column: 2; margin: 0; white-space: normal; }
+:is(.sidebar, .chat-window-sidebar) .sidebar-group .provider-update {
+  width: auto;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.history-group.technical-history,
+.chat-window-history {
+  flex: 1 1 220px;
+  min-height: 152px;
+  max-height: none;
+  overflow: hidden;
+  gap: 8px;
+}
+:is(.sidebar, .chat-window-sidebar) .history-group .history-heading {
+  flex: none;
+  padding: 0;
+  min-height: 24px;
+  background: transparent;
+  color: var(--text);
+}
+.technical-history .chat-list,
+.chat-window-history .chat-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+:is(.sidebar, .chat-window-sidebar) .history-group .chat-item {
+  background: transparent;
+  color: var(--text);
+}
+:is(.sidebar, .chat-window-sidebar) .history-group .chat-item:is(:hover, .active) {
+  background: color-mix(in srgb, var(--text) 8%, var(--panel));
+}
+.sidebar-group .allowance-meter { flex-wrap: wrap; }
+.sidebar-group .allowance-head strong { color: var(--text); }
+.sidebar-group .allowance-reset { white-space: normal; }
+
+/* Preferences belongs to the application, outside workspace and session groups. */
+.sidebar-preferences-button {
+  flex: none;
+  background: var(--panel);
+  color: var(--text);
+}
+body.chrome-theme .sidebar-preferences-button { color: var(--chrome-theme-panel-text); }
+.sidebar-preferences-button:hover {
+  background: color-mix(in srgb, currentColor 9%, var(--panel));
+}
+body.chrome-theme :is(.sidebar, .chat-window-sidebar) .history-group .chat-item:is(:hover, .active) {
+  background: color-mix(in srgb, var(--panel) 18%, transparent);
+}
+.preferences-actions { display: grid; gap: 8px; }
+body.chrome-theme :is(.sidebar, .chat-window-sidebar) :is(.sidebar-group, .history-group, .chat-window-history, .sidebar-preferences-button) {
+  background: var(--chrome-theme-sidebar-surface);
+}
+@media (max-width: 600px) {
+  .sidebar-group :is(.sidebar-actions button, .chat-new-chat, .sidebar-whiteboard-button),
+  .sidebar-preferences-button { min-height: 44px; }
 }

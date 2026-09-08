@@ -60,14 +60,14 @@ class BrowserNotificationTests(unittest.TestCase):
         expect(self.page.get_by_role("textbox", name="Message")).to_be_enabled(timeout=5_000)
 
     def test_permission_request_is_persisted_until_explicit_reset(self):
-        self.page.locator("#preferencesDetails > summary").click()
+        self.page.locator("#preferencesButton").click()
         control = self.page.get_by_role("button", name="Enable desktop notifications")
         control.click()
         expect(self.page.get_by_role("button", name="Desktop notifications denied · Reset")).to_be_visible()
         self.assertEqual(self.page.evaluate("Notification.calls"), 1)
 
         self.page.reload(wait_until="domcontentloaded")
-        self.page.locator("#preferencesDetails > summary").click()
+        self.page.locator("#preferencesButton").click()
         expect(self.page.get_by_role("button", name="Desktop notifications denied · Reset")).to_be_visible()
         self.assertEqual(self.page.evaluate("Notification.calls"), 1)
 
