@@ -259,6 +259,10 @@ class SidebarBrowserEndToEndTests(unittest.TestCase):
                 page.set_viewport_size({'width': width, 'height': height})
                 if width == 320:
                     page.locator(toggle).click()
+                # Measure settled layout, not an in-flight mobile drawer transform.
+                page.locator(sidebar).evaluate(
+                    'async node => { await Promise.all(node.getAnimations().map(animation => animation.finished)); }',
+                )
                 # Even expanded telemetry and overflowing history cannot push
                 # the application settings control out of the viewport.
                 page.locator('#contextDetails').evaluate('node => node.open = true')
