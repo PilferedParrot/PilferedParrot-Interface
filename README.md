@@ -4,25 +4,26 @@ PilferedParrot Interface (PPI) is a local browser interface for coding CLIs and 
 model APIs. Choose the provider for a work session, keep its project and history together, and
 open a separate read-only Chat window when you need a quick question.
 
-The current checkout is the **0.7.0-rc.10 preview**. Linux 0.6.1 remains the stable release;
+The current checkout is the **0.7.0-rc.11 preview**. Linux 0.6.1 remains the stable release;
 the Windows 10/11 x64 build is a portable preview. Preview downloads are available from the
-[0.7.0-rc.10 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.10).
+[0.7.0-rc.11 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.11).
 
 [Project site](https://pilferedparrot.github.io/PilferedParrot-Interface/) ·
-[Linux rc.10 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.10/pilferedparrot-0.7.0-rc.10-source.tar.gz) ·
+[Linux rc.11 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.11/pilferedparrot-0.7.0-rc.11-source.tar.gz) ·
 [Stable Linux release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.6.1) ·
 [Release notes](RELEASE_NOTES.md) ·
-[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.10/PilferedParrot-0.7.0-rc.10-windows-x64.zip) ·
+[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.11/PilferedParrot-0.7.0-rc.11-windows-x64.zip) ·
 [Report a bug](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new?template=bug_report.yml) ·
 [Share feedback](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new/choose)
 
 ![PilferedParrot Work preview](docs/assets/work-preview.png)
 
-*The image shows the rounded session header and transparent custom title bar, using a synthetic conversation with no real account or chat data.*
+*The image shows the spaced session header and grouped sidebar controls, using a synthetic conversation with no real account or chat data.*
 
-Preview rc.10 rounds the Work and Chat headers and lets the page background continue
-through the Linux/X11 custom title bar, including theme pictures. Windows receives
-the rounded interface headers; its outer title bar remains drawn by Chrome or Edge.
+Preview rc.11 gives Work and Chat consistent space around headers, between sidebar
+sections, and inside grouped controls. Linux and Windows share the layout update.
+The Linux/X11 custom title bar stays transparent; the outer Windows title bar
+remains drawn by Chrome or Edge.
 
 ## What it does
 
@@ -72,7 +73,7 @@ for authentication and integration limits.
 
 ### Upgrading an existing installation
 
-Download the [rc.10 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.10/pilferedparrot-0.7.0-rc.10-source.tar.gz),
+Download the [rc.11 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.11/pilferedparrot-0.7.0-rc.11-source.tar.gz),
 extract it, and run `./bin/pilferedparrot --version` before replacing your launcher with
 `./bin/install-pilferedparrot-desktop`. Keep the extracted directory in place. Existing
 configuration, browser profiles, conversations, and run metadata remain in their current local
@@ -80,7 +81,7 @@ state directory; do not replace your `config.json` unless you intend to reconfig
 
 ## Windows preview
 
-Download the [0.7.0-rc.10 Windows x64 ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.10/PilferedParrot-0.7.0-rc.10-windows-x64.zip),
+Download the [0.7.0-rc.11 Windows x64 ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.11/PilferedParrot-0.7.0-rc.11-windows-x64.zip),
 extract it to a directory you control, and run `PilferedParrot.exe`. The package includes Python,
 needs no installation or administrator rights, and uses Chrome, Chromium, or Microsoft Edge. Keep
 the console window open while PPI runs and keep the extracted directory together. The executable

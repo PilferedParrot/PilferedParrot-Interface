@@ -1,3 +1,14 @@
+## PilferedParrot Interface 0.7.0-rc.11 preview
+
+Work and Chat now leave space around their rounded headers and use consistent
+gaps between sidebar sections, cards, and related controls. Composer and message
+gutters align. A narrow-window layout fix keeps the Work message box and Send
+button inside the visible window.
+
+Linux/source and Windows x64 packages include the same spacing update. Reopen
+the updated app after current jobs finish to load the new stylesheet. This remains
+a preview alongside stable Linux 0.6.1.
+
 ## PilferedParrot Interface 0.7.0-rc.10 preview
 
 Work session headers and Chat headers now have four rounded corners, matching the
