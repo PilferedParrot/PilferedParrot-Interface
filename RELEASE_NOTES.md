@@ -1,3 +1,12 @@
+## PilferedParrot Interface 0.7.0-rc.12 preview
+
+Work and Chat share consistent spacing, rounded controls, and theme-aware surfaces.
+App dialogs place their close control at the upper right, keep it visible while scrolling,
+and reserve the bottom for actions. Sidebar and conversation dividers give way to spacing.
+Provider removal uses the same dialog pattern. The manual Harness button and planner are
+retired; existing task records, navigation, and backend API compatibility are preserved.
+See the [design language](docs/design-language.md) and [backend Harness review](docs/harness-review.md).
+
 ## PilferedParrot Interface 0.7.0-rc.11 preview
 
 Work and Chat now leave space around their rounded headers and use consistent
