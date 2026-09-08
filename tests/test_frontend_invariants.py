@@ -494,7 +494,7 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertIn('fragment.get("window")', self.app_js)
 
     def test_provider_dashboard_exposes_models_and_safe_login_guidance(self):
-        dialog = self.index_html.split('<dialog id="providerDialog">', 1)[1].split('</dialog>', 1)[0]
+        dialog = self.index_html.split('<dialog id="providerDialog"', 1)[1].split('</dialog>', 1)[0]
         self.assertIn("Provider dashboard", dialog)
         self.assertIn('id="refreshProviderDashboard"', dialog)
         connections = _function_body(self.app_js, "renderProviderConnections")
@@ -511,8 +511,10 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertIn('data-provider-draft-api-key-env', draft)
         self.assertIn('Secrets stay in your environment', draft)
         self.assertIn('api("/api/providers"', _function_body(self.app_js, "submitProviderDraft"))
-        self.assertIn('api("/api/providers/remove"', _function_body(self.app_js, "removeProvider"))
-        self.assertIn('window.confirm', _function_body(self.app_js, "removeProvider"))
+        remove_opener = _function_body(self.app_js, "removeProvider")
+        self.assertIn('$("#providerRemoveDialog").showModal()', remove_opener)
+        self.assertNotIn('api("/api/providers/remove"', remove_opener)
+        self.assertNotIn("window.confirm", remove_opener)
         self.assertIn("info.description", connections)
         self.assertIn("info.auth_mode", connections)
         opener = _function_body(self.app_js, "openProviderWindow")
@@ -547,7 +549,7 @@ class FrontendInvariantTests(unittest.TestCase):
 
     def test_provider_management_is_inline_and_model_catalog_is_removed(self):
         """Provider creation is inline; the old standalone model catalog is gone."""
-        dialog = self.index_html.split('<dialog id="providerDialog">', 1)[1].split('</dialog>', 1)[0]
+        dialog = self.index_html.split('<dialog id="providerDialog"', 1)[1].split('</dialog>', 1)[0]
         self.assertIn('id="addProvider"', dialog)
         self.assertNotIn('id="modelManagement"', dialog)
         self.assertNotIn('id="modelCatalogPanel"', dialog)
@@ -561,6 +563,12 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertIn('providerDraftMarkup()', connections)
         self.assertIn('data-provider-remove', connections)
         self.assertIn('$("#addProvider").addEventListener("click", beginProviderDraft)', self.app_js)
+        remove_opener = _function_body(self.app_js, "removeProvider")
+        self.assertIn('$("#providerRemoveDialog").showModal()', remove_opener)
+        self.assertNotIn('api("/api/providers/remove"', remove_opener)
+        remove_form_start = self.app_js.index('$("#providerRemoveForm").addEventListener')
+        remove_form = self.app_js[remove_form_start:remove_form_start + 1800]
+        self.assertIn('api("/api/providers/remove"', remove_form)
 
     def test_provider_cards_use_backend_supplied_metadata(self):
         """Provider additions must not require editing a frontend allow-list."""
@@ -908,7 +916,7 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertNotIn('gpt-5.6-luna', model_picker)
 
     def test_provider_choice_lives_in_provider_window_dialog(self):
-        dialog = self.index_html.split('<dialog id="providerDialog">', 1)[1].split('</dialog>', 1)[0]
+        dialog = self.index_html.split('<dialog id="providerDialog"', 1)[1].split('</dialog>', 1)[0]
         self.assertIn('Choose a provider', dialog)
         self.assertIn('data-provider-window', self.app_js)
         self.assertNotIn('id="providerSelect"', self.index_html)

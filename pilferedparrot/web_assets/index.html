@@ -115,8 +115,7 @@
           <img src="/pilferedparrot-icon.png" alt=""><span>PilferedParrot</span>
         </div>
         <div class="header-actions">
-          <button type="button" class="harness-button" id="whiteboardButton" aria-haspopup="dialog" aria-controls="whiteboardDialog">Whiteboard</button>
-          <button type="button" class="harness-button" id="harnessButton" aria-haspopup="dialog" aria-controls="harnessDialog" disabled>Harness</button>
+          <button type="button" class="utility-button" id="whiteboardButton" aria-haspopup="dialog" aria-controls="whiteboardDialog">Whiteboard</button>
         </div>
       </header>
 
@@ -147,9 +146,12 @@
 
   </div>
 
-  <dialog id="projectDialog">
+  <dialog id="projectDialog" aria-labelledby="projectTitle">
     <form method="dialog" class="dialog-card" id="projectForm">
-      <h2>Project folder</h2>
+      <div class="dialog-heading">
+        <h2 id="projectTitle">Project folder</h2>
+        <button type="button" class="dialog-close" data-dialog-close aria-label="Close" title="Close"><span aria-hidden="true">×</span></button>
+      </div>
       <p id="projectNotice" class="dialog-notice" hidden>This provider cannot work in the folder the
         launching window was using, so choose one before starting.</p>
       <p>This is the primary writable folder. Providers may also use explicitly configured additional project folders.</p>
@@ -163,81 +165,81 @@
         <strong id="projectFolderName">No folder selected</strong>
       </div>
       <div class="dialog-actions">
-        <button value="cancel" class="secondary">Cancel</button>
+        <button value="cancel" class="secondary" formnovalidate>Cancel</button>
         <button value="default" id="saveProject">Use folder</button>
       </div>
     </form>
   </dialog>
-  <dialog id="harnessDialog">
-    <form method="dialog" class="dialog-card harness-dialog-card" id="harnessForm">
-      <div class="harness-heading"><div><h2>Harness</h2><p>Define the work, launch it, inspect the artifact, then accept or retry.</p><p class="harness-flow" aria-label="Harness steps"><span>1 Define</span><span aria-hidden="true">→</span><span>2 Launch</span><span aria-hidden="true">→</span><span>3 Inspect</span><span aria-hidden="true">→</span><span>4 Accept or retry</span></p></div><button type="button" class="secondary" id="harnessClose">Close</button></div>
-      <details id="harnessEditor" open>
-        <summary id="harnessEditorHeading">New work package</summary>
-        <label>Exact task<textarea id="harnessTask" required rows="3" placeholder="Describe one independently reviewable task"></textarea></label>
-        <div class="harness-grid"><label>Category<select id="harnessCategory"><option>trivial</option><option selected>implementation</option><option>test</option><option>refactor</option><option>investigation</option><option>maintenance</option></select></label><label>Preset<select id="harnessPreset"></select></label></div>
-        <label>Input file references <span class="field-note">optional; one per line</span><textarea id="harnessInputs" rows="2" placeholder="path/to/input.py"></textarea></label>
-        <label>Allowed write scope <span class="field-note">optional for read-only work; one relative file or directory per line</span><textarea id="harnessWriteScope" rows="2" placeholder="path/to/output.py"></textarea></label>
-        <div class="harness-grid"><label>Acceptance check<textarea id="harnessAcceptance" required rows="2" placeholder="How will a lead or user independently verify it?"></textarea></label><label>Expected artifact (relative file)<input id="harnessArtifact" required placeholder="path/to/output.py"></label></div>
-        <label>Stop conditions<textarea id="harnessStop" required rows="2" placeholder="When must work stop or escalate?"></textarea></label>
-        <fieldset class="harness-estimates"><legend>Effort estimates <span class="field-note">points; leave unknown blank</span></legend><div class="harness-grid"><label>direct<input type="number" min="0" step="any" id="harnessEstimateDirect"></label><label>briefing<input type="number" min="0" step="any" id="harnessEstimateBriefing"></label><label>execution<input type="number" min="0" step="any" id="harnessEstimateExecution"></label><label>verification<input type="number" min="0" step="any" id="harnessEstimateVerification"></label><label>rework<input type="number" min="0" step="any" id="harnessEstimateRework"></label></div></fieldset>
-        <div class="dialog-actions"><button type="button" id="harnessPlan">Plan package</button></div>
-      </details>
-      <section id="harnessTasks" class="harness-tasks" aria-live="polite"></section>
-    </form>
-  </dialog>
-  <dialog id="terminalDialog">
+  <dialog id="terminalDialog" aria-labelledby="terminalTitle">
     <form method="dialog" class="dialog-card" id="terminalForm">
-      <h2>Run in terminal?</h2>
+      <div class="dialog-heading">
+        <h2 id="terminalTitle">Run in terminal?</h2>
+        <button type="button" class="dialog-close" data-dialog-close aria-label="Close" title="Close"><span aria-hidden="true">×</span></button>
+      </div>
       <p>The command will run in <code id="terminalCwd"></code>.</p>
       <pre class="terminal-command"><code id="terminalCommand"></code></pre>
       <p class="terminal-note">The terminal will show the folder and command before running it. If the command uses <code>sudo</code>, review that line before entering your password in the terminal.</p>
       <div class="dialog-actions">
-        <button value="cancel" class="secondary">Cancel</button>
+        <button value="cancel" class="secondary" formnovalidate>Cancel</button>
         <button value="default" id="confirmTerminal"><span aria-hidden="true">▶</span> Run in terminal</button>
       </div>
     </form>
   </dialog>
-  <dialog id="providerDialog">
-    <form method="dialog" class="dialog-card provider-dialog-card">
-      <div class="provider-dialog-heading">
-        <div>
-          <h2>Provider dashboard</h2>
-          <p>Choose a provider and model for a dedicated work window, or manage its connection.</p>
-        </div>
-        <button type="button" class="secondary provider-refresh" id="refreshProviderDashboard">
-          <span aria-hidden="true">↻</span> Refresh status
-        </button>
+  <dialog id="providerDialog" aria-labelledby="providerDialogTitle">
+    <div class="dialog-card provider-dialog-card">
+      <div class="dialog-heading">
+        <h2 id="providerDialogTitle">Provider dashboard</h2>
+        <button type="button" class="dialog-close" data-dialog-close aria-label="Close" title="Close"><span aria-hidden="true">×</span></button>
+      </div>
+      <p>Choose a provider and model for a dedicated work window, or manage its connection.</p>
+      <div class="dialog-toolbar">
+        <button type="button" class="add-provider-button" id="addProvider">＋ Add provider</button>
+        <button type="button" class="secondary provider-refresh" id="refreshProviderDashboard"><span aria-hidden="true">↻</span> Refresh status</button>
       </div>
       <p id="providerDashboardStatus" role="status" aria-atomic="true"></p>
-      <button type="button" class="add-provider-button" id="addProvider">＋ Add provider</button>
       <div id="providerConnectionList" class="provider-connection-list"></div>
+    </div>
+  </dialog>
+  <dialog id="providerLogoutDialog" aria-labelledby="providerLogoutTitle">
+    <form method="dialog" class="dialog-card" id="providerLogoutForm">
+      <div class="dialog-heading">
+        <h2 id="providerLogoutTitle">Sign out?</h2>
+        <button type="button" class="dialog-close" data-dialog-close aria-label="Close" title="Close"><span aria-hidden="true">×</span></button>
+      </div>
+      <p id="providerLogoutNote"></p>
       <div class="dialog-actions">
-        <button value="cancel" class="secondary">Close</button>
+        <button value="cancel" class="secondary" formnovalidate>Cancel</button>
+        <button value="default" id="confirmProviderLogout">Sign out</button>
       </div>
     </form>
   </dialog>
-  <dialog id="providerLogoutDialog">
-    <form method="dialog" class="dialog-card" id="providerLogoutForm">
-      <h2>Sign out?</h2>
-      <p id="providerLogoutNote"></p>
+  <dialog id="providerRemoveDialog" aria-labelledby="providerRemoveTitle">
+    <form method="dialog" class="dialog-card" id="providerRemoveForm">
+      <div class="dialog-heading">
+        <h2 id="providerRemoveTitle">Remove provider?</h2>
+        <button type="button" class="dialog-close" data-dialog-close aria-label="Close" title="Close"><span aria-hidden="true">×</span></button>
+      </div>
+      <p id="providerRemoveNote"></p>
       <div class="dialog-actions">
-        <button value="cancel" class="secondary">Cancel</button>
-        <button value="default" id="confirmProviderLogout">Sign out</button>
+        <button value="cancel" class="secondary" formnovalidate autofocus>Cancel</button>
+        <button value="default" id="confirmProviderRemove">Remove provider</button>
       </div>
     </form>
   </dialog>
   <dialog id="whiteboardDialog" aria-labelledby="whiteboardTitle">
     <div class="dialog-card">
-      <h2 id="whiteboardTitle">Shared whiteboard</h2>
+      <div class="dialog-heading">
+        <h2 id="whiteboardTitle">Shared whiteboard</h2>
+        <button type="button" class="dialog-close" id="whiteboardClose" aria-label="Close" title="Close"><span aria-hidden="true">×</span></button>
+      </div>
       <p>Notes shared across models and jobs on this computer. Keep messages short and useful.</p>
+      <div class="dialog-toolbar"><button type="button" class="secondary" id="whiteboardRefresh">Refresh notes</button></div>
       <div id="whiteboardMessages" class="whiteboard-messages" aria-live="polite"></div>
       <p id="whiteboardStatus" role="status"></p>
       <form id="whiteboardForm">
         <label for="whiteboardText">Leave a message</label>
         <textarea id="whiteboardText" rows="3" maxlength="2000" required></textarea>
         <div class="dialog-actions">
-          <button type="button" class="secondary" id="whiteboardClose">Close</button>
-          <button type="button" class="secondary" id="whiteboardRefresh">Refresh</button>
           <button type="submit" id="whiteboardPost">Post message</button>
         </div>
       </form>

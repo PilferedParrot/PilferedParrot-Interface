@@ -4,6 +4,8 @@ import types
 import unittest
 from pathlib import Path
 
+from pilferedparrot import __version__
+
 
 ROOT = Path(__file__).parents[1]
 
@@ -81,7 +83,7 @@ class WindowsPackageSourceTests(unittest.TestCase):
 
     def test_versioned_archive_and_executable_names_are_fixed(self):
         build = (ROOT / "packaging/windows/build.ps1").read_text()
-        self.assertIn('$Version = "0.7.0-rc.11"', build)
+        self.assertIn(f'$Version = "{__version__}"', build)
         self.assertIn("PilferedParrot-$Version-windows-x64.zip", build)
         self.assertIn('PilferedParrot.exe', build)
 

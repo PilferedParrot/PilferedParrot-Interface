@@ -4,24 +4,26 @@ PilferedParrot Interface (PPI) is a local browser interface for coding CLIs and 
 model APIs. Choose the provider for a work session, keep its project and history together, and
 open a separate read-only Chat window when you need a quick question.
 
-The current checkout is the **0.7.0-rc.11 preview**. Linux 0.6.1 remains the stable release;
+The current checkout is the **0.7.0-rc.12 preview**. Linux 0.6.1 remains the stable release;
 the Windows 10/11 x64 build is a portable preview. Preview downloads are available from the
-[0.7.0-rc.11 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.11).
+[0.7.0-rc.12 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.12).
 
 [Project site](https://pilferedparrot.github.io/PilferedParrot-Interface/) ·
-[Linux rc.11 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.11/pilferedparrot-0.7.0-rc.11-source.tar.gz) ·
+[Linux rc.12 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.12/pilferedparrot-0.7.0-rc.12-source.tar.gz) ·
 [Stable Linux release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.6.1) ·
 [Release notes](RELEASE_NOTES.md) ·
-[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.11/PilferedParrot-0.7.0-rc.11-windows-x64.zip) ·
+[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.12/PilferedParrot-0.7.0-rc.12-windows-x64.zip) ·
 [Report a bug](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new?template=bug_report.yml) ·
 [Share feedback](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new/choose)
 
 ![PilferedParrot Work preview](docs/assets/work-preview.png)
 
-*The image shows the spaced session header and grouped sidebar controls, using a synthetic conversation with no real account or chat data.*
+*Work uses shared spacing, rounded controls, and a quiet sidebar. This preview conversation is synthetic.*
 
-Preview rc.11 gives Work and Chat consistent space around headers, between sidebar
-sections, and inside grouped controls. Linux and Windows share the layout update.
+Preview rc.12 brings one [design language](docs/design-language.md) to Work and Chat:
+consistent upper-right dialog close controls, grouped actions, theme-aware fields,
+and spacing in place of sidebar dividers. The manual Harness window is retired.
+Linux and Windows share the interface update.
 The Linux/X11 custom title bar stays transparent; the outer Windows title bar
 remains drawn by Chrome or Edge.
 
@@ -40,10 +42,11 @@ Work sessions show provider progress, commands, tool results, the selected proje
 saved conversation history. Chat runs in its own window and session; it does not receive the work
 conversation or route work to another provider.
 
-PPI also includes saved drafts, a local whiteboard, model selection, context estimates, desktop
-notifications, and a Harness screen for explicit, bounded task handoffs. These features are
-local UI features; provider access, model availability, account limits, and usage charges belong
-to the provider you configure.
+PPI also includes saved drafts, a local whiteboard, model selection, context estimates, and
+desktop notifications. Work executes directly through the provider you choose; the manual
+Harness UI has been retired. The existing Harness backend and API remain available for existing
+records. See [the Harness review](docs/harness-review.md). Provider access, model availability,
+account limits, and usage charges belong to the provider you configure.
 
 The source project requires Python 3.12 or newer. Chrome or Chromium is preferred on Linux; the
 Windows preview also detects Microsoft Edge. The Python application has no third-party package
@@ -73,7 +76,7 @@ for authentication and integration limits.
 
 ### Upgrading an existing installation
 
-Download the [rc.11 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.11/pilferedparrot-0.7.0-rc.11-source.tar.gz),
+Download the [rc.12 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.12/pilferedparrot-0.7.0-rc.12-source.tar.gz),
 extract it, and run `./bin/pilferedparrot --version` before replacing your launcher with
 `./bin/install-pilferedparrot-desktop`. Keep the extracted directory in place. Existing
 configuration, browser profiles, conversations, and run metadata remain in their current local
@@ -81,7 +84,7 @@ state directory; do not replace your `config.json` unless you intend to reconfig
 
 ## Windows preview
 
-Download the [0.7.0-rc.11 Windows x64 ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.11/PilferedParrot-0.7.0-rc.11-windows-x64.zip),
+Download the [0.7.0-rc.12 Windows x64 ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.12/PilferedParrot-0.7.0-rc.12-windows-x64.zip),
 extract it to a directory you control, and run `PilferedParrot.exe`. The package includes Python,
 needs no installation or administrator rights, and uses Chrome, Chromium, or Microsoft Edge. Keep
 the console window open while PPI runs and keep the extracted directory together. The executable
@@ -109,7 +112,7 @@ Codex and Claude keep their own authentication, sandbox, approvals, and network 
 does not receive provider passwords or manage provider account credentials.
 
 For the full provider and tool details, read [provider compatibility](docs/provider-compatibility.md),
-[whiteboard access and limits](docs/whiteboard.md), and the [Harness guide](docs/harness.md).
+[whiteboard access and limits](docs/whiteboard.md), and the [Harness review](docs/harness-review.md).
 
 ## Development
 

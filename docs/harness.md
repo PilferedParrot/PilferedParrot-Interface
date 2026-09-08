@@ -1,5 +1,12 @@
 # The PilferedParrot harness
 
+> **Retired UI (0.7.0-rc.12).** The manual Harness button and window have been
+> removed. The backend, API, and persisted schema remain for compatibility with
+> existing local records. This document preserves the historical workflow below;
+> new Work should use the ordinary provider-native path described in the
+> [Harness review](harness-review.md). See [the next-session evaluation prompt](next-session.md)
+> for the proposed evidence-first direction.
+
 PilferedParrot owns the reusable work-package workflow. Open **Harness** in the Work toolbar to
 plan a package, inspect its requested route, launch it, and record acceptance against its artifact.
 Planning and reviewing use no model. A launch executes exactly one existing provider run. There is
