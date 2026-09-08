@@ -288,12 +288,17 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
                 image: titlebar.backgroundImage,
                 border: titlebar.borderBottomWidth,
                 filter: titlebar.backdropFilter,
+                bodyColor: getComputedStyle(document.body).backgroundColor,
+                mainColor: getComputedStyle(document.querySelector('.main')).backgroundColor,
+                mainImage: getComputedStyle(document.querySelector('.main')).backgroundImage,
             };
         }""")
         self.assertIn("0, 0, 0, 0", styles["background"])
         self.assertEqual(styles["image"], "none")
         self.assertEqual(styles["border"], "0px")
         self.assertEqual(styles["filter"], "none")
+        self.assertEqual(styles["bodyColor"], styles["mainColor"])
+        self.assertEqual(styles["mainImage"], "none")
         self._assert_rounded_chrome(page, header=".topbar")
 
     def test_original_theme_assets_are_native_size_opaque_and_removed_live(self):

@@ -402,7 +402,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .chat-item-meta span:last-child { display: inline-flex; flex: none; align-items: center; gap: 5px; }
 .limit-dot { display: inline-grid; place-items: center; width: 17px; height: 17px; border: 1px solid #8e6738; border-radius: 50%; background: #3a2a18; color: #ffd18e; font-size: 16px; font-style: normal; font-weight: 800; line-height: 1; }
 
-.main { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; container: work / inline-size; background: radial-gradient(circle at 55% -20%, rgba(51, 100, 158, .12), transparent 42%), var(--bg); }
+.main { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; container: work / inline-size; background: var(--bg); }
 .topbar { display: flex; min-width: 0; align-items: center; gap: 12px; padding: 0 20px; border: 1px solid var(--border-soft); border-radius: 14px; overflow: hidden; background: rgba(11, 16, 23, .84); backdrop-filter: blur(12px); }
 .harness-button { margin-left: auto; padding: 6px 10px; border: 1px solid #345a84; border-radius: 8px; background: #17283b; color: #dcecff; cursor: pointer; font-weight: 650; }
 .harness-button:hover { background: #1b3149; border-color: #4678ab; }
