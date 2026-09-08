@@ -13,7 +13,14 @@ color and artwork; they do not change the placement or behavior of controls.
   the readable 16 px base, with weight and spacing establishing hierarchy.
 - Keep the project, session title, connection, selected model and reasoning, and
   current task progress easy to find. Context use remains visible in the collapsed
-  sidebar summary; detailed telemetry and preferences expand on request.
+  sidebar summary; detailed telemetry expands on request.
+- Organize each sidebar into workspace actions, connection and usage, then session
+  history. Keep refresh, provider status, update information, and context together.
+  History headings stay in the same box as their independently scrolling entries.
+  Preferences is a separate utility button at the bottom that opens a dialog and
+  stays visible while sidebar content scrolls. Only context expands in place. Use
+  the same neutral border, corner radius, typography, and keyboard focus for
+  Preferences, New Session, Providers, Chat, and Whiteboard.
 - Use the same message surfaces and composer controls in Work and Chat. Preserve
   their functional distinction: Work can act in the project; Chat is read-only.
 
@@ -40,8 +47,19 @@ Cancellation must work even when a required field is empty.
 Use surface and foreground tokens together. Dialog fields, labels, secondary
 buttons, notices, and status badges must inherit the panel foreground instead of
 hard-coded pale text. Derive subtle borders from the panel foreground so imported
-light, dark, and vivid themes retain visible controls. Keep the user's original
-theme artwork and its positioning.
+light, dark, and vivid themes retain visible controls. The visual target is 60/100
+legibility, with more of the artwork visible through interface surfaces.
+Theme-authored foregrounds
+are kept when they meet 4.5:1 contrast; otherwise blend them toward the suitable
+black or white extreme until they reach that threshold, preserving their hue.
+Unreadable neutral grays use black or white, since there is no hue to retain.
+Artwork text keeps the authored color with a small shadow; fallback surface colors
+do not describe the image behind it. The threshold applies to base color pairs,
+not a guarantee for every pixel of arbitrary artwork. Use themed translucent
+surfaces for sidebar groups
+(about 72% opaque), messages (about 88%), and composers (about 90%), while dialogs,
+fields, code, and other controls that need a crisp boundary remain solid. Keep the
+user's original theme artwork, scale, and positioning without dimming or blur.
 
 Platform-owned windows, authentication pages, browser permission prompts, and the
 Chrome theme gallery retain their platform UI. The outer Windows caption remains

@@ -874,11 +874,30 @@ async function applyBrowserTheme(theme, refreshGeneration = null) {
   };
   const foreground = (background, requested) => {
     const light = luminance(background);
-    if (valid(requested)) {
-      const text = luminance(requested);
-      if ((Math.max(light, text) + .05) / (Math.min(light, text) + .05) >= 4.5) return requested;
+    const target = light > .179 ? "#000000" : "#ffffff";
+    const contrast = (text) => (Math.max(light, luminance(text)) + .05)
+      / (Math.min(light, luminance(text)) + .05);
+    if (!valid(requested)) return target;
+    if (contrast(requested) < 4.5) {
+      // Neutral text has no hue to retain; keep it clear over translucent surfaces.
+      if (/^#([0-9a-f]{2})\1\1$/i.test(requested)) return target;
+      const authored = requested;
+      const channels = (value) => value.slice(1).match(/../g).map((part) => parseInt(part, 16));
+      const from = channels(authored);
+      const to = channels(target);
+      let low = 0;
+      let high = 1;
+      for (let i = 0; i < 24; i++) {
+        const amount = (low + high) / 2;
+        const candidate = `#${from.map((channel, index) => Math.round(channel + (to[index] - channel) * amount)
+          .toString(16).padStart(2, "0")).join("")}`;
+        if (contrast(candidate) >= 4.5) high = amount;
+        else low = amount;
+      }
+      return `#${from.map((channel, index) => Math.round(channel + (to[index] - channel) * high)
+        .toString(16).padStart(2, "0")).join("")}`;
     }
-    return light > .179 ? "#000000" : "#ffffff";
+    return requested;
   };
   const opposite = (value) => luminance(value) > .179 ? "#000000" : "#ffffff";
   const background = color(colors.ntp_background, "#ffffff");
@@ -1051,6 +1070,10 @@ $("#cancelChat").addEventListener("click", cancelChat);
 $("#notificationPreferences").addEventListener("click", () => {
   manageNotificationPermission().catch((error) => toast(error.message, "error"));
 });
+$("#preferencesButton").addEventListener("click", () => $("#preferencesDialog").showModal());
+document.querySelectorAll("[data-dialog-close]").forEach((button) => {
+  button.addEventListener("click", () => button.closest("dialog").close("cancel"));
+});
 function setChatSidebarOpen(open) {
   const sidebar = $(".chat-window-sidebar");
   const wasOpen = sidebar.classList.contains("open");
@@ -1070,6 +1093,7 @@ $("#toggleChatSidebar").addEventListener("click", () => setChatSidebarOpen(true)
 $("#closeChatSidebar").addEventListener("click", () => setChatSidebarOpen(false));
 window.addEventListener("resize", syncChatSidebarAccessibility);
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && document.querySelector("dialog:modal")) return;
   if (event.key === "Escape" && $(".chat-window-sidebar").classList.contains("open")) {
     setChatSidebarOpen(false);
     $("#toggleChatSidebar").focus();

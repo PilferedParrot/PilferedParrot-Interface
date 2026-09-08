@@ -1,3 +1,16 @@
+## PilferedParrot Interface 0.7.0-rc.13 preview
+
+Every imported Chrome theme now uses a 60/100 legibility balance. Translucent sidebar,
+message, and composer surfaces reveal more of the original artwork. Low-contrast
+foreground colors move only as far toward light or dark as needed, preserving more
+of the theme's palette. Dialogs, form fields, and code retain solid reading surfaces.
+Original artwork, alignment, tiling, and toolbar images are preserved.
+
+Work and Chat share these rules. Sidebar actions, connection information, and history
+are grouped consistently; Preferences opens from its own button at the bottom.
+Linux source and Windows x64 packages include the same update. Reopen the updated
+app after active jobs finish. This remains a preview alongside stable Linux 0.6.1.
+
 ## PilferedParrot Interface 0.7.0-rc.12 preview
 
 Work and Chat share consistent spacing, rounded controls, and theme-aware surfaces.

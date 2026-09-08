@@ -499,7 +499,22 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
             self.assertEqual(styles["titleBorder"], "0px")
             self.assertEqual(styles["titleFilter"], "none")
             self.assertIn("url(", styles["toolbarImage"])
-            self.assertEqual(styles["labelColor"], "rgb(255, 255, 255)")
+            label_contrast = page.locator('.composer-setting > span').first.evaluate("""node => {
+                const rgba = color => {
+                    const ctx = document.createElement('canvas').getContext('2d');
+                    ctx.fillStyle = color; ctx.fillRect(0, 0, 1, 1);
+                    return [...ctx.getImageData(0, 0, 1, 1).data];
+                };
+                const text = rgba(getComputedStyle(node).color);
+                const panel = rgba(getComputedStyle(node.closest('.composer, .chat-composer')).backgroundColor);
+                const body = rgba(getComputedStyle(document.body).backgroundColor);
+                const background = panel.slice(0, 3).map((v, i) => v * panel[3] / 255 + body[i] * (1 - panel[3] / 255));
+                const lum = rgb => rgb.slice(0, 3).map(v => v / 255)
+                    .map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4)
+                    .reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
+                return (Math.max(lum(text), lum(background)) + .05) / (Math.min(lum(text), lum(background)) + .05);
+            }""")
+            self.assertGreaterEqual(label_contrast, 4.5)
 
             title_pixel = self._screenshot_pixel(
                 page.screenshot(clip={"x": 2, "y": 2, "width": 1, "height": 1}),
@@ -671,10 +686,12 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
         ratios = page.evaluate(
             """() => {
                 const rgb = value => {
-                    const match = value.match(/rgba?\\(([^)]+)\\)/);
-                    if (!match) return null;
-                    const values = match[1].split(',').map(Number);
-                    return values.slice(0, 3);
+                    const canvas = document.createElement('canvas');
+                    canvas.width = canvas.height = 1;
+                    const ctx = canvas.getContext('2d');
+                    ctx.fillStyle = value;
+                    ctx.fillRect(0, 0, 1, 1);
+                    return Array.from(ctx.getImageData(0, 0, 1, 1).data).slice(0, 3);
                 };
                 const luminance = value => {
                     const channels = rgb(value).map(channel => channel / 255).map(channel =>
@@ -702,7 +719,7 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
                     prompt: '#prompt',
                     sidebarHeading: '#technicalHistoryHeading',
                     sessionRow: '#chatList .chat-item',
-                    disclosure: '#preferencesDetails summary',
+                    disclosure: '#preferencesButton',
                     link: '#welcome a',
                 };
                 const result = Object.fromEntries(Object.entries(selectors).map(([name, selector]) =>

@@ -60,46 +60,6 @@ class SidebarBrowserEndToEndTests(unittest.TestCase):
         expect(page.get_by_role("textbox", name="Message Chat")).to_be_enabled(timeout=5_000)
         return page
 
-    def test_header_branding_stays_centered_without_obscuring_controls(self):
-        for mode, load, header, sidebar, title in (
-            ("work", self._load_work, ".topbar", "#sidebar", "#chatTitle"),
-            ("chat", self._load_chat, ".chat-header", "#chatWindowSidebar", "#chatThreadTitle"),
-        ):
-            page = load()
-            self.assertEqual(page.locator(f'{sidebar} img[src="/pilferedparrot-icon.png"]').count(), 0)
-            page.locator(title).evaluate("node => node.textContent = 'A long session title '.repeat(20)")
-            for native in (False, True):
-                page.evaluate("""native => {
-                    document.body.classList.toggle('native-window', native);
-                    document.querySelector('#nativeTitlebar').hidden = !native;
-                }""", native)
-                brand = ".native-titlebar-brand" if native else ".header-brand"
-                bar = "#nativeTitlebar" if native else header
-                for width in (320, 390, 600, 900, 1280, 1920):
-                    with self.subTest(mode=mode, native=native, width=width):
-                        page.set_viewport_size({"width": width, "height": 844})
-                        expect(page.locator(brand)).to_be_visible()
-                        metrics = page.evaluate("""({brand, bar}) => {
-                            const b = document.querySelector(brand).getBoundingClientRect();
-                            const h = document.querySelector(bar).getBoundingClientRect();
-                            const overlaps = [...document.querySelectorAll(`${bar} button, ${bar} .chat-meta, ${bar} #chatThreadTitle`)].filter(node => {
-                                const r = node.getBoundingClientRect();
-                                return r.width && r.height && r.left < b.right && r.right > b.left &&
-                                    r.top < b.bottom && r.bottom > b.top;
-                            }).map(node => node.id || node.getAttribute('aria-label'));
-                            return {offset: Math.abs((b.left + b.right - h.left - h.right) / 2),
-                                left: b.left, right: b.right, overlaps,
-                                scroll: document.documentElement.scrollWidth};
-                        }""", {"brand": brand, "bar": bar})
-                        self.assertLessEqual(metrics["offset"], 1)
-                        self.assertGreaterEqual(metrics["left"], 0)
-                        self.assertLessEqual(metrics["right"], width)
-                        self.assertEqual(metrics["overlaps"], [])
-                        self.assertLessEqual(metrics["scroll"], width)
-                if native:
-                    expect(page.locator(".header-brand")).to_be_hidden()
-            page.close()
-
     def _assert_resize_state(self, page, *, sidebar, toggle, close, conversation, input_selector):
         page.locator(toggle).click()
         expect(page.locator(sidebar)).to_have_class(re.compile(r"\bopen\b"))
@@ -191,3 +151,166 @@ class SidebarBrowserEndToEndTests(unittest.TestCase):
         expect(page.get_by_role("textbox", name="Message")).to_have_value("must choose a folder")
         page.get_by_role("button", name="Send").click()
         expect(page.get_by_text("Fake provider completed: must choose a folder", exact=True)).to_be_visible(timeout=5_000)
+
+    def test_workspace_and_connection_controls_stay_in_their_groups_across_themes(self):
+        page = self._load_work()
+        for colors in (None, ("#f7f3ea", "#171717", "#e4dac8", "#eee6d9"),
+                       ("#281443", "#ffffff", "#6a225e", "#c352b0")):
+            theme = {"active": False} if colors is None else {
+                "active": True, "id": "grouping-check", "version": colors[0],
+                "background": False, "colors": {
+                    "ntp_background": colors[0], "ntp_section": colors[0],
+                    "ntp_text": colors[1], "frame": colors[2], "toolbar": colors[3],
+                },
+            }
+            page.evaluate("theme => applyBrowserTheme(theme)", theme)
+            page.set_viewport_size({"width": 1280, "height": 900})
+            groups = page.evaluate("""() => {
+                const group = id => document.getElementById(id).closest('.sidebar-group');
+                return {
+                    workspace: ['newWorkSession', 'providerWindows', 'openChat', 'whiteboardButton']
+                        .every(id => group(id) && group(id) === group('newWorkSession')),
+                    connection: ['refreshBudgets', 'providerList', 'contextDetails', 'providerUpdate']
+                        .every(id => group(id) && group(id) === group('refreshBudgets')),
+                    separate: group('newWorkSession') !== group('refreshBudgets'),
+                };
+            }""")
+            self.assertEqual(groups, {"workspace": True, "connection": True, "separate": True})
+            for hovered in (False, True):
+                colors_by_button = []
+                for selector in ('#newWorkSession', '#providerWindows', '#openChat', '#whiteboardButton'):
+                    if hovered:
+                        page.locator(selector).hover()
+                    else:
+                        page.locator('#prompt').hover()
+                    colors_by_button.append(page.locator(selector).evaluate(
+                        "node => { const s = getComputedStyle(node); return [s.backgroundColor, s.color, s.borderColor]; }",
+                    ))
+                self.assertTrue(all(value == colors_by_button[0] for value in colors_by_button))
+
+        # Whiteboard moved from the header into the drawer; keyboard opening and
+        # native dialog focus restoration must still work on a small screen.
+        page.set_viewport_size({"width": 320, "height": 568})
+        page.locator('#openSidebar').click()
+        page.locator('#whiteboardButton').focus()
+        page.keyboard.press('Enter')
+        expect(page.locator('#whiteboardDialog')).to_be_visible()
+        page.keyboard.press('Escape')
+        expect(page.locator('#whiteboardButton')).to_be_focused()
+
+    def test_history_heading_and_entries_share_one_box_with_local_scrolling(self):
+        for loader, sidebar, toggle, list_id in (
+            (self._load_work, '#sidebar', '#openSidebar', '#chatList'),
+            (self._load_chat, '#chatWindowSidebar', '#toggleChatSidebar', '#chatHistoryList'),
+        ):
+            page = loader()
+            # Add enough representative rows to exercise the scroll geometry.
+            page.locator(list_id).evaluate("""node => {
+                node.replaceChildren(...Array.from({length: 30}, (_, i) => {
+                    const row = document.createElement('button');
+                    row.className = 'chat-item';
+                    row.textContent = `Session ${i + 1} — a long project name to wrap`;
+                    return row;
+                }));
+            }""")
+            for width, height in ((1280, 900), (320, 568)):
+                page.set_viewport_size({"width": width, "height": height})
+                if width == 320:
+                    page.locator(toggle).click()
+                for expanded in (False, True):
+                    page.locator('#contextDetails').evaluate('(node, value) => node.open = value', expanded)
+                    page.locator(list_id).scroll_into_view_if_needed()
+                    metrics = page.locator(list_id).evaluate("""node => {
+                        const group = node.closest('.history-group');
+                        const heading = group.querySelector('.history-heading');
+                        const top = heading.getBoundingClientRect().top;
+                        node.scrollTop = node.scrollHeight;
+                        const box = group.getBoundingClientRect();
+                        const list = node.getBoundingClientRect();
+                        return {
+                            border: parseFloat(getComputedStyle(group).borderTopWidth),
+                            listBorder: parseFloat(getComputedStyle(node).borderTopWidth),
+                            scroll: node.scrollTop,
+                            stableHeading: heading.getBoundingClientRect().top === top,
+                            contained: list.top >= box.top && list.bottom <= box.bottom,
+                            height: node.clientHeight,
+                        };
+                    }""")
+                    self.assertGreater(metrics['border'], 0)
+                    self.assertEqual(metrics['listBorder'], 0)
+                    self.assertGreater(metrics['scroll'], 0)
+                    self.assertTrue(metrics['stableHeading'])
+                    self.assertTrue(metrics['contained'])
+                    self.assertGreaterEqual(metrics['height'], 48)
+                    self.assertLessEqual(page.locator(sidebar).evaluate('node => node.scrollWidth'),
+                                         page.locator(sidebar).evaluate('node => node.clientWidth'))
+                    self.assertLessEqual(page.locator('body').evaluate('node => node.scrollWidth'), width)
+            page.close()
+
+    def test_preferences_is_separate_reachable_and_restores_keyboard_focus(self):
+        for loader, sidebar, toggle in (
+            (self._load_work, '#sidebar', '#openSidebar'),
+            (self._load_chat, '#chatWindowSidebar', '#toggleChatSidebar'),
+        ):
+            page = loader()
+            button = page.get_by_role('button', name='Preferences', exact=True)
+            dialog = page.get_by_role('dialog', name='Preferences', exact=True)
+            for width, height in ((1280, 900), (320, 568)):
+                page.set_viewport_size({'width': width, 'height': height})
+                if width == 320:
+                    page.locator(toggle).click()
+                # Measure settled layout, not an in-flight mobile drawer transform.
+                page.locator(sidebar).evaluate(
+                    'async node => { await Promise.all(node.getAnimations().map(animation => animation.finished)); }',
+                )
+                # Even expanded telemetry and overflowing history cannot push
+                # the application settings control out of the viewport.
+                page.locator('#contextDetails').evaluate('node => node.open = true')
+                content = page.locator('.sidebar-content')
+                for scroll in ('0', 'node.scrollHeight'):
+                    content.evaluate(f'node => node.scrollTop = {scroll}')
+                    geometry = button.evaluate("""node => {
+                        const rect = node.getBoundingClientRect();
+                        const content = document.querySelector('.sidebar-content').getBoundingClientRect();
+                        const style = getComputedStyle(node);
+                        return {separate: !node.closest('.sidebar-group'),
+                            visible: rect.top >= 0 && rect.bottom <= innerHeight,
+                            below: rect.top >= content.bottom,
+                            border: parseFloat(style.borderTopWidth),
+                            radius: style.borderRadius};
+                    }""")
+                    self.assertTrue(geometry['separate'])
+                    self.assertTrue(geometry['visible'])
+                    self.assertTrue(geometry['below'])
+                    self.assertEqual(geometry['border'], 1)
+                    self.assertEqual(geometry['radius'], '10px')
+                history_before = page.locator('.history-group').bounding_box()
+                button.focus()
+                page.keyboard.press('Enter')
+                expect(dialog).to_be_visible()
+                self.assertEqual(page.locator('.history-group').bounding_box(), history_before)
+                self.assertTrue(dialog.evaluate("node => node.matches(':modal')"))
+                expect(dialog.get_by_role('button', name='Close', exact=True)).to_be_focused()
+                for _ in range(5):
+                    page.keyboard.press('Tab')
+                    self.assertTrue(dialog.evaluate(
+                        'node => node.contains(document.activeElement) || document.activeElement === document.body',
+                    ))
+                dialog.get_by_role('button', name='Close', exact=True).focus()
+                button.evaluate('node => node.focus()')
+                expect(dialog.get_by_role('button', name='Close', exact=True)).to_be_focused()
+                self.assertLessEqual(dialog.evaluate('node => node.scrollWidth'),
+                                     dialog.evaluate('node => node.clientWidth'))
+                page.keyboard.press('Escape')
+                expect(dialog).to_be_hidden()
+                expect(button).to_be_focused()
+                if width == 320:
+                    expect(page.locator(sidebar)).to_have_class(re.compile(r'\bopen\b'))
+                button.click()
+                dialog.get_by_role('button', name='Close', exact=True).click()
+                expect(dialog).to_be_hidden()
+                expect(button).to_be_focused()
+                if width == 320:
+                    page.keyboard.press('Escape')
+                    expect(page.locator(toggle)).to_be_focused()
+            page.close()

@@ -286,7 +286,7 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertRegex(self.app_css, r"\.chat-window\s*\{[^}]*grid-template-columns:[^;}]*var\(--chat-sidebar-width")
         self.assertIn(".chat-sidebar-resizer { display: none; }", self.app_css)
 
-    def test_chat_history_precedes_controls_and_has_reserved_height(self):
+    def test_chat_context_precedes_history_and_history_has_reserved_height(self):
         history = self.chat_html.find('class="history-group chat-window-history"')
         model = self.chat_html.find('id="chatModelSelect"')
         context = self.chat_html.find('class="chat-window-context sidebar-disclosure"')
@@ -294,7 +294,7 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertGreaterEqual(model, 0, "Chat model controls are missing")
         self.assertGreaterEqual(context, 0, "Chat context controls are missing")
         self.assertLess(history, model, "Chat history must appear before model controls")
-        self.assertLess(history, context, "Chat history must appear before context controls")
+        self.assertLess(context, history, "Chat context belongs with status above history")
 
         rule = re.search(r"(?m)^\.chat-window-history\s*\{([^}]*)\}", self.app_css)
         self.assertIsNotNone(rule, "Chat history CSS rule is missing")
@@ -713,7 +713,7 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertIn('const stagedImages = {}', apply_theme)
         self.assertIn('revokeStaged()', apply_theme)
         refresh_theme = _function_body(self.app_js, "refreshBrowserTheme")
-        self.assertIn('api("/api/browser/theme"', refresh_theme)
+        self.assertRegex(refresh_theme, r'api\("/api/browser/theme"(?:,|\))')
         self.assertIn('const generation = ++themeRefreshGeneration', refresh_theme)
         self.assertIn('generation !== themeRefreshGeneration', refresh_theme)
         self.assertIn('window.addEventListener("focus"', self.app_js)
@@ -793,7 +793,7 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertIn('revokeStaged()', apply_theme)
         self.assertIn('meta[name="theme-color"]', apply_theme)
         refresh_theme = _function_body(self.chat_js, "refreshBrowserTheme")
-        self.assertIn('api("/api/browser/theme"', refresh_theme)
+        self.assertRegex(refresh_theme, r'api\("/api/browser/theme"(?:,|\))')
         init = _function_body(self.chat_js, "init")
         self.assertIn('refreshBrowserTheme()', init)
         for selector in (
@@ -807,10 +807,6 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertRegex(
             self.app_css,
             r"body\.chrome-theme\s*\{[^}]*--chrome-theme-background-image",
-        )
-        self.assertRegex(
-            self.app_css,
-            r"body\.chrome-theme\s+:is\(\.shell, \.chat-window\)\s*\{[^}]*background:\s*transparent",
         )
 
     def test_unneeded_delete_and_composer_labels_are_absent(self):
@@ -856,11 +852,12 @@ class FrontendInvariantTests(unittest.TestCase):
             )
             self.assertIsNotNone(named, f".{selector} must be a named inline-size container")
 
-    def test_workspace_actions_lead_the_sidebar_without_duplicate_branding(self):
+    def test_workspace_actions_are_grouped_below_the_sidebar_brand(self):
         sidebar = self.index_html.split('<aside class="sidebar"', 1)[1].split("</aside>", 1)[0]
-        self.assertNotIn('/pilferedparrot-icon.png', sidebar)
+        brand_end = sidebar.index('</div>')
         actions_start = sidebar.index('<nav class="sidebar-actions"')
         provider_status_start = sidebar.index('<section class="provider-status"')
+        self.assertLess(brand_end, actions_start)
         self.assertLess(actions_start, provider_status_start)
         for control in ('newWorkSession', 'providerWindows', 'openChat'):
             self.assertEqual(sidebar.count(f'id="{control}"'), 1)

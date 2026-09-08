@@ -250,7 +250,7 @@ class DesignBrowserEndToEndTests(unittest.TestCase):
             for width, height in ((1280, 900), (320, 568)):
                 page.set_viewport_size({"width": width, "height": height})
                 disclosures = page.locator(".sidebar-disclosure")
-                expect(disclosures).to_have_count(2)
+                expect(disclosures).to_have_count(1)
                 for index in range(disclosures.count()):
                     styles = disclosures.nth(index).evaluate(
                         "node => { const s = getComputedStyle(node); return [s.borderTopWidth, s.borderBottomWidth]; }",

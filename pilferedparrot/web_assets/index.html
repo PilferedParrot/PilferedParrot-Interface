@@ -34,64 +34,56 @@
         <button class="icon-button mobile-close" id="closeSidebar" aria-label="Close sidebar">×</button>
       </div>
 
-      <nav class="sidebar-actions" aria-label="Workspace actions">
-        <button class="new-work-session" id="newWorkSession" disabled
-                title="Start a new work session"
-                aria-label="Start a new work session">
-          <span aria-hidden="true">＋</span><span>New Session</span>
-        </button>
-        <button class="provider-window-button" id="providerWindows" disabled
-                title="Open the provider dashboard"
-                aria-label="Provider dashboard" aria-haspopup="dialog"
-                aria-controls="providerDialog">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/>
-          </svg>
-          <span>Providers</span>
-        </button>
-        <button class="open-chat-button" id="openChat" disabled title="Open Chat in its own window" aria-label="Open Chat window">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14v10H9l-4 3v-13Z"/></svg>
-          <span>Chat</span>
-        </button>
-      </nav>
-
-      <section class="provider-status" aria-labelledby="providerHeading">
-        <div class="section-heading">
-          <span id="providerHeading">Connection</span>
-          <button id="refreshBudgets" disabled title="Refresh provider status" aria-label="Refresh provider status"><span aria-hidden="true">↻</span></button>
+      <div class="sidebar-content">
+        <div class="sidebar-group workspace-group">
+          <nav class="sidebar-actions" aria-label="Workspace actions">
+            <button class="new-work-session" id="newWorkSession" disabled
+                    title="Start a new work session"
+                    aria-label="Start a new work session">
+              <span aria-hidden="true">＋</span><span>New Session</span>
+            </button>
+            <button class="provider-window-button" id="providerWindows" disabled
+                    title="Open the provider dashboard"
+                    aria-label="Provider dashboard" aria-haspopup="dialog"
+                    aria-controls="providerDialog">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/>
+              </svg>
+              <span>Providers</span>
+            </button>
+            <button class="open-chat-button" id="openChat" disabled title="Open Chat in its own window" aria-label="Open Chat window">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14v10H9l-4 3v-13Z"/></svg>
+              <span>Chat</span>
+            </button>
+          </nav>
+          <button type="button" class="sidebar-whiteboard-button" id="whiteboardButton" aria-haspopup="dialog" aria-controls="whiteboardDialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v12H4zM8 21l4-5 4 5M8 8h8M8 12h5"/></svg><span>Whiteboard</span></button>
         </div>
-        <div id="providerList" class="provider-list"></div>
-      </section>
 
-      <section class="history-group technical-history" aria-labelledby="technicalHistoryHeading">
-        <div class="history-heading" id="technicalHistoryHeading">Session history</div>
-        <nav class="chat-list" id="chatList" aria-label="Session history"></nav>
-      </section>
+        <div class="sidebar-group connection-group">
+          <section class="provider-status" aria-labelledby="providerHeading">
+            <div class="section-heading">
+              <span id="providerHeading">Connection</span>
+              <button id="refreshBudgets" disabled title="Refresh provider status" aria-label="Refresh provider status"><span aria-hidden="true">↻</span></button>
+            </div>
+            <div id="providerList" class="provider-list"></div>
+          </section>
+          <details class="sidebar-context sidebar-disclosure" id="contextDetails">
+            <summary id="sessionContextHeading">Context window <span id="contextSummary">No data yet</span></summary>
+            <div class="context-pie-card" id="technicalContext"></div>
+          </details>
+          <div id="providerUpdate" class="provider-update" role="status" hidden></div>
+        </div>
 
-      <details class="sidebar-context sidebar-disclosure" id="contextDetails">
-        <summary id="sessionContextHeading">Context window <span id="contextSummary">No data yet</span></summary>
-        <div class="context-pie-card" id="technicalContext"></div>
-      </details>
-
-      <details class="sidebar-appearance sidebar-disclosure" id="preferencesDetails">
-        <summary>Preferences</summary>
-        <button class="chrome-theme-button" id="notificationPreferences" type="button" disabled
-                title="Manage desktop notifications">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>
-          </svg>
-          <span id="notificationPreferencesLabel">Desktop notifications</span>
-        </button>
-        <button class="chrome-theme-button" id="chromeTheme" type="button" disabled
-                title="Change theme">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 3a9 9 0 1 0 0 18h1.4a2.1 2.1 0 0 0 0-4.2h-.7a1.8 1.8 0 0 1 0-3.6H15A6 6 0 0 0 12 3Z"/>
-            <circle cx="7.5" cy="10" r=".8"/><circle cx="9.5" cy="6.8" r=".8"/>
-            <circle cx="13.3" cy="6.2" r=".8"/>
-          </svg>
-          <span id="chromeThemeLabel">Change theme</span>
-        </button>
-      </details>
+        <section class="history-group technical-history" aria-labelledby="technicalHistoryHeading">
+          <div class="history-heading" id="technicalHistoryHeading">Session history</div>
+          <nav class="chat-list" id="chatList" aria-label="Session history"></nav>
+        </section>
+      </div>
+      <button type="button" class="sidebar-preferences-button" id="preferencesButton"
+              aria-haspopup="dialog" aria-controls="preferencesDialog">
+        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Zm8 3.5-2.1-.8a6.3 6.3 0 0 0-.5-1.2l.9-2-1.8-1.8-2 .9a6.3 6.3 0 0 0-1.2-.5L12.5 4h-1l-.8 2.1a6.3 6.3 0 0 0-1.2.5l-2-.9-1.8 1.8.9 2a6.3 6.3 0 0 0-.5 1.2L4 11.5v1l2.1.8c.1.4.3.8.5 1.2l-.9 2 1.8 1.8 2-.9c.4.2.8.4 1.2.5l.8 2.1h1l.8-2.1c.4-.1.8-.3 1.2-.5l2 .9 1.8-1.8-.9-2c.2-.4.4-.8.5-1.2l2.1-.8v-1Z"/></svg>
+        <span>Preferences</span>
+      </button>
     </aside>
 
     <div class="pane-resizer sidebar-resizer" id="sidebarResizer" role="separator"
@@ -114,9 +106,6 @@
         <div class="header-brand" aria-label="PilferedParrot home">
           <img src="/pilferedparrot-icon.png" alt=""><span>PilferedParrot</span>
         </div>
-        <div class="header-actions">
-          <button type="button" class="utility-button" id="whiteboardButton" aria-haspopup="dialog" aria-controls="whiteboardDialog">Whiteboard</button>
-        </div>
       </header>
 
       <section class="conversation" id="conversation" aria-live="polite">
@@ -129,7 +118,6 @@
       </section>
 
       <footer class="composer-wrap">
-        <div id="providerUpdate" class="provider-update" role="status" hidden></div>
         <form class="composer" id="composer">
           <textarea id="prompt" rows="1" maxlength="40000" disabled placeholder="Describe what you want done" aria-label="Message"></textarea>
           <div class="composer-bar">
@@ -146,6 +134,24 @@
 
   </div>
 
+  <dialog id="preferencesDialog" aria-labelledby="preferencesTitle">
+    <div class="dialog-card preferences-dialog-card">
+      <div class="dialog-heading">
+        <h2 id="preferencesTitle">Preferences</h2>
+        <button type="button" class="dialog-close" data-dialog-close aria-label="Close" title="Close"><span aria-hidden="true">×</span></button>
+      </div>
+      <div class="preferences-actions">
+        <button class="chrome-theme-button secondary" id="notificationPreferences" type="button" disabled title="Manage desktop notifications">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
+          <span id="notificationPreferencesLabel">Desktop notifications</span>
+        </button>
+        <button class="chrome-theme-button secondary" id="chromeTheme" type="button" disabled title="Change theme">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18h1.4a2.1 2.1 0 0 0 0-4.2h-.7a1.8 1.8 0 0 1 0-3.6H15A6 6 0 0 0 12 3Z"/><circle cx="7.5" cy="10" r=".8"/><circle cx="9.5" cy="6.8" r=".8"/><circle cx="13.3" cy="6.2" r=".8"/></svg>
+          <span id="chromeThemeLabel">Change theme</span>
+        </button>
+      </div>
+    </div>
+  </dialog>
   <dialog id="projectDialog" aria-labelledby="projectTitle">
     <form method="dialog" class="dialog-card" id="projectForm">
       <div class="dialog-heading">

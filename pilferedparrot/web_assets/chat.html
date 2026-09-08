@@ -33,34 +33,33 @@
                 aria-label="Close chat controls" title="Close chat controls">×</button>
       </div>
 
-      <button class="chat-new-chat" id="resetChat" type="button" disabled
-              aria-label="Start a new chat"
-              title="Archive the current chat and start a new one">
-        <span aria-hidden="true">＋</span> New chat
+      <div class="sidebar-content">
+        <div class="sidebar-group chat-workspace-group">
+          <button class="chat-new-chat" id="resetChat" type="button" disabled
+                  aria-label="Start a new chat"
+                  title="Archive the current chat and start a new one">
+            <span aria-hidden="true">＋</span> New chat
+          </button>
+        </div>
+
+        <div class="sidebar-group chat-context-group">
+          <details class="chat-window-context sidebar-disclosure" id="contextDetails">
+            <summary id="chatContextHeading">Context window <span id="contextSummary">No data yet</span></summary>
+            <div class="context-pie-card" id="chatContext"></div>
+          </details>
+          <div id="providerUpdate" class="provider-update" role="status" hidden></div>
+        </div>
+
+        <section class="history-group chat-window-history" aria-labelledby="chatHistoryHeading">
+          <div class="history-heading" id="chatHistoryHeading">Chat history</div>
+          <nav class="chat-list" id="chatHistoryList" aria-label="Chat history"></nav>
+        </section>
+      </div>
+      <button type="button" class="sidebar-preferences-button" id="preferencesButton"
+              aria-haspopup="dialog" aria-controls="preferencesDialog">
+        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Zm8 3.5-2.1-.8a6.3 6.3 0 0 0-.5-1.2l.9-2-1.8-1.8-2 .9a6.3 6.3 0 0 0-1.2-.5L12.5 4h-1l-.8 2.1a6.3 6.3 0 0 0-1.2.5l-2-.9-1.8 1.8.9 2a6.3 6.3 0 0 0-.5 1.2L4 11.5v1l2.1.8c.1.4.3.8.5 1.2l-.9 2 1.8 1.8 2-.9c.4.2.8.4 1.2.5l.8 2.1h1l.8-2.1c.4-.1.8-.3 1.2-.5l2 .9 1.8-1.8-.9-2c.2-.4.4-.8.5-1.2l2.1-.8v-1Z"/></svg>
+        <span>Preferences</span>
       </button>
-
-      <section class="history-group chat-window-history" aria-labelledby="chatHistoryHeading">
-        <div class="history-heading" id="chatHistoryHeading">Chat history</div>
-        <nav class="chat-list" id="chatHistoryList" aria-label="Chat history"></nav>
-      </section>
-
-      <details class="chat-window-context sidebar-disclosure" id="contextDetails">
-        <summary id="chatContextHeading">Context window <span id="contextSummary">No data yet</span></summary>
-        <div class="context-pie-card" id="chatContext"></div>
-      </details>
-
-      <details class="sidebar-disclosure" id="preferencesDetails">
-        <summary>Preferences</summary>
-        <button class="chrome-theme-button" id="notificationPreferences" type="button" disabled
-                title="Manage desktop notifications">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>
-          </svg>
-          <span id="notificationPreferencesLabel">Desktop notifications</span>
-        </button>
-
-      </details>
-
     </aside>
 
     <div class="pane-resizer chat-sidebar-resizer" id="chatResizer" role="separator"
@@ -84,7 +83,6 @@
       </header>
       <section class="chat-messages" id="chatMessages" aria-live="polite"></section>
       <footer class="chat-composer-wrap">
-        <div id="providerUpdate" class="provider-update" role="status" hidden></div>
         <form class="chat-composer" id="chatComposer">
           <textarea id="chatPrompt" rows="1" maxlength="40000" disabled placeholder="Ask Chat…" aria-label="Message Chat"></textarea>
           <div class="chat-composer-bar">
@@ -100,6 +98,20 @@
       </footer>
     </section>
   </main>
+  <dialog id="preferencesDialog" aria-labelledby="preferencesTitle">
+    <div class="dialog-card preferences-dialog-card">
+      <div class="dialog-heading">
+        <h2 id="preferencesTitle">Preferences</h2>
+        <button type="button" class="dialog-close" data-dialog-close aria-label="Close" title="Close"><span aria-hidden="true">×</span></button>
+      </div>
+      <div class="preferences-actions">
+        <button class="chrome-theme-button secondary" id="notificationPreferences" type="button" disabled title="Manage desktop notifications">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
+          <span id="notificationPreferencesLabel">Desktop notifications</span>
+        </button>
+      </div>
+    </div>
+  </dialog>
   <div class="toast" id="toast" popover="manual" role="status" aria-live="polite" aria-atomic="true"></div>
   <script src="/markdown.js"></script>
   <script src="/identity.js"></script>
