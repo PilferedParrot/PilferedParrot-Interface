@@ -16,9 +16,9 @@ the Windows 10/11 x64 build is a portable preview. Preview downloads are availab
 [Report a bug](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new?template=bug_report.yml) ·
 [Share feedback](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new/choose)
 
-![PilferedParrot Work preview](docs/assets/work-preview.png)
+![Screenshot of PilferedParrot Work (0.7.0-rc.14) with a new session](docs/assets/work-preview.png)
 
-*Work with Darker tone, Minimal surfaces, and Stronger readability. This preview conversation is synthetic.*
+*Screenshot of PilferedParrot Work (0.7.0-rc.14) with a new session.*
 
 Preview rc.14 lets you choose how themes feel. Open **Preferences → Appearance**
 in Work or Chat ([view the controls](docs/assets/appearance-preferences.png)):

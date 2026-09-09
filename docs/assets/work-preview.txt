@@ -1,0 +1,9 @@
+work-preview.png is an unedited Chromium screenshot of the running
+PilferedParrot Work interface, captured on 2026-09-08 from version
+0.7.0-rc.14 (source commit 7100557180a3d8b7dda6d4e00c13089bb52a7b37).
+
+The production PilferedParrotApp and HTTP handler ran locally with separate,
+temporary session storage. No mocked provider responses, injected conversation,
+DOM changes, or image generation were used. The screenshot shows a new session,
+live local provider status, and the installed browser theme with default
+appearance settings. Chromium captured the viewport at 1440 x 1000 pixels.
