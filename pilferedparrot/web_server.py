@@ -30,7 +30,7 @@ ASSET_ROOT = Path(__file__).resolve().parent / "web_assets"
 RUNTIME_ROOT = Path(__file__).resolve().parent
 ASSET_NAMES = (
     "index.html", "chat.html", "app.css", "markdown.js", "identity.js", "provider-updates.js", "app.js", "chat.js", "icon.svg",
-    "pilferedparrot-icon.png", "company-logo.png", "company-logo-dark.png", "whiteboard-ui.js",
+    "pilferedparrot-icon.png", "company-logo.png", "company-logo-dark.png", "whiteboard-ui.js", "appearance.js",
 )
 API_GENERATION = 22
 
@@ -410,6 +410,8 @@ def make_handler(
                 self._asset("app.css", "text/css; charset=utf-8")
             elif path == "/app.js":
                 self._asset("app.js", "text/javascript; charset=utf-8")
+            elif path == "/appearance.js":
+                self._asset("appearance.js", "text/javascript; charset=utf-8")
             elif path == "/markdown.js":
                 self._asset("markdown.js", "text/javascript; charset=utf-8")
             elif path == "/identity.js":

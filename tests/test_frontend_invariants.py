@@ -691,7 +691,8 @@ class FrontendInvariantTests(unittest.TestCase):
             self.index_html,
             r'id="chromeTheme"[^>]*>[\s\S]*?Change theme[\s\S]*?</button>',
         )
-        self.assertNotIn("Appearance", self.index_html)
+        self.assertIn("Appearance", self.index_html)
+        self.assertIn("Appearance", self.chat_html)
         self.assertNotIn("private Chrome window", self.index_html)
         self.assertNotIn("chromeThemeNote", self.index_html)
         self.assertIn('name="theme-color"', self.index_html)
