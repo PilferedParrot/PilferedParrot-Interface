@@ -1,3 +1,16 @@
+## PilferedParrot Interface 0.7.0-rc.14 preview
+
+Appearance preferences in Work and Chat now offer an original or darker tone,
+Minimal, Balanced, or Maximal surfaces, and stronger text separation. Minimal
+reduces large panel fills so the background can show through; Maximal makes
+surface boundaries more pronounced. Defaults preserve the previous interpretation.
+Preferences apply immediately, persist in the browser profile, and synchronize
+between open Work and Chat windows. Original theme artwork placement is preserved.
+
+The README screenshot and Linux/source and Windows x64 packages are updated.
+Reopen the updated app after active jobs finish. This remains a preview alongside
+stable Linux 0.6.1.
+
 ## PilferedParrot Interface 0.7.0-rc.13 preview
 
 Every imported Chrome theme now uses a 60/100 legibility balance. Translucent sidebar,

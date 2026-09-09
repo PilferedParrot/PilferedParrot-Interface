@@ -1472,9 +1472,84 @@ body.chrome-theme :is(.sidebar, .chat-window-sidebar) .history-group .chat-item:
   background: color-mix(in srgb, var(--panel) 18%, transparent);
 }
 .preferences-actions { display: grid; gap: 8px; }
+.appearance-preferences {
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text);
+}
+.appearance-preferences legend { padding: 0 5px; font-weight: 700; }
+.appearance-help { margin: 0 0 9px; color: var(--muted); font-size: 1em; }
+.appearance-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.dialog-card .appearance-options label {
+  margin: 0;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+.appearance-options label:has(input:checked) {
+  border-color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 14%, transparent);
+}
+.appearance-options input { accent-color: var(--blue); width: 16px; height: 16px; padding: 0; margin: 0; flex: none; }
 body.chrome-theme :is(.sidebar, .chat-window-sidebar) :is(.sidebar-group, .history-group, .chat-window-history, .sidebar-preferences-button) {
   background: var(--chrome-theme-sidebar-surface);
 }
+body.chrome-theme :is(.welcome, .message-content, .chat-message-body, .dialog-card) a {
+  color: var(--chrome-theme-link);
+  text-underline-offset: 2px;
+}
+/* Structural surfaces vary independently from solid dialogs, fields and code. */
+body[data-appearance-surface="minimal"] {
+  --chrome-theme-sidebar-surface: color-mix(in srgb, var(--panel) 8%, transparent);
+  --chrome-theme-message-surface: color-mix(in srgb, var(--panel) 10%, transparent);
+  --chrome-theme-composer-surface: color-mix(in srgb, var(--panel) 12%, transparent);
+}
+body[data-appearance-surface="minimal"] :is(.sidebar-group, .history-group, .sidebar-preferences-button,
+  .message, .chat-message, .welcome, .composer, .chat-composer) {
+  background: color-mix(in srgb, var(--panel) 10%, transparent);
+  box-shadow: none;
+  border-color: color-mix(in srgb, var(--text) 16%, transparent);
+}
+body[data-appearance-surface="minimal"] :is(.sidebar-group, .history-group, .sidebar-preferences-button,
+  .message, .chat-message, .welcome, .composer, .chat-composer) {
+  text-shadow: 0 1px 2px var(--appearance-halo), 0 0 4px var(--appearance-halo);
+}
+body[data-appearance-surface="maximal"] {
+  --chrome-theme-sidebar-surface: var(--panel);
+  --chrome-theme-message-surface: var(--panel);
+  --chrome-theme-composer-surface: var(--panel);
+}
+body[data-appearance-surface="maximal"] :is(.sidebar-group, .history-group, .sidebar-preferences-button,
+  .message, .chat-message, .welcome, .composer, .chat-composer) {
+  background: var(--panel);
+  border: 1px solid color-mix(in srgb, var(--text) 30%, var(--panel));
+  box-shadow: 0 5px 18px #0003;
+}
+body[data-appearance-readability="stronger"] :is(.sidebar-group, .history-group, .sidebar-preferences-button,
+  .message, .chat-message, .welcome, .composer, .chat-composer) {
+  --muted: var(--text);
+  --faint: var(--text);
+  --sidebar-muted: var(--text);
+  --sidebar-faint: var(--text);
+  text-shadow: -1px 0 1px var(--appearance-halo), 1px 0 1px var(--appearance-halo),
+    0 -1px 1px var(--appearance-halo), 0 1px 1px var(--appearance-halo), 0 0 5px var(--appearance-halo);
+}
+body :is(dialog, select, pre, code, .send-button) { text-shadow: none; }
+body[data-appearance-surface="minimal"] :is(.sidebar-group, .history-group, .sidebar-preferences-button, .composer, .chat-composer) :is(button, textarea) { text-shadow: inherit; }
+/* The narrow drawer needs separation from the conversation behind it. */
+@media (max-width: 600px) {
+  body[data-appearance-surface="minimal"] :is(.sidebar, .chat-window-sidebar) { background: var(--bg); }
+}
+.appearance-title { margin: 8px 0 0; font-size: 1.05rem; }
 @media (max-width: 600px) {
   .sidebar-group :is(.sidebar-actions button, .chat-new-chat, .sidebar-whiteboard-button),
   .sidebar-preferences-button { min-height: 44px; }

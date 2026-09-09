@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$Version = "0.7.0-rc.13"
+$Version = "0.7.0-rc.14"
 $PyInstallerVersion = if ($env:PYINSTALLER_VERSION) { $env:PYINSTALLER_VERSION } else { "6.15.0" }
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $Dist = Join-Path $Root "dist"

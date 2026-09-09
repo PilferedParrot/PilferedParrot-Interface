@@ -105,6 +105,32 @@
         <button type="button" class="dialog-close" data-dialog-close aria-label="Close" title="Close"><span aria-hidden="true">×</span></button>
       </div>
       <div class="preferences-actions">
+        <h3 class="appearance-title">Appearance</h3>
+        <fieldset class="appearance-preferences">
+          <legend>Theme tone</legend>
+          <p class="appearance-help">Choose how much of the theme’s lightness comes through.</p>
+          <div class="appearance-options">
+            <label><input type="radio" name="appearanceTone" value="original"> <span>Original</span></label>
+            <label><input type="radio" name="appearanceTone" value="darker"> <span>Darker</span></label>
+          </div>
+        </fieldset>
+        <fieldset class="appearance-preferences">
+          <legend>Surface treatment</legend>
+          <p class="appearance-help">Set the visual weight of panels and cards.</p>
+          <div class="appearance-options">
+            <label><input type="radio" name="appearanceSurface" value="minimal"> <span>Minimal</span></label>
+            <label><input type="radio" name="appearanceSurface" value="balanced"> <span>Balanced</span></label>
+            <label><input type="radio" name="appearanceSurface" value="maximal"> <span>Maximal</span></label>
+          </div>
+        </fieldset>
+        <fieldset class="appearance-preferences">
+          <legend>Readability</legend>
+          <p class="appearance-help">Make text easier to separate from artwork and texture.</p>
+          <div class="appearance-options">
+            <label><input type="radio" name="appearanceReadability" value="standard"> <span>Standard</span></label>
+            <label><input type="radio" name="appearanceReadability" value="stronger"> <span>Stronger</span></label>
+          </div>
+        </fieldset>
         <button class="chrome-theme-button secondary" id="notificationPreferences" type="button" disabled title="Manage desktop notifications">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
           <span id="notificationPreferencesLabel">Desktop notifications</span>
@@ -116,6 +142,7 @@
   <script src="/markdown.js"></script>
   <script src="/identity.js"></script>
   <script src="/provider-updates.js"></script>
+  <script src="/appearance.js"></script>
   <script src="/chat.js"></script>
 </body>
 </html>

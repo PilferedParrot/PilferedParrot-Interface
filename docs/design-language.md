@@ -47,7 +47,7 @@ Cancellation must work even when a required field is empty.
 Use surface and foreground tokens together. Dialog fields, labels, secondary
 buttons, notices, and status badges must inherit the panel foreground instead of
 hard-coded pale text. Derive subtle borders from the panel foreground so imported
-light, dark, and vivid themes retain visible controls. The visual target is 60/100
+light, dark, and vivid themes retain visible controls. The default Balanced treatment targets 60/100
 legibility, with more of the artwork visible through interface surfaces.
 Theme-authored foregrounds
 are kept when they meet 4.5:1 contrast; otherwise blend them toward the suitable
@@ -59,7 +59,15 @@ not a guarantee for every pixel of arbitrary artwork. Use themed translucent
 surfaces for sidebar groups
 (about 72% opaque), messages (about 88%), and composers (about 90%), while dialogs,
 fields, code, and other controls that need a crisp boundary remain solid. Keep the
-user's original theme artwork, scale, and positioning without dimming or blur.
+user's original theme artwork, scale, and positioning.
+
+Appearance preferences are shared by Work and Chat. Original tone preserves the
+authored palette; Darker offers a darker interpretation. Minimal removes most
+structural panel fill and uses text separation to keep content readable. Maximal
+adds more opaque surfaces and visible boundaries. Stronger readability offers
+additional text separation. Keep these independent choices, persist them in the
+browser profile, and synchronize open windows. Preserve the existing Original /
+Balanced default, and keep dialogs and form controls usable in every combination.
 
 Platform-owned windows, authentication pages, browser permission prompts, and the
 Chrome theme gallery retain their platform UI. The outer Windows caption remains
