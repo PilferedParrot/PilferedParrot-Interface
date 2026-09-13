@@ -42,6 +42,13 @@ desktop and 44 px on narrow screens. Dialogs fit the viewport and allow vertical
 scrolling; long paths, provider labels, and errors wrap without hiding controls.
 Cancellation must work even when a required field is empty.
 
+Wide Markdown tables and preformatted content offer an expand control at the upper
+right only while they overflow their available width. Keep this control outside
+the horizontal scroll area. The expanded dialog fills the viewport, follows the
+panel palette, retains readable content formatting, and supports Close and Escape.
+Nested Work activity and avatar tiles use the surrounding message surface instead
+of adding opaque boxes over imported artwork.
+
 ## Themes
 
 Use surface and foreground tokens together. Dialog fields, labels, secondary

@@ -237,6 +237,56 @@ class ThemeBalanceBrowserEndToEndTests(unittest.TestCase):
                 self.assertFalse(styles["codeColor"] == "rgba(0, 0, 0, 0)")
                 self.assertEqual(page.locator("body").get_attribute("data-chrome-theme"), "vivid-invalid:1")
 
+    def test_work_activity_and_avatars_preserve_the_message_surface(self):
+        themes = [
+            self._theme("activity-dark"),
+            self._theme("activity-light", background="#f4efe5", text="#172333",
+                        section="#eee2ce", section_text="#172333"),
+            # Themes without a section color fall back to the background.
+            {"active": True, "id": "activity-artwork", "version": "1",
+             "background": True, "background_url": "/api/browser/theme/background?v=activity",
+             "colors": {"frame": "#010203", "toolbar": "#275068",
+                        "ntp_background": "#275068", "ntp_text": "#ffffff"}},
+        ]
+        self.context.route("**/api/browser/theme/background*", lambda route: route.fulfill(
+            status=200, content_type="image/png", body=self._png_bytes(),
+        ))
+        for theme in themes:
+            page = self._page(theme, "work")
+            page.locator("#prompt").fill("Show the activity theme sample")
+            page.locator("#prompt").press("Enter")
+            expect(page.locator(".message.assistant .work-log summary")).to_contain_text("Work details")
+            page.locator(".work-log summary").click()
+            for surface in ("Minimal", "Balanced", "Maximal"):
+                with self.subTest(theme=theme["id"], surface=surface):
+                    page.get_by_role("button", name="Preferences", exact=True).click()
+                    page.get_by_label(surface, exact=True).check()
+                    page.get_by_role("button", name="Close", exact=True).click()
+                    styles = page.evaluate("""() => {
+                        const style = selector => getComputedStyle(document.querySelector(selector));
+                        return {
+                            activity: style('.work-log').backgroundColor,
+                            avatars: [...document.querySelectorAll('.avatar')].map(node => ({
+                                background: getComputedStyle(node).backgroundColor,
+                                text: getComputedStyle(node).color,
+                                parentText: getComputedStyle(node.closest('.message')).color,
+                            })),
+                            activityText: style('.work-log').color,
+                            messageText: style('.message.assistant').color,
+                            artwork: getComputedStyle(document.body).backgroundImage,
+                        };
+                    }""")
+                    self.assertEqual(styles["activity"], "rgba(0, 0, 0, 0)")
+                    self.assertEqual(styles["activityText"], styles["messageText"])
+                    self.assertEqual(len(styles["avatars"]), 2)
+                    for avatar in styles["avatars"]:
+                        self.assertEqual(avatar["background"], "rgba(0, 0, 0, 0)")
+                        self.assertEqual(avatar["text"], avatar["parentText"])
+                    if theme.get("background"):
+                        self.assertIn("blob:", styles["artwork"])
+                    self.assertEqual(page._theme_balance_page_errors, [])
+            page.close()
+
     def test_artwork_position_scale_and_no_theme_default_remain_stable(self):
         theme = self._theme("artwork-stable")
         theme.update({
