@@ -4,15 +4,15 @@ PilferedParrot Interface (PPI) is a local browser interface for coding CLIs and 
 model APIs. Choose the provider for a work session, keep its project and history together, and
 open a separate read-only Chat window when you need a quick question.
 
-The current checkout is the **0.7.0-rc.14 preview**. Linux 0.6.1 remains the stable release;
+The current checkout is the **0.7.0-rc.15 preview**. Linux 0.6.1 remains the stable release;
 the Windows 10/11 x64 build is a portable preview. Preview downloads are available from the
-[0.7.0-rc.14 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.14).
+[0.7.0-rc.15 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.15).
 
 [Project site](https://pilferedparrot.github.io/PilferedParrot-Interface/) ·
-[Linux rc.14 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.14/pilferedparrot-0.7.0-rc.14-source.tar.gz) ·
+[Linux rc.15 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.15/pilferedparrot-0.7.0-rc.15-source.tar.gz) ·
 [Stable Linux release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.6.1) ·
 [Release notes](RELEASE_NOTES.md) ·
-[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.14/PilferedParrot-0.7.0-rc.14-windows-x64.zip) ·
+[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.15/PilferedParrot-0.7.0-rc.15-windows-x64.zip) ·
 [Report a bug](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new?template=bug_report.yml) ·
 [Share feedback](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new/choose)
 
@@ -20,7 +20,12 @@ the Windows 10/11 x64 build is a portable preview. Preview downloads are availab
 
 *Screenshot of PilferedParrot Work (0.7.0-rc.14) with a new session.*
 
-Preview rc.14 lets you choose how themes feel. Open **Preferences → Appearance**
+Preview rc.15 adds a top-right expand button to wide tables and preformatted charts
+in Work and Chat. The expanded view uses full screen when available, or fills the app window; close it with the upper-right
+button or Escape. Work details and avatar tiles now follow the selected theme
+without adding opaque dark boxes.
+
+You can choose how themes feel. Open **Preferences → Appearance**
 in Work or Chat ([view the controls](docs/assets/appearance-preferences.png)):
 
 - **Tone:** keep the original palette or choose a darker interpretation.
@@ -82,7 +87,7 @@ for authentication and integration limits.
 
 ### Upgrading an existing installation
 
-Download the [rc.14 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.14/pilferedparrot-0.7.0-rc.14-source.tar.gz),
+Download the [rc.15 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.15/pilferedparrot-0.7.0-rc.15-source.tar.gz),
 extract it, and run `./bin/pilferedparrot --version` before replacing your launcher with
 `./bin/install-pilferedparrot-desktop`. Keep the extracted directory in place. Existing
 configuration, browser profiles, conversations, and run metadata remain in their current local
@@ -90,7 +95,7 @@ state directory; do not replace your `config.json` unless you intend to reconfig
 
 ## Windows preview
 
-Download the [0.7.0-rc.14 Windows x64 ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.14/PilferedParrot-0.7.0-rc.14-windows-x64.zip),
+Download the [0.7.0-rc.15 Windows x64 ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.15/PilferedParrot-0.7.0-rc.15-windows-x64.zip),
 extract it to a directory you control, and run `PilferedParrot.exe`. The package includes Python,
 needs no installation or administrator rights, and uses Chrome, Chromium, or Microsoft Edge. Keep
 the console window open while PPI runs and keep the extracted directory together. The executable

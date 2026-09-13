@@ -1,0 +1,22 @@
+/* A toolbar outside each scrollable Markdown region keeps the expansion action usable. */
+.markdown-expand-region { max-width: 100%; margin: 10px 0; }
+.markdown-expand-region > :is(.table-scroll, .code-block) { margin: 0; }
+.markdown-expand-toolbar { display: flex; justify-content: flex-end; min-height: 0; margin-bottom: 8px; }
+.markdown-expand-toolbar[hidden] { display: none; }
+.markdown-expand-button[hidden] { display: none !important; }
+.markdown-expand-button:not([hidden]) { display: inline-grid; place-items: center; width: 40px; min-width: 40px; height: 40px; padding: 0; border: 1px solid var(--border, currentColor); border-radius: 8px; background: var(--panel, Canvas); color: var(--text, CanvasText); cursor: pointer; font: inherit; font-size: 20px; line-height: 1; }
+.markdown-expand-button:hover { filter: brightness(1.08); }
+.markdown-expand-button:focus-visible, .markdown-expansion-close:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+#markdownExpansionDialog { position: fixed; inset: 0; box-sizing: border-box; width: auto; max-width: none; height: auto; max-height: none; margin: 0; padding: 0; border: 0; border-radius: 0; background: var(--panel, Canvas); color: var(--text, CanvasText); }
+#markdownExpansionDialog::backdrop { background: rgba(0, 0, 0, .72); }
+.markdown-expansion-card { display: flex; flex-direction: column; box-sizing: border-box; width: 100%; height: 100%; padding: 24px; overflow: hidden; }
+.markdown-expansion-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex: 0 0 auto; }
+.markdown-expansion-heading h2 { margin: 0; color: inherit; }
+.markdown-expansion-close { width: 40px; min-width: 40px; height: 40px; padding: 0; border: 1px solid var(--border, currentColor); border-radius: 8px; background: transparent; color: inherit; cursor: pointer; font-size: 24px; line-height: 1; }
+.markdown-expansion-content { min-width: 0; min-height: 0; margin-top: 16px; overflow: auto; overscroll-behavior: contain; }
+.markdown-expansion-rendered { min-width: max-content; color: inherit; }
+.markdown-expansion-rendered > :is(.table-scroll, .code-block) { max-width: none; overflow: visible; }
+.markdown-expansion-rendered pre { max-width: none; overflow: visible; }
+body.chrome-theme #markdownExpansionDialog { background: var(--panel); color: var(--chrome-theme-panel-text); }
+body.chrome-theme .markdown-expand-button:not([hidden]) { background: var(--panel); color: var(--chrome-theme-panel-text); }
+@media (max-width: 600px) { .markdown-expand-button:not([hidden]), .markdown-expansion-close { width: 44px; min-width: 44px; height: 44px; } .markdown-expansion-card { padding: 16px; } }

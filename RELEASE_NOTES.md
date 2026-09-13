@@ -1,3 +1,17 @@
+## PilferedParrot Interface 0.7.0-rc.15 preview
+
+Wide Markdown tables and preformatted charts now show an expand button at the upper
+right in Work and Chat. The expanded view uses full screen when available, or fills the app window, keeps large content
+scrollable, and closes with its upper-right button or Escape. Controls adapt when
+messages arrive or the window and sidebar are resized.
+
+Work details no longer add an opaque panel over the message surface. Work avatar
+tiles inherit the theme colors, removing fixed dark boxes from imported themes,
+including Minimal appearance. Chat keeps its existing color scheme.
+
+Linux/source and Windows x64 packages include these corrections. Reopen the updated
+app after active jobs finish. This remains a preview alongside stable Linux 0.6.1.
+
 ## PilferedParrot Interface 0.7.0-rc.14 preview
 
 Appearance preferences in Work and Chat now offer an original or darker tone,

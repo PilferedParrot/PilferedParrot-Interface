@@ -1010,8 +1010,15 @@ body.chrome-theme :is(.message-content, .chat-message-body) code {
 }
 body.chrome-theme :is(.message-content, .chat-message-body) pre code { color: inherit; }
 body.chrome-theme .work-log {
-  background: var(--panel-2);
+  /* Activity is nested inside the message surface; another solid panel hides
+     the artwork even when the user has selected Minimal surfaces. */
+  background: transparent;
   color: var(--chrome-theme-panel-text);
+}
+body.chrome-theme .message .avatar {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text);
 }
 body.chrome-theme .work-log summary,
 body.chrome-theme .work-item > div,
