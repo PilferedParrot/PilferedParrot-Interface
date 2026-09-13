@@ -25,6 +25,16 @@ _PROVIDER_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 NOTIFICATION_PERMISSION_STATES = frozenset({
     "unasked", "granted", "denied", "dismissed", "unavailable",
 })
+APPEARANCE_DEFAULTS = {
+    "tone": "original",
+    "surface": "balanced",
+    "readability": "standard",
+}
+APPEARANCE_OPTIONS = {
+    "tone": frozenset({"original", "darker"}),
+    "surface": frozenset({"minimal", "balanced", "maximal"}),
+    "readability": frozenset({"standard", "stronger"}),
+}
 STALE_EMPTY_SESSION_SECONDS = 24 * 60 * 60
 WORK_CLEANUP_LAST_RUN = "work_cleanup_last_run"
 
@@ -109,6 +119,16 @@ def remove_dashboard_capability(config: dict[str, Any], token: str) -> None:
             path.unlink()
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         pass
+
+
+def normalize_appearance_preferences(value: Any) -> dict[str, str]:
+    """Return the complete safe appearance preference object for stored data."""
+    raw = value if isinstance(value, dict) else {}
+    return {
+        field: raw[field] if isinstance(raw.get(field), str) and raw[field] in options
+        else APPEARANCE_DEFAULTS[field]
+        for field, options in APPEARANCE_OPTIONS.items()
+    }
 
 
 def empty_dashboard_models(provider_ids: Iterable[str]) -> dict[str, Any]:
@@ -342,6 +362,9 @@ class PersistentChatStore:
             self.data["preferences"]["notification_permission"] = notification_permission
         else:
             self.data["preferences"]["notification_permission"] = "unasked"
+        self.data["preferences"]["appearance"] = normalize_appearance_preferences(
+            preferences.get("appearance"),
+        )
         cleanup_last_run = preferences.get(WORK_CLEANUP_LAST_RUN)
         if isinstance(cleanup_last_run, (int, float)) and not isinstance(cleanup_last_run, bool) \
                 and cleanup_last_run >= 0:
@@ -403,6 +426,33 @@ class PersistentChatStore:
             self.data["preferences"]["notification_permission"] = decision
             self.save()
             return self.preferences_public()
+
+    def appearance_preferences(self) -> dict[str, str]:
+        with self.lock:
+            return dict(self.data["preferences"]["appearance"])
+
+    def set_appearance_preferences(self, updates: Any) -> dict[str, str]:
+        """Atomically merge and persist a validated partial appearance update."""
+        if not isinstance(updates, dict) or not updates:
+            raise ValueError("appearance preferences must be a non-empty object")
+        if any(field not in APPEARANCE_OPTIONS for field in updates):
+            raise ValueError("appearance preference field is invalid")
+        if any(
+            not isinstance(value, str) or value not in APPEARANCE_OPTIONS[field]
+            for field, value in updates.items()
+        ):
+            raise ValueError("appearance preference value is invalid")
+        with self.lock:
+            appearance = self.data["preferences"]["appearance"]
+            previous = dict(appearance)
+            appearance.update(updates)
+            try:
+                self.save()
+            except Exception:
+                appearance.clear()
+                appearance.update(previous)
+                raise
+            return dict(appearance)
 
     @staticmethod
     def _new_chat_thread(

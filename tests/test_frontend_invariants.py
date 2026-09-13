@@ -798,13 +798,14 @@ class FrontendInvariantTests(unittest.TestCase):
         init = _function_body(self.chat_js, "init")
         self.assertIn('refreshBrowserTheme()', init)
         for selector in (
-            'body.chrome-theme :is(input, textarea, select)',
-            'body.chrome-theme dialog',
-            'body.chrome-theme .work-log',
-            'body.chrome-theme :is(.message-content, .chat-message-body) pre',
+            '@layer surfaces',
+            '.dialog-card :is(input, select, textarea',
+            ':is(dialog, .dialog-card, .dialog-heading)',
+            ':is(.work-log, .response-identity)',
+            ':is(.message-content, .chat-message-body) pre',
         ):
             self.assertIn(selector, self.app_css)
-        self.assertIn('--sidebar-muted: var(--chrome-theme-frame-text)', self.app_css)
+        self.assertIn('--sidebar-muted: var(--surface-muted)', self.app_css)
         self.assertRegex(
             self.app_css,
             r"body\.chrome-theme\s*\{[^}]*--chrome-theme-background-image",

@@ -982,7 +982,6 @@ function renderMessages() {
         shellLanguages: CODE_BLOCK_LANGUAGES,
       });
     return `<article class="message ${role} ${message.error ? "error" : ""}" data-provider="${assistant ? escapeHtml(provider) : ""}">
-      <div class="avatar">${assistant ? escapeHtml(providerInfo(provider).initial || "A") : "Y"}</div>
       <div class="message-body"><div class="message-head"><span class="message-name">${escapeHtml(name)}</span>${message.cancelled ? '<span class="message-state">Cancelled</span>' : ""}</div>
       <div class="message-content">${work}${response}${assistant && !message.pending ? globalThis.PilferedParrotIdentity.render(message) : ""}</div></div>
     </article>`;
@@ -1438,7 +1437,7 @@ async function applyBrowserTheme(theme, refreshGeneration = null) {
   body.dataset.chromeTheme = selected.active ? `${selected.id}:${selected.version}` : "";
   document.querySelector('meta[name="theme-color"]')?.setAttribute(
     "content", /^#[0-9a-f]{6}$/i.test(selected.colors?.frame || "")
-      ? selected.colors.frame : "#0b1017",
+      ? selected.colors.frame : "#102637",
   );
   $("#chromeThemeLabel").textContent = "Change theme";
   state.browser_theme = selected;
@@ -1737,6 +1736,7 @@ async function init() {
     restorePaneWidths();
     const initial = await api("/api/state");
     Object.assign(state, initial);
+    globalThis.PilferedParrotAppearanceSync.connect(api, initial.preferences?.appearance, message => toast(message, "error"));
     if (fragmentCwd) state.defaultCwd = fragmentCwd;
     state.windowId = initial.window_id || state.windowId;
     state.windowProvider = initial.window_provider || fragmentProvider

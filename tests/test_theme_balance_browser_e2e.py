@@ -190,15 +190,13 @@ class ThemeBalanceBrowserEndToEndTests(unittest.TestCase):
                     self.assertEqual(styles["vars"]["toolbar"], theme["colors"]["toolbar"])
                     self.assertGreaterEqual(styles["textContrast"], 4.5)
                     self.assertGreaterEqual(styles["toolbarContrast"], 4.5)
-                    self.assertGreaterEqual(styles["sidebarAlpha"], .68)
-                    self.assertLessEqual(styles["sidebarAlpha"], .78)
-                    self.assertGreaterEqual(styles["messageAlpha"], .84)
-                    self.assertLessEqual(styles["messageAlpha"], .92)
-                    self.assertGreaterEqual(styles["composerAlpha"], .87)
-                    self.assertLessEqual(styles["composerAlpha"], .93)
+                    # Balanced uses one transparent hierarchy in both windows.
+                    self.assertEqual(styles["sidebarAlpha"], .52)
+                    self.assertEqual(styles["messageAlpha"], .48)
+                    self.assertEqual(styles["composerAlpha"], .64)
                     self.assertEqual(styles["dialogAlpha"], 1)
-                    self.assertEqual(styles["fieldAlpha"], 1)
-                    self.assertEqual(styles["codeAlpha"], 1)
+                    self.assertEqual(styles["fieldAlpha"], .46)
+                    self.assertEqual(styles["codeAlpha"], .82)
                     self.assertTrue(styles["dialogColor"])
                     self.assertTrue(styles["fieldColor"])
                     self.assertTrue(styles["codeColor"])
@@ -237,7 +235,7 @@ class ThemeBalanceBrowserEndToEndTests(unittest.TestCase):
                 self.assertFalse(styles["codeColor"] == "rgba(0, 0, 0, 0)")
                 self.assertEqual(page.locator("body").get_attribute("data-chrome-theme"), "vivid-invalid:1")
 
-    def test_work_activity_and_avatars_preserve_the_message_surface(self):
+    def test_work_activity_uses_the_shared_detail_surface_without_avatars(self):
         themes = [
             self._theme("activity-dark"),
             self._theme("activity-light", background="#f4efe5", text="#172333",
@@ -266,22 +264,23 @@ class ThemeBalanceBrowserEndToEndTests(unittest.TestCase):
                         const style = selector => getComputedStyle(document.querySelector(selector));
                         return {
                             activity: style('.work-log').backgroundColor,
-                            avatars: [...document.querySelectorAll('.avatar')].map(node => ({
-                                background: getComputedStyle(node).backgroundColor,
-                                text: getComputedStyle(node).color,
-                                parentText: getComputedStyle(node.closest('.message')).color,
-                            })),
                             activityText: style('.work-log').color,
                             messageText: style('.message.assistant').color,
                             artwork: getComputedStyle(document.body).backgroundImage,
                         };
                     }""")
-                    self.assertEqual(styles["activity"], "rgba(0, 0, 0, 0)")
+                    expected_alpha = {"Minimal": .10, "Balanced": .22, "Maximal": 1}[surface]
+                    activity_alpha = page.evaluate("""() => {
+                        const value = getComputedStyle(document.querySelector('.work-log')).backgroundColor;
+                        const slash = value.lastIndexOf('/');
+                        if (slash >= 0) return Number(value.slice(slash + 1).replace(')', '').trim());
+                        const match = value.match(/rgba?\\(([^)]+)\\)/);
+                        return match && match[1].split(',').length === 4
+                            ? Number(match[1].split(',')[3].trim()) : 1;
+                    }""")
+                    self.assertEqual(activity_alpha, expected_alpha)
                     self.assertEqual(styles["activityText"], styles["messageText"])
-                    self.assertEqual(len(styles["avatars"]), 2)
-                    for avatar in styles["avatars"]:
-                        self.assertEqual(avatar["background"], "rgba(0, 0, 0, 0)")
-                        self.assertEqual(avatar["text"], avatar["parentText"])
+                    self.assertEqual(page.locator(".avatar").count(), 0)
                     if theme.get("background"):
                         self.assertIn("blob:", styles["artwork"])
                     self.assertEqual(page._theme_balance_page_errors, [])

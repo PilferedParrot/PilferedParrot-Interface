@@ -46,39 +46,50 @@ Wide Markdown tables and preformatted content offer an expand control at the upp
 right only while they overflow their available width. Keep this control outside
 the horizontal scroll area. The expanded dialog fills the viewport, follows the
 panel palette, retains readable content formatting, and supports Close and Escape.
-Nested Work activity and avatar tiles use the surrounding message surface instead
-of adding opaque boxes over imported artwork.
+Work activity and response details use the same nested surface inside flat message
+cards. Both modes keep the same message-header alignment.
 
-## Themes
+## Shared blue surfaces
 
-Use surface and foreground tokens together. Dialog fields, labels, secondary
-buttons, notices, and status badges must inherit the panel foreground instead of
-hard-coded pale text. Derive subtle borders from the panel foreground so imported
-light, dark, and vivid themes retain visible controls. The default Balanced treatment targets 60/100
-legibility, with more of the artwork visible through interface surfaces.
-Theme-authored foregrounds
-are kept when they meet 4.5:1 contrast; otherwise blend them toward the suitable
-black or white extreme until they reach that threshold, preserving their hue.
-Unreadable neutral grays use black or white, since there is no hue to retain.
-Artwork text keeps the authored color with a small shadow; fallback surface colors
-do not describe the image behind it. The threshold applies to base color pairs,
-not a guarantee for every pixel of arbitrary artwork. Use themed translucent
-surfaces for sidebar groups
-(about 72% opaque), messages (about 88%), and composers (about 90%), while dialogs,
-fields, code, and other controls that need a crisp boundary remain solid. Keep the
-user's original theme artwork, scale, and positioning.
+The `surfaces` layer in `web_assets/app.css` is the authority for the visual
+components in both modes. The `base` layer retains established layout fallbacks.
+Add shared rules to the surface layer instead of another Work-only or Chat-only
+paint override. Both modes use a 286 px default sidebar, identical header/card
+alignment, 16 px text, and the same 760 px drawer breakpoint. Functional text and
+actions may differ; their component styling does not.
 
-Appearance preferences are shared by Work and Chat. Original tone preserves the
-authored palette; Darker offers a darker interpretation. Minimal removes most
-structural panel fill and uses text separation to keep content readable. Maximal
-adds more opaque surfaces and visible boundaries. Stronger readability offers
-additional text separation. Keep these independent choices, persist them in the
-browser profile, and synchronize open windows. Preserve the existing Original /
-Balanced default, and keep dialogs and form controls usable in every combination.
+`appearance.js` derives one blue-tinted panel and foreground pair from the theme
+canvas and section colors. Opposite light/dark section and canvas fills use the
+canvas tone so translucent controls remain legible. Readable foregrounds target
+6:1 against the base panel, with at least 4.5:1 verified on control surfaces.
+Stronger readability adds contrast and text separation. Arbitrary artwork still
+varies pixel by pixel; use the available surface/readability settings as needed.
+Never replace the palette with black merely because Minimal is selected.
 
-Platform-owned windows, authentication pages, browser permission prompts, and the
-Chrome theme gallery retain their platform UI. The outer Windows caption remains
-Chrome/Edge-owned; this release does not replace its window integration.
+Balanced uses a deliberate opacity hierarchy: 64% header/composer, 52% sidebar
+groups, 48% message cards, 46% controls, and 82% code surfaces. Selected history
+rows use the same blue family with a brighter border and inset selection mark.
+Minimal lowers structural opacity while retaining the palette; Maximal makes
+panels opaque. Dialogs use the solid panel, and native select popup options use
+the same palette. Model and reasoning selectors share one rule in both modes.
+Details sit inside the message card with a quiet nested surface, not a separate
+black bar. Message headers have the same flat structure and typography in Work
+and Chat. Keep text above the composited glass surface.
+
+The theme owns its original background/frame/toolbar/attribution images and their
+alignment, tiling, and scale. The app owns a consistent surface hierarchy above
+them. Platform-owned authentication pages and browser chrome retain platform UI.
+
+## Shared appearance settings
+
+The server-backed application setting is authoritative. Do not restore appearance
+from browser-local storage: desktop Work and Chat can use independent profiles.
+The default is Original / Balanced / Standard. Apply saved settings at startup,
+propagate visible-window changes, and refresh when a window becomes visible again.
+Send partial updates so independent choices cannot clobber each other. A delayed
+read cannot overwrite a newer choice; failed saves must report the failure and
+restore persisted state. Keep appearance endpoints capability- and Origin-gated;
+Chat's appearance controls do not grant Work operations.
 
 ## Keep the ordinary task simple
 

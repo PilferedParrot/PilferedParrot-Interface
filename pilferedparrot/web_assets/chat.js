@@ -12,7 +12,7 @@ const state = {
 const CAPABILITY_SESSION_KEY = "pilferedparrot-chat-capability";
 const NATIVE_WINDOW_SESSION_KEY = "pilferedparrot-native-window";
 const CHAT_PANE_WIDTHS_KEY = "pilferedparrot-pane-widths";
-const CHAT_SIDEBAR_LIMITS = { min: 230, max: 520, variable: "--chat-sidebar-width" };
+const CHAT_SIDEBAR_LIMITS = { min: 220, max: 480, variable: "--chat-sidebar-width" };
 const CHAT_CONVERSATION_MIN_WIDTH = 300;
 const THEME_POLL_MS = 1_000;
 const fragment = new URLSearchParams(location.hash.slice(1));
@@ -544,15 +544,16 @@ function render() {
   $("#notificationPreferencesLabel").textContent = notificationPermissionLabel();
   $("#chatThreadTitle").textContent = archived ? (chat.title || "Archived Chat") : (chat.title || "Chat");
   const displayedProvider = chat.provider || state.windowProvider;
+  $("#chatConnectionProvider").textContent = providerLabel(displayedProvider);
   $("#chatIdentity").textContent = `${providerLabel(displayedProvider)} · ${modelLabel(chat.model || selectedModel, displayedProvider)} · separate read-only instance`;
   if (!messages.length && !chat.pending) {
-    node.innerHTML = '<div class="chat-empty">A separate conversation for thinking, planning, and keeping track of what matters.</div>';
+    node.innerHTML = '<div class="welcome chat-empty"><img class="company-logo welcome-logo" src="/company-logo-dark.png" alt="PilferedParrot Global Industries, makers of 3D Bumper Billiards."><h1>What would you like to discuss?</h1><p>Explore an idea or plan a next step. This conversation is read-only.</p></div>';
   } else {
     node.innerHTML = (archived ? '<div class="archive-notice">Archived · read-only</div>' : "")
       + messages.map((message) => {
         const user = message.role === "user";
         return `<article class="chat-message ${user ? "user" : "assistant"} ${message.pending ? "pending" : ""} ${message.error ? "error" : ""}">
-          <div class="chat-message-head">${user ? "You" : "Chat"}</div>
+          <div class="chat-message-head">${user ? "You" : escapeHtml(`${providerLabel(message.provider || displayedProvider)} · ${modelLabel(message.model || chat.model || selectedModel, message.provider || displayedProvider)}`)}</div>
           <div class="chat-message-body">${message.pending ? '<span class="thinking" aria-label="Chat is working"><i></i><i></i><i></i></span>' : renderMarkdown(message.content || "")}${!user && !message.pending ? globalThis.PilferedParrotIdentity.render(message) : ""}</div>
         </article>`;
       }).join("");
@@ -1011,7 +1012,7 @@ async function applyBrowserTheme(theme, refreshGeneration = null) {
   document.body.dataset.chromeTheme = selected.active ? `${selected.id}:${selected.version}` : "";
   document.querySelector('meta[name="theme-color"]')?.setAttribute(
     "content", /^#[0-9a-f]{6}$/i.test(selected.colors?.frame || "")
-      ? selected.colors.frame : "#0b1017",
+      ? selected.colors.frame : "#102637",
   );
   state.browser_theme = selected;
   return true;
@@ -1038,6 +1039,7 @@ async function init() {
   try {
     const initial = await api("/api/state");
     applyServerState(initial);
+    globalThis.PilferedParrotAppearanceSync.connect(api, initial.preferences?.appearance, message => toast(message, "error"));
     await initializeNativeWindow();
     await refreshBrowserTheme();
     state.initialized = true;
@@ -1079,12 +1081,12 @@ function setChatSidebarOpen(open) {
   const wasOpen = sidebar.classList.contains("open");
   sidebar.classList.toggle("open", open);
   syncChatSidebarAccessibility();
-  const currentMobile = matchMedia("(max-width: 600px)").matches;
+  const currentMobile = matchMedia("(max-width: 760px)").matches;
   if (open) $("#closeChatSidebar").focus();
   else if (wasOpen && currentMobile) $("#toggleChatSidebar").focus();
 }
 function syncChatSidebarAccessibility() {
-  const isMobile = matchMedia("(max-width: 600px)").matches;
+  const isMobile = matchMedia("(max-width: 760px)").matches;
   const sidebarOpen = $(".chat-window-sidebar").classList.contains("open");
   $("#toggleChatSidebar").setAttribute("aria-expanded", String(sidebarOpen && isMobile));
   $(".chat-window-conversation").inert = sidebarOpen && isMobile;

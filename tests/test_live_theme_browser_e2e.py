@@ -190,7 +190,9 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
         self.assertNotEqual(surfaces["bodyImage"], "none")
         self.assertIn("0, 0, 0, 0", surfaces["shellColor"])
         self.assertIn("0, 0, 0, 0", surfaces["paneColor"])
-        self.assertEqual(surfaces["headerAlpha"], 1)
+        # The artwork remains in the page coordinate space; the unified header
+        # is deliberately a translucent panel over it.
+        self.assertEqual(surfaces["headerAlpha"], .64)
         self.assertEqual(surfaces["titlebarAlpha"], 0)
         self.assertEqual(surfaces["titlebarImage"], "none")
         self.assertEqual(surfaces["titlebarBorder"], "0px")
@@ -297,7 +299,10 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
         self.assertEqual(styles["image"], "none")
         self.assertEqual(styles["border"], "0px")
         self.assertEqual(styles["filter"], "none")
-        self.assertEqual(styles["bodyColor"], styles["mainColor"])
+        # The canvas owns the default blue fallback.  The structural main pane
+        # stays clear, just as it does when imported artwork is active.
+        self.assertIn("16, 38, 55", styles["bodyColor"])
+        self.assertIn("0, 0, 0, 0", styles["mainColor"])
         self.assertEqual(styles["mainImage"], "none")
         self._assert_rounded_chrome(page, header=".topbar")
 
@@ -395,7 +400,9 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
                 self.assertEqual(styles["titleFilter"], "none")
                 self.assertEqual(styles["barRepeat"], "repeat-x")
                 self.assertIn("auto", styles["barSize"])
-                self.assertIn("rgb(224, 208, 192)", styles["barColor"])
+                # Toolbar artwork still paints at native size above the
+                # balanced translucent header panel.
+                self.assertIn("/ 0.64)", styles["barColor"])
                 # Native titlebar text follows the body/new-tab foreground;
                 # frame artwork no longer supplies a separate foreground.
                 self.assertIn("rgb(0, 0, 0)", styles["titleTextColor"])
