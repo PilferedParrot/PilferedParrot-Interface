@@ -4,39 +4,37 @@ PilferedParrot Interface (PPI) is a local browser interface for coding CLIs and 
 model APIs. Choose the provider for a work session, keep its project and history together, and
 open a separate read-only Chat window when you need a quick question.
 
-The current checkout is the **0.7.0-rc.15 preview**. Linux 0.6.1 remains the stable release;
+The current checkout is the **0.7.0-rc.16 preview**. Linux 0.6.1 remains the stable release;
 the Windows 10/11 x64 build is a portable preview. Preview downloads are available from the
-[0.7.0-rc.15 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.15).
+[0.7.0-rc.16 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.16).
 
 [Project site](https://pilferedparrot.github.io/PilferedParrot-Interface/) ·
-[Linux rc.15 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.15/pilferedparrot-0.7.0-rc.15-source.tar.gz) ·
+[Linux rc.16 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.16/pilferedparrot-0.7.0-rc.16-source.tar.gz) ·
 [Stable Linux release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.6.1) ·
 [Release notes](RELEASE_NOTES.md) ·
-[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.15/PilferedParrot-0.7.0-rc.15-windows-x64.zip) ·
+[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.16/PilferedParrot-0.7.0-rc.16-windows-x64.zip) ·
 [Report a bug](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new?template=bug_report.yml) ·
 [Share feedback](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new/choose)
 
-![Screenshot of PilferedParrot Work (0.7.0-rc.14) with a new session](docs/assets/work-preview.png)
+Work and Chat now share one transparent, blue-tinted interface: the same headers,
+message cards, model/reasoning controls, selected history rows, and spacing.
+Appearance choices are saved for the whole app and synchronize across separately
+opened windows, including their separate browser profiles.
 
-*Screenshot of PilferedParrot Work (0.7.0-rc.14) with a new session.*
+![Work with the unified blue surfaces and an example conversation](docs/assets/work-preview.png)
+![Chat with the same surfaces and an example conversation](docs/assets/chat-preview.png)
 
-Preview rc.15 adds a top-right expand button to wide tables and preformatted charts
-in Work and Chat. The expanded view uses full screen when available, or fills the app window; close it with the upper-right
-button or Escape. Work details and avatar tiles now follow the selected theme
-without adding opaque dark boxes.
+*Actual Work and Chat interface screenshots with example conversations.*
 
-You can choose how themes feel. Open **Preferences → Appearance**
-in Work or Chat ([view the controls](docs/assets/appearance-preferences.png)):
+Open **Preferences → Appearance** ([view the controls](docs/assets/appearance-preferences.png))
+to adjust tone, surface weight, and readability. Original / Balanced / Standard is
+the shared default. Minimal reveals more artwork, while Maximal gives panels more
+presence; both retain the same blue-tinted palette. Legacy per-browser appearance
+settings are replaced by the shared app setting. Theme artwork keeps its placement
+and scale. Linux and Windows include the same interface.
 
-- **Tone:** keep the original palette or choose a darker interpretation.
-- **Surfaces:** Minimal reveals the background through almost transparent boxes;
-  Balanced keeps the familiar translucency; Maximal gives panels more presence.
-- **Readability:** strengthen text separation when you want clearer reading over artwork.
-
-Choices apply immediately and are remembered in this browser profile, with open Work
-and Chat windows kept in sync. The original palette and Balanced surfaces remain the
-default. Theme artwork keeps its original placement and scale. Linux and Windows share
-these preferences; Chrome or Edge still draws the outer Windows title bar.
+Wide tables and preformatted charts keep their top-right fullscreen control.
+Close the expanded view with its upper-right button or Escape.
 
 ## What it does
 
@@ -87,7 +85,7 @@ for authentication and integration limits.
 
 ### Upgrading an existing installation
 
-Download the [rc.15 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.15/pilferedparrot-0.7.0-rc.15-source.tar.gz),
+Download the [rc.16 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.16/pilferedparrot-0.7.0-rc.16-source.tar.gz),
 extract it, and run `./bin/pilferedparrot --version` before replacing your launcher with
 `./bin/install-pilferedparrot-desktop`. Keep the extracted directory in place. Existing
 configuration, browser profiles, conversations, and run metadata remain in their current local
@@ -95,7 +93,7 @@ state directory; do not replace your `config.json` unless you intend to reconfig
 
 ## Windows preview
 
-Download the [0.7.0-rc.15 Windows x64 ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.15/PilferedParrot-0.7.0-rc.15-windows-x64.zip),
+Download the [0.7.0-rc.16 Windows x64 ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.16/PilferedParrot-0.7.0-rc.16-windows-x64.zip),
 extract it to a directory you control, and run `PilferedParrot.exe`. The package includes Python,
 needs no installation or administrator rights, and uses Chrome, Chromium, or Microsoft Edge. Keep
 the console window open while PPI runs and keep the extracted directory together. The executable

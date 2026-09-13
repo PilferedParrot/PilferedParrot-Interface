@@ -1,3 +1,22 @@
+## PilferedParrot Interface 0.7.0-rc.16 preview
+
+Work and Chat now use one transparent, blue-tinted design: shared headers, sidebar
+groups, selected history rows, conversation cards, detail disclosures, and composer
+controls. Model and reasoning selectors keep their blue tint instead of becoming
+black in Minimal mode. Both windows share message alignment, typography, empty
+states, and the same narrow-window sidebar breakpoint.
+
+Appearance settings now belong to the application rather than individual browser
+profiles. Changes synchronize across independently opened Work, provider, and Chat
+windows, persist after restart, and recover visibly from failed saves. Existing
+per-browser choices give way to the shared Original / Balanced / Standard default.
+Theme artwork retains its placement and scale; the earlier chart fullscreen feature
+remains available.
+
+Linux/source and Windows x64 packages include the redesign. Finish active jobs,
+close the old app, then reopen the updated app to load the shared-settings backend.
+This remains a preview alongside stable Linux 0.6.1.
+
 ## PilferedParrot Interface 0.7.0-rc.15 preview
 
 Wide Markdown tables and preformatted charts now show an expand button at the upper

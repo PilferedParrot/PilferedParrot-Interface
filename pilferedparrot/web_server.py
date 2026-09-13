@@ -30,9 +30,9 @@ ASSET_ROOT = Path(__file__).resolve().parent / "web_assets"
 RUNTIME_ROOT = Path(__file__).resolve().parent
 ASSET_NAMES = (
     "index.html", "chat.html", "app.css", "expanded-content.css", "markdown.js", "expanded-content.js", "identity.js", "provider-updates.js", "app.js", "chat.js", "icon.svg",
-    "pilferedparrot-icon.png", "company-logo.png", "company-logo-dark.png", "whiteboard-ui.js", "appearance.js",
+    "pilferedparrot-icon.png", "company-logo.png", "company-logo-dark.png", "whiteboard-ui.js", "appearance.js", "appearance-sync.js",
 )
-API_GENERATION = 22
+API_GENERATION = 23
 
 
 class ServerApp(Protocol):
@@ -60,6 +60,8 @@ class ServerApp(Protocol):
     def remove_provider(self, payload: dict[str, Any]) -> None: ...
     def set_provider_preferences(self, payload: dict[str, Any], *, window_provider: str | None) -> Any: ...
     def set_notification_preferences(self, payload: dict[str, Any]) -> Any: ...
+    def appearance_preferences(self) -> Any: ...
+    def set_appearance_preferences(self, payload: dict[str, Any]) -> Any: ...
     def choose_project_directory(self, payload: dict[str, Any], provider: str) -> Any: ...
     def send_chat_message(self, payload: dict[str, Any], *, provider: str | None) -> Any: ...
     def cancel_chat(self) -> Any: ...
@@ -412,6 +414,8 @@ def make_handler(
                 self._asset("expanded-content.css", "text/css; charset=utf-8")
             elif path == "/app.js":
                 self._asset("app.js", "text/javascript; charset=utf-8")
+            elif path == "/appearance-sync.js":
+                self._asset("appearance-sync.js", "text/javascript; charset=utf-8")
             elif path == "/appearance.js":
                 self._asset("appearance.js", "text/javascript; charset=utf-8")
             elif path == "/markdown.js":
@@ -469,6 +473,11 @@ def make_handler(
                     self._json({"error": "Chat authorization failed"}, HTTPStatus.FORBIDDEN)
                 else:
                     self._json(app.current_chat_state())
+            elif path == "/api/preferences/appearance":
+                if self._request_capability_scope() not in {"dashboard", "chat"}:
+                    self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
+                else:
+                    self._json(app.appearance_preferences())
             elif path == "/api/budgets":
                 if self._request_capability_scope() != "dashboard":
                     self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
@@ -549,7 +558,8 @@ def make_handler(
                 path = urlparse(self.path).path
                 chat_control = path.startswith("/api/chat/") and path != "/api/chat/window"
                 native_control = path == "/api/window/native"
-                if native_control:
+                appearance_control = path == "/api/preferences/appearance"
+                if native_control or appearance_control:
                     context = self._request_capability_context(require_origin=True)
                     authorized = context is not None \
                         and context.get("scope") in {"dashboard", "chat"}
@@ -584,6 +594,8 @@ def make_handler(
                     ))
                 elif path == "/api/preferences/notifications":
                     self._json(app.set_notification_preferences(payload))
+                elif path == "/api/preferences/appearance":
+                    self._json(app.set_appearance_preferences(payload))
                 elif path == "/api/project/folder":
                     self._json(app.choose_project_directory(
                         payload, provider=window_provider or app.default_provider,

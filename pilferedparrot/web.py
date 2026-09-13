@@ -905,6 +905,12 @@ class PilferedParrotApp(HarnessWorkflow):
         """Save the browser notification decision without changing provider settings."""
         return self.store.set_notification_permission(payload.get("decision"))
 
+    def appearance_preferences(self) -> dict[str, str]:
+        return self.store.appearance_preferences()
+
+    def set_appearance_preferences(self, payload: dict[str, Any]) -> dict[str, str]:
+        return self.store.set_appearance_preferences(payload)
+
     def _load_dashboard_models(self) -> dict[str, Any]:
         loaded = load_dashboard_models(
             self.model_catalog_path, self._provider_ids(include_hidden=True),

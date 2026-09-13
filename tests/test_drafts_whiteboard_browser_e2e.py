@@ -109,6 +109,8 @@ class DraftWhiteboardBrowserTests(unittest.TestCase):
           return {background: main.backgroundColor, image: main.backgroundImage,
             size: main.backgroundSize, position: main.backgroundPosition,
             panel: composer.backgroundColor, text: prompt.color,
+            panelBase: main.getPropertyValue('--panel').trim(),
+            authoredToolbar: getComputedStyle(document.documentElement).getPropertyValue('--chrome-theme-toolbar').trim(),
             toolbar: getComputedStyle(document.querySelector('.topbar')).backgroundColor};
         }''')
         decoded = self.page.evaluate("""async () => {
@@ -123,15 +125,17 @@ class DraftWhiteboardBrowserTests(unittest.TestCase):
         self.assertNotIn('gradient', palette['image'])
         self.assertNotIn('cover', palette['size'])
         self.assertIn('100% 100%', palette['position'])
-        self.assertEqual(palette['toolbar'], 'rgb(255, 196, 66)')
+        self.assertEqual(palette['authoredToolbar'], '#ffc442')
+        self.assertEqual(palette['toolbar'], palette['panel'])
         panel = self.page.evaluate("""value => {
           const ctx = document.createElement('canvas').getContext('2d');
           ctx.fillStyle = value; ctx.fillRect(0, 0, 1, 1);
           return Array.from(ctx.getImageData(0, 0, 1, 1).data);
         }""", palette['panel'])
-        for actual, expected in zip(panel[:3], (255, 250, 240)):
+        base = tuple(int(palette['panelBase'][index:index + 2], 16) for index in (1, 3, 5))
+        for actual, expected in zip(panel[:3], base):
             self.assertAlmostEqual(actual, expected, delta=1)
-        self.assertAlmostEqual(panel[3] / 255, .9, delta=.01)
+        self.assertAlmostEqual(panel[3] / 255, .64, delta=.01)
         self.assertEqual(palette['text'], 'rgb(24, 16, 32)')
         if os.environ.get('PPI_SCREENSHOTS'):
             folder = Path(os.environ['PPI_SCREENSHOTS']); folder.mkdir(parents=True, exist_ok=True)

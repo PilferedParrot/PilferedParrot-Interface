@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <meta name="theme-color" content="#0b1017">
+  <meta name="theme-color" content="#102637">
   <title>PilferedParrot Chat</title>
   <link rel="icon" href="/pilferedparrot-icon.png" type="image/png">
   <link rel="stylesheet" href="/app.css">
@@ -44,6 +44,11 @@
         </div>
 
         <div class="sidebar-group chat-context-group">
+          <section class="chat-connection" aria-label="Connection">
+            <div class="section-heading">Connection</div>
+            <strong id="chatConnectionProvider"></strong>
+            <span class="chat-connection-mode">Read-only chat</span>
+          </section>
           <details class="chat-window-context sidebar-disclosure" id="contextDetails">
             <summary id="chatContextHeading">Context window <span id="contextSummary">No data yet</span></summary>
             <div class="context-pie-card" id="chatContext"></div>
@@ -107,6 +112,7 @@
       </div>
       <div class="preferences-actions">
         <h3 class="appearance-title">Appearance</h3>
+        <p class="appearance-help">One look for every Work and Chat window. Changes apply throughout the app.</p>
         <fieldset class="appearance-preferences">
           <legend>Theme tone</legend>
           <p class="appearance-help">Choose how much of the theme’s lightness comes through.</p>
@@ -117,7 +123,7 @@
         </fieldset>
         <fieldset class="appearance-preferences">
           <legend>Surface treatment</legend>
-          <p class="appearance-help">Set the visual weight of panels and cards.</p>
+          <p class="appearance-help">Show more artwork or give the blue-tinted surfaces more presence.</p>
           <div class="appearance-options">
             <label><input type="radio" name="appearanceSurface" value="minimal"> <span>Minimal</span></label>
             <label><input type="radio" name="appearanceSurface" value="balanced"> <span>Balanced</span></label>
@@ -145,6 +151,7 @@
   <script src="/identity.js"></script>
   <script src="/provider-updates.js"></script>
   <script src="/appearance.js"></script>
+  <script src="/appearance-sync.js"></script>
   <script src="/chat.js"></script>
 </body>
 </html>
