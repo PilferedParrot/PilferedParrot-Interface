@@ -144,15 +144,26 @@ class WindowsNativeControlsTests(unittest.TestCase):
                     self._wait(frame_is_themed, "Chromium's native caption did not use the installed theme")
                 finally:
                     print("Native frame pixels:", observed, "expected:", expected_pixel)
-                toolbar_rgba = page.evaluate("""() => {
+                surfaces = page.evaluate("""() => {
                     const context = document.createElement('canvas').getContext('2d');
-                    context.fillStyle = getComputedStyle(document.querySelector('.topbar')).backgroundColor;
-                    context.fillRect(0, 0, 1, 1);
-                    return [...context.getImageData(0, 0, 1, 1).data];
+                    const rgba = value => {
+                        context.clearRect(0, 0, 1, 1);
+                        context.fillStyle = value;
+                        context.fillRect(0, 0, 1, 1);
+                        return [...context.getImageData(0, 0, 1, 1).data];
+                    };
+                    return {
+                        toolbar: rgba(getComputedStyle(document.querySelector('.topbar')).backgroundColor),
+                        composer: rgba(getComputedStyle(document.querySelector('.composer')).backgroundColor),
+                        panel: rgba(getComputedStyle(document.body).getPropertyValue('--panel').trim()),
+                    };
                 }""")
-                for actual, expected in zip(toolbar_rgba[:3], color):
+                # Chrome owns its themed native caption above. The page header
+                # uses the shared blue surface, just like the composer in both modes.
+                self.assertEqual(surfaces['toolbar'], surfaces['composer'])
+                for actual, expected in zip(surfaces['toolbar'][:3], surfaces['panel'][:3]):
                     self.assertAlmostEqual(actual, expected, delta=1)
-                self.assertEqual(toolbar_rgba[3], 255)
+                self.assertAlmostEqual(surfaces['toolbar'][3] / 255, .64, delta=.01)
                 user32.ShowWindow(hwnd, 3)
                 self._wait(lambda: user32.IsZoomed(hwnd), "Native maximize did not work")
                 user32.ShowWindow(hwnd, 9)
