@@ -225,16 +225,32 @@ class BrowserEndToEndTests(unittest.TestCase):
         buttons.first.click()
         expect(dialog).to_be_visible()
         expect(dialog.locator("#terminalCommand")).to_have_text("echo first")
+        expected_command = "echo first"
+        if sys.platform == "win32":
+            # Run with AI retains the server's platform validation. A Unix
+            # shell fence is rejected; the stored PowerShell fence can run.
+            with patch("pilferedparrot.web.launch_terminal") as launch, \
+                 self.page.expect_response("**/commands") as rejected_response:
+                dialog.locator("#confirmTerminal").click()
+            self.assertEqual(rejected_response.value.status, 400)
+            expect(self.page.locator("#toast")).to_contain_text("requires a Unix shell")
+            launch.assert_not_called()
+            self.assertEqual(self.fixture.provider.requests, [])
+            expect(dialog).to_be_visible()
+            dialog.get_by_role("button", name="Cancel").click()
+            buttons.last.click()
+            expected_command = "Write-Output 'accepted on Windows'"
+            expect(dialog.locator("#terminalCommand")).to_have_text(expected_command)
         with patch("pilferedparrot.web.launch_terminal") as launch, \
              self.page.expect_response("**/commands") as command_response:
             dialog.locator("#confirmTerminal").click()
-        self.assertTrue(command_response.value.ok)
+        self.assertTrue(command_response.value.ok, command_response.value.text())
         launch.assert_not_called()
         expect(self.page.locator("#toast")).to_contain_text("Sent command to the AI")
         deadline = time.monotonic() + 5
         while not self.fixture.provider.requests and time.monotonic() < deadline:
             self.page.wait_for_timeout(50)
-        self.assertIn("echo first", self.fixture.provider.requests[-1][1])
+        self.assertIn(expected_command, self.fixture.provider.requests[-1][1])
 
     def test_command_dialog_reopens_after_failed_request_for_retry(self):
         command = "echo visible-command"
