@@ -144,6 +144,28 @@ class WindowsNativeControlsTests(unittest.TestCase):
                     self._wait(frame_is_themed, "Chromium's native caption did not use the installed theme")
                 finally:
                     print("Native frame pixels:", observed, "expected:", expected_pixel)
+                # Fresh installs use Minimal, whose header and composer have
+                # deliberately different opacities. Check that default before
+                # exercising Balanced's matching surfaces below.
+                expect(page.locator("body")).to_have_attribute("data-appearance-tone", "darker")
+                expect(page.locator("body")).to_have_attribute("data-appearance-surface", "minimal")
+                expect(page.locator("body")).to_have_attribute("data-appearance-readability", "standard")
+                minimal_alpha = page.evaluate("""() => {
+                    const context = document.createElement('canvas').getContext('2d');
+                    return ['.topbar', '.composer'].map(selector => {
+                        context.clearRect(0, 0, 1, 1);
+                        context.fillStyle = getComputedStyle(document.querySelector(selector)).backgroundColor;
+                        context.fillRect(0, 0, 1, 1);
+                        return context.getImageData(0, 0, 1, 1).data[3] / 255;
+                    });
+                }""")
+                self.assertAlmostEqual(minimal_alpha[0], .30, delta=.01)
+                self.assertAlmostEqual(minimal_alpha[1], .14, delta=.01)
+                page.get_by_role("button", name="Preferences", exact=True).click()
+                preferences = page.get_by_role("dialog", name="Preferences", exact=True)
+                preferences.get_by_label("Balanced", exact=True).check()
+                expect(page.locator("body")).to_have_attribute("data-appearance-surface", "balanced")
+                preferences.get_by_role("button", name="Close", exact=True).click()
                 surfaces = page.evaluate("""() => {
                     const context = document.createElement('canvas').getContext('2d');
                     const rgba = value => {
