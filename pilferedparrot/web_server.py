@@ -29,7 +29,7 @@ from urllib.request import urlopen
 ASSET_ROOT = Path(__file__).resolve().parent / "web_assets"
 RUNTIME_ROOT = Path(__file__).resolve().parent
 ASSET_NAMES = (
-    "index.html", "chat.html", "app.css", "expanded-content.css", "code-actions.css", "markdown.js", "code-actions.js", "expanded-content.js", "identity.js", "provider-updates.js", "app.js", "chat.js", "icon.svg",
+    "index.html", "chat.html", "app.css", "expanded-content.css", "code-actions.css", "markdown.js", "usage.js", "code-actions.js", "expanded-content.js", "identity.js", "provider-updates.js", "app.js", "chat.js", "icon.svg",
     "pilferedparrot-icon.png", "company-logo.png", "company-logo-dark.png", "whiteboard-ui.js", "appearance.js", "appearance-sync.js",
 )
 API_GENERATION = 23
@@ -417,6 +417,8 @@ def make_handler(
                 self._asset("code-actions.css", "text/css; charset=utf-8")
             elif path == "/app.js":
                 self._asset("app.js", "text/javascript; charset=utf-8")
+            elif path == "/usage.js":
+                self._asset("usage.js", "text/javascript; charset=utf-8")
             elif path == "/appearance-sync.js":
                 self._asset("appearance-sync.js", "text/javascript; charset=utf-8")
             elif path == "/appearance.js":
@@ -484,10 +486,12 @@ def make_handler(
                 else:
                     self._json(app.appearance_preferences())
             elif path == "/api/budgets":
-                if self._request_capability_scope() != "dashboard":
-                    self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
+                context = self._request_capability_context()
+                if context is None or context.get("scope") not in {"dashboard", "chat"}:
+                    self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
                 else:
-                    self._json({name: value.as_dict() for name, value in app.budgets().items()})
+                    self._json({name: value.as_dict() for name, value in app.budgets().items()
+                                if context["scope"] == "dashboard" or name == context.get("provider")})
             elif re.fullmatch(r"/api/providers/[^/]+/models", path):
                 provider = path.split("/")[3]
                 scope = self._request_capability_scope()

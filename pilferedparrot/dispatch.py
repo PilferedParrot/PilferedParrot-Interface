@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from queue import Empty, Queue
 from dataclasses import dataclass
 from pathlib import Path
@@ -150,6 +151,7 @@ def _stream_process(
     *,
     cancel_event: threading.Event | None,
     stdout_line: Callable[[str], None],
+    on_tick: Callable[[], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Stream a provider until it exits or is cancelled, with no job deadline."""
     _check_cancelled(cancel_event)
@@ -200,9 +202,13 @@ def _stream_process(
 
     writer = threading.Thread(target=write_prompt, name="pilferedparrot-provider-stdin", daemon=True)
     writer.start()
+    next_tick = 0.0
     try:
         while len(finished) < 2 or proc.poll() is None:
             _check_cancelled(cancel_event)
+            if on_tick is not None and time.monotonic() >= next_tick:
+                on_tick()
+                next_tick = time.monotonic() + 1
             if not input_errors.empty():
                 raise input_errors.get_nowait()
             try:
@@ -268,9 +274,11 @@ def _codex_message(event: dict[str, Any]) -> str | None:
 
 
 def _token_count(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
     try:
         count = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return count if count >= 0 else None
 
@@ -493,6 +501,42 @@ def capture_codex(
     usage_includes_children: bool | None = None
     reported_model: str | None = None
     reported_reasoning_effort: str | None = None
+    usage_callback = getattr(cancel_event, "_pilferedparrot_usage", None)
+    last_observed = 0
+    from .context_telemetry import CodexUsageReader
+    configured_home = os.environ.get("CODEX_HOME")
+    usage_reader = CodexUsageReader(
+        Path(configured_home).expanduser() if configured_home else
+        expanded_path(config["codex"]["config_path"]).parent,
+    )
+
+    def update_usage(event: dict[str, Any]) -> None:
+        nonlocal live_usage, last_observed
+        parsed = _live_usage_from_event(event)
+        if parsed is None:
+            return
+        observed = None
+        try:
+            observed = int(datetime.fromisoformat(
+                str(event.get("timestamp", "")).replace("Z", "+00:00"),
+            ).timestamp())
+        except (ValueError, OverflowError, OSError):
+            pass
+        observed = observed or int(time.time())
+        if observed < last_observed:
+            return
+        live_usage, last_observed = parsed, observed
+        if callable(usage_callback):
+            usage_callback({
+                "input_tokens": parsed[0], "output_tokens": parsed[1],
+                "context_window_tokens": parsed[2],
+                "observed_at": observed,
+            })
+
+    def poll_usage() -> None:
+        event = usage_reader.read(conversation.provider_session_id)
+        if event is not None:
+            update_usage(event)
 
     def receive(line: str) -> None:
         nonlocal final_message, input_tokens, output_tokens, live_usage
@@ -524,9 +568,7 @@ def capture_codex(
             reported_model = runtime_model
         if runtime_effort is not None:
             reported_reasoning_effort = runtime_effort
-        parsed_live_usage = _live_usage_from_event(event)
-        if parsed_live_usage is not None:
-            live_usage = parsed_live_usage
+        update_usage(event)
         if on_progress:
             _report_codex_event(event, on_progress)
 
@@ -534,7 +576,10 @@ def capture_codex(
         command, prompt, cwd,
         cancel_event=cancel_event,
         stdout_line=receive,
+        **({"on_tick": poll_usage} if callable(usage_callback) else {}),
     )
+    if callable(usage_callback):
+        poll_usage()
     error = completed.stderr.strip()
     text = final_message or "\n".join(filter(None, plain_output))
     if live_usage is None:

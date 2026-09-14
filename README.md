@@ -4,15 +4,15 @@ PilferedParrot Interface (PPI) is a local browser interface for coding CLIs and 
 model APIs. Choose the provider for a work session, keep its project and history together, and
 open a separate read-only Chat window when you need a quick question.
 
-The current checkout is the **0.7.0-rc.17 preview**. Linux 0.6.1 remains the stable release;
+The current checkout is the **0.7.0-rc.18 preview**. Linux 0.6.1 remains the stable release;
 the Windows 10/11 x64 build is a portable preview. Preview downloads are available from the
-[0.7.0-rc.17 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.17).
+[0.7.0-rc.18 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.18).
 
 [Project site](https://pilferedparrot.github.io/PilferedParrot-Interface/) ·
-[Linux rc.17 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.17/pilferedparrot-0.7.0-rc.17-source.tar.gz) ·
+[Linux rc.18 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.18/pilferedparrot-0.7.0-rc.18-source.tar.gz) ·
 [Stable Linux release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.6.1) ·
 [Release notes](RELEASE_NOTES.md) ·
-[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.17/PilferedParrot-0.7.0-rc.17-windows-x64.zip) ·
+[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.18/PilferedParrot-0.7.0-rc.18-windows-x64.zip) ·
 [Report a bug](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new?template=bug_report.yml) ·
 [Share feedback](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new/choose)
 
@@ -45,6 +45,19 @@ restrictions retain their normal behavior.
 
 Wide tables and preformatted charts keep their top-right fullscreen control.
 Close the expanded view with its upper-right button or Escape.
+
+### Usage displays
+
+Work and Chat show all allowance windows reported by Codex, with percentage used,
+percentage left, reset times, and freshness. Five-hour and weekly windows depend
+on the account and model bucket; unavailable windows are not invented. API-key
+billing is separate from ChatGPT included usage. These displays follow
+[OpenAI's current usage documentation](https://learn.chatgpt.com/docs/pricing).
+
+Context usage is a next-request estimate. Codex updates it from local usage records
+during a response; other providers use their available telemetry or a labelled
+local estimate. Refreshing these displays sends no prompts or model requests.
+Allowance checks use the supported account endpoint and share a short cache.
 
 ## What it does
 
@@ -95,7 +108,7 @@ for authentication and integration limits.
 
 ### Upgrading an existing installation
 
-Download the [rc.17 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.17/pilferedparrot-0.7.0-rc.17-source.tar.gz),
+Download the [rc.18 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.18/pilferedparrot-0.7.0-rc.18-source.tar.gz),
 extract it, and run `./bin/pilferedparrot --version` before replacing your launcher with
 `./bin/install-pilferedparrot-desktop`. Keep the extracted directory in place. Existing
 configuration, browser profiles, conversations, and run metadata remain in their current local
@@ -103,7 +116,7 @@ state directory; do not replace your `config.json` unless you intend to reconfig
 
 ## Windows preview
 
-Download the [0.7.0-rc.17 Windows x64 ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.17/PilferedParrot-0.7.0-rc.17-windows-x64.zip),
+Download the [0.7.0-rc.18 Windows x64 ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.18/PilferedParrot-0.7.0-rc.18-windows-x64.zip),
 extract it to a directory you control, and run `PilferedParrot.exe`. The package includes Python,
 needs no installation or administrator rights, and uses Chrome, Chromium, or Microsoft Edge. Keep
 the console window open while PPI runs and keep the extracted directory together. The executable

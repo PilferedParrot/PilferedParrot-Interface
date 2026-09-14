@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -49,28 +51,44 @@ def _number(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return float(value)
+        try:
+            number = float(value)
+        except (OverflowError, ValueError):
+            return None
+        return number if math.isfinite(number) else None
     if isinstance(value, str):
         try:
-            return float(value.strip())
-        except ValueError:
+            number = float(value.strip())
+            return number if math.isfinite(number) else None
+        except (TypeError, ValueError, OverflowError):
             return None
     return None
 
 
 def _epoch(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
-        return int(value)
+        try:
+            number = float(value)
+        except (OverflowError, ValueError):
+            return None
+        if not math.isfinite(number):
+            return None
+        try:
+            return int(number)
+        except (OverflowError, ValueError):
+            return None
     if not isinstance(value, str):
         return None
     try:
         return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
-    except ValueError:
+    except (OverflowError, OSError, TypeError, ValueError):
         return None
 
 
 def _window_label(minutes: Any) -> str | None:
-    if not isinstance(minutes, int):
+    if isinstance(minutes, bool) or not isinstance(minutes, int) or minutes <= 0:
         return None
     if minutes == 300:
         return "5-hour included usage"
@@ -95,6 +113,14 @@ def _missing_note(provider: str, config: dict[str, Any]) -> str:
             f"set {provider}.command in config.json to its full path")
 
 
+def _codex_api_key_login(detail: str) -> bool:
+    """Recognize Codex's successful API-key status without matching errors."""
+    normalized = re.sub(r"[_-]+", " ", detail).lower()
+    return "api key" in normalized and any(
+        phrase in normalized for phrase in ("logged in", "authenticated", "signed in")
+    )
+
+
 def codex_budget_from_response(
     result: dict[str, Any], observed_at: int | None = None,
 ) -> ProviderBudget:
@@ -103,49 +129,61 @@ def codex_budget_from_response(
     Codex reports percentage used. PilferedParrot derives percentage left, but does
     not describe that figure as a percentage of the subscription.
     """
+    def parse_snapshots(
+        snapshots: list[tuple[str | None, dict[str, Any]]],
+    ) -> list[BudgetWindow]:
+        windows: list[BudgetWindow] = []
+        multiple_buckets = len(snapshots) > 1
+        for limit_id, limits in snapshots:
+            bucket = limits.get("limitName")
+            if not isinstance(bucket, str) or not bucket.strip():
+                bucket = limit_id.replace("_", " ").strip().title() if limit_id else None
+            else:
+                bucket = bucket.strip()
+            for key in ("primary", "secondary"):
+                raw = limits.get(key)
+                if not isinstance(raw, dict):
+                    continue
+                used = _number(raw.get("usedPercent"))
+                if used is None:
+                    continue
+                duration = raw.get("windowDurationMins")
+                valid_duration = (
+                    duration if isinstance(duration, int) and not isinstance(duration, bool)
+                    and duration > 0 else None
+                )
+                label = _window_label(valid_duration)
+                if multiple_buckets and bucket:
+                    label = f"{bucket} · {label or key.title()}"
+                windows.append(BudgetWindow(
+                    used_percent=max(0.0, min(100.0, used)),
+                    window_minutes=valid_duration,
+                    resets_at=_epoch(raw.get("resetsAt")),
+                    label=label,
+                ))
+        return windows
+
+    if not isinstance(result, dict):
+        result = {}
     by_id = result.get("rateLimitsByLimitId")
     snapshots: list[tuple[str | None, dict[str, Any]]] = []
     if isinstance(by_id, dict):
         snapshots = [
-            (str(limit_id), raw) for limit_id, raw in sorted(by_id.items())
+            (str(limit_id), raw) for limit_id, raw in sorted(by_id.items(), key=lambda item: str(item[0]))
             if isinstance(raw, dict)
         ]
-    if not snapshots:
+    windows = parse_snapshots(snapshots)
+    if not windows:
         limits = result.get("rateLimits") or {}
         if isinstance(limits, dict):
-            snapshots = [(None, limits)]
-
-    windows: list[BudgetWindow] = []
-    multiple_buckets = len(snapshots) > 1
-    for limit_id, limits in snapshots:
-        bucket = limits.get("limitName")
-        if not isinstance(bucket, str) or not bucket.strip():
-            bucket = limit_id.replace("_", " ").strip().title() if limit_id else None
-        else:
-            bucket = bucket.strip()
-        for key in ("primary", "secondary"):
-            raw = limits.get(key)
-            if not isinstance(raw, dict):
-                continue
-            used = _number(raw.get("usedPercent"))
-            if used is None:
-                continue
-            duration = raw.get("windowDurationMins")
-            label = _window_label(duration)
-            if multiple_buckets and bucket:
-                label = f"{bucket} · {label or key.title()}"
-            windows.append(BudgetWindow(
-                used_percent=max(0.0, min(100.0, used)),
-                window_minutes=duration if isinstance(duration, int) else None,
-                resets_at=_epoch(raw.get("resetsAt")),
-                label=label,
-            ))
+            windows = parse_snapshots([(None, limits)])
 
     window = _limiting_window(windows)
     if window is None:
         return ProviderBudget(
             "codex", True, observed_at=observed_at,
             note="Codex returned no included-usage window",
+            usage_note="Live Codex allowance unavailable: no valid included-usage window was returned.",
             auth_status=AUTH_SIGNED_IN, reachability=REACHABLE,
             usage_status=USAGE_UNAVAILABLE,
         )
@@ -166,6 +204,7 @@ def read_codex_budget(config: dict[str, Any]) -> ProviderBudget:
             note=_missing_note("codex", config),
             auth_status=AUTH_UNKNOWN, reachability=UNREACHABLE,
             usage_status=USAGE_UNAVAILABLE,
+            usage_note="Live Codex allowance unavailable: Codex CLI is not installed.",
         )
     try:
         auth = subprocess.run(
@@ -178,6 +217,7 @@ def read_codex_budget(config: dict[str, Any]) -> ProviderBudget:
             note=f"auth unverifiable (`codex login status` failed: {error})",
             auth_status=AUTH_UNKNOWN, reachability=UNREACHABLE,
             usage_status=USAGE_UNAVAILABLE,
+            usage_note="Live Codex allowance unavailable: login status could not be checked.",
         )
     auth_detail = ((auth.stdout or auth.stderr) or "").strip()
     if auth.returncode != 0:
@@ -190,6 +230,19 @@ def read_codex_budget(config: dict[str, Any]) -> ProviderBudget:
             auth_status=AUTH_SIGNED_OUT if signed_out else AUTH_UNKNOWN,
             reachability=UNREACHABLE,
             usage_status=USAGE_UNAVAILABLE,
+            usage_note=("Live Codex allowance unavailable: sign in to Codex first."
+                        if signed_out else
+                        "Live Codex allowance unavailable: login status was unverifiable."),
+        )
+
+    if _codex_api_key_login(auth_detail):
+        return ProviderBudget(
+            "codex", True,
+            note="Codex CLI reports signed in with an API key",
+            auth_status=AUTH_SIGNED_IN, reachability=REACHABLE,
+            usage_status=USAGE_UNSUPPORTED,
+            usage_note=("API usage is billed separately; no ChatGPT plan allowance "
+                        "is available for this login."),
         )
 
     timeout = float(config["codex"].get("budget_timeout_seconds", 8))
@@ -256,6 +309,7 @@ def read_codex_budget(config: dict[str, Any]) -> ProviderBudget:
             # verified fact even when the app-server allowance probe fails.
             auth_status=AUTH_SIGNED_IN, reachability=UNREACHABLE,
             usage_status=USAGE_UNAVAILABLE,
+            usage_note=f"Live Codex allowance unavailable: endpoint probe failed ({exc}).",
         )
     finally:
         if proc is not None and proc.poll() is None:

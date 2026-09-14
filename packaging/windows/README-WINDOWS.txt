@@ -1,7 +1,7 @@
 PilferedParrot Interface for Windows
 ====================================
 
-This is the 0.7.0-rc.17 preview for Windows 10/11 x64. It is a portable package:
+This is the 0.7.0-rc.18 preview for Windows 10/11 x64. It is a portable package:
 extract the ZIP and run PilferedParrot.exe. Python and the application are included,
 so no Python installation, installer, or administrator rights are required.
 

@@ -1137,13 +1137,23 @@ class WebStoreTests(unittest.TestCase):
             self.assertIsNone(public["window"])
             self.assertEqual(public["windows"], [])
 
-            for capability in (app.issue_capability("chat"), "wrong"):
+            codex_budget = ProviderBudget("codex", True)
+            with patch.object(app, "budgets", return_value={
+                "claude": budget, "codex": codex_budget,
+            }):
+                handler = request({
+                    "Host": "127.0.0.1:8765",
+                    "X-PilferedParrot-Capability": app.issue_capability("chat", provider="codex"),
+                })
+                handler._json.assert_called_once_with({"codex": codex_budget.as_dict()})
+
+            for capability in ("wrong", ""):
                 handler = request({
                     "Host": "127.0.0.1:8765",
                     "X-PilferedParrot-Capability": capability,
                 })
                 handler._json.assert_called_once_with(
-                    {"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN,
+                    {"error": "window authorization failed"}, HTTPStatus.FORBIDDEN,
                 )
 
             mutation = object.__new__(handler_type)

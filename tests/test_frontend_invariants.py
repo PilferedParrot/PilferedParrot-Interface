@@ -83,24 +83,15 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertIn('api("/api/project/folder"', self.app_js)
         self.assertIn('$("#projectInput").value = selected.path', self.app_js)
 
-    def test_codex_budget_ui_selects_only_weekly_window(self):
-        weekly_window = _function_body(self.app_js, "codexWeeklyWindow")
-        providers = _function_body(self.app_js, "renderProviders")
-
-        # The browser settings window exposes the weekly allowance. Keep the
-        # filter tied to the duration/label rather than a fragile whole string.
-        self.assertRegex(
-            weekly_window.lower(),
-            r"filter[\s\S]*(?:10080|weekly)",
-            "codexWeeklyWindow must retain only the weekly allowance",
-        )
-        self.assertNotRegex(
-            providers.lower(),
-            r"5[ -]?hour|primary|secondary",
-            "renderProviders must not present the other rate-limit bucket",
-        )
+    def test_codex_budget_ui_renders_all_fresh_allowance_windows(self):
         usage_windows = _function_body(self.app_js, "providerUsageWindows")
-        self.assertRegex(usage_windows, r"codexWeeklyWindow")
+        self.assertIn("supportedWindows", usage_windows)
+        usage = (ASSET_DIR / "usage.js").read_text()
+        self.assertIn('provider !== "codex"', usage)
+        self.assertIn('usage_status !== "available"', usage)
+        self.assertIn("used_percent", usage)
+        self.assertIn("Updated just now", usage)
+        self.assertIn("Usage data is stale", usage)
 
     def test_sidebar_tracks_only_the_window_provider(self):
         providers = _function_body(self.app_js, "renderProviders")
@@ -109,39 +100,33 @@ class FrontendInvariantTests(unittest.TestCase):
 
     def test_claude_sidebar_explains_unsupported_usage_without_allowance_widgets(self):
         usage_windows = _function_body(self.app_js, "providerUsageWindows")
-        unavailable = _function_body(self.app_js, "providerUsageUnavailableMarkup")
+        unavailable = (ASSET_DIR / "usage.js").read_text()
         providers = _function_body(self.app_js, "renderProviders")
         self.assertNotIn('provider === "claude"', usage_windows)
         self.assertNotIn("claudeSidebarWindows", self.app_js)
-        self.assertIn('["unavailable", "unsupported"]', unavailable)
-        self.assertIn("!budget?.usage_note", unavailable)
-        self.assertIn("budget.usage_note", unavailable)
-        self.assertNotIn("Live allowance unavailable", unavailable)
-        self.assertIn('<p class="usage-unavailable-note">', unavailable)
-        self.assertNotIn("allowanceMarkup", unavailable)
-        self.assertNotIn("progressbar", unavailable)
-        self.assertNotIn("Resets", unavailable)
+        self.assertIn('provider !== "codex"', unavailable)
+        self.assertIn('usage_status !== "available"', unavailable)
+        self.assertIn("budget?.usage_note", unavailable)
         self.assertRegex(providers, r'model\s*===\s*"Provider-selected model"\s*\?\s*""')
-        self.assertIn("allowanceMarkup", providers)
-        self.assertIn("providerUsageUnavailableMarkup(budget)", providers)
-        self.assertIn("usageUnavailable", providers)
-        self.assertIn(".usage-unavailable-note", self.app_css)
+        self.assertIn("PilferedParrotUsage.markup", providers)
+        self.assertIn(".provider-usage", self.app_css)
 
     def test_unsupported_usage_note_is_provider_neutral_and_legacy_windows_are_not_current(self):
-        unavailable = _function_body(self.app_js, "providerUsageUnavailableMarkup")
+        unavailable = (ASSET_DIR / "usage.js").read_text()
         usage_windows = _function_body(self.app_js, "providerUsageWindows")
         self.assertNotIn("claude", unavailable.lower())
-        self.assertNotRegex(unavailable, r'provider\s*[!=]==?')
-        self.assertIn('["unavailable", "unsupported"]', unavailable)
+        self.assertIn('provider !== "codex"', unavailable)
+        self.assertIn('usage_status !== "available"', unavailable)
         self.assertIn("usage_note", unavailable)
         # Legacy Claude allowance windows may remain in persisted/API state, but
         # only the explicitly supported provider window is current UI quota.
-        self.assertRegex(usage_windows, r'provider\s*===\s*"codex"')
-        self.assertNotRegex(usage_windows, r'provider\s*===\s*"claude"')
+        self.assertIn('provider !== "codex"', unavailable)
+        self.assertNotIn('provider === "claude"', usage_windows)
 
     def test_allowance_resets_are_compact_with_exact_local_time_available(self):
-        reset_time = _function_body(self.app_js, "allowanceResetTime")
-        markup = _function_body(self.app_js, "allowanceMarkup")
+        usage = (ASSET_DIR / "usage.js").read_text()
+        reset_time = _function_body(usage, "resetTime")
+        markup = _function_body(usage, "allowanceMarkup")
         self.assertIn("Date.now()", reset_time)
         self.assertIn("Resets in", reset_time)
         self.assertIn("toLocaleString", reset_time)

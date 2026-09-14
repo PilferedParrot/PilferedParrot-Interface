@@ -168,6 +168,7 @@ def _context_usage(
     live_input_tokens: int | None = None, live_output_tokens: int | None = None,
     overhead_tokens: int = 0, output_reservation_tokens: int = 0,
     breakdown: dict[str, int] | None = None,
+    observed_at: int | None = None,
 ) -> dict[str, Any]:
     transcript = _estimated_tokens(context_chars)
     if breakdown is None:
@@ -203,7 +204,32 @@ def _context_usage(
         "basis": "live_next_request",
         "transcript_tokens": transcript,
         "breakdown": breakdown,
+        "source": "provider" if live_input_tokens is not None else "estimate",
+        "observed_at": observed_at,
     }
+
+
+def _record_context_usage(chat: dict[str, Any], usage: dict[str, Any]) -> None:
+    """Keep occupancy telemetry distinct from cumulative billable turn totals."""
+    if type(usage.get("input_tokens")) is not int or usage["input_tokens"] < 0:
+        return
+    output = usage.get("output_tokens", 0)
+    if type(output) is not int or output < 0:
+        return
+    previous = chat.get("live_context_usage") or {}
+    observed = usage.get("observed_at")
+    if observed is None:
+        same = (previous.get("input_tokens"), previous.get("output_tokens")) == (
+            usage["input_tokens"], output,
+        )
+        observed = previous.get("observed_at") if same else None
+    chat["live_context_usage"] = {
+        "input_tokens": usage["input_tokens"], "output_tokens": output,
+        "observed_at": observed or int(time.time()),
+    }
+    window = usage.get("context_window_tokens")
+    if type(window) is int and window > 0 and chat.get("context_limit_tokens"):
+        chat["output_reservation_tokens"] = max(0, int(chat["context_limit_tokens"]) - window)
 
 
 def _codex_instruction_tokens(config: dict[str, Any], model: str | None) -> int:
@@ -749,7 +775,7 @@ class PilferedParrotApp(HarnessWorkflow):
         # duplicate set of CLI/network probes for every window.
         with self.budget_condition:
             age = time.monotonic() - self.budget_refreshed_at
-            if self.budget_snapshot and age < 2:
+            if self.budget_snapshot and age < 30:
                 return dict(self.budget_snapshot)
             if self.budget_refreshing:
                 self.budget_condition.wait_for(lambda: not self.budget_refreshing)
@@ -1807,6 +1833,13 @@ class PilferedParrotApp(HarnessWorkflow):
                         active.last_checkpoint = now
 
             setattr(active.cancel_event, "_pilferedparrot_progress", report_progress)
+            def report_usage(usage: dict[str, Any]) -> None:
+                with self.store.lock:
+                    current = self.store.get(chat_id)
+                    if self._message(current, pending_id).get("pending"):
+                        _record_context_usage(current, usage)
+
+            setattr(active.cancel_event, "_pilferedparrot_usage", report_usage)
             result = capture_dispatch(
                 provider, prompt, cwd, conversation, run_config, active.cancel_event,
             )
@@ -1840,17 +1873,11 @@ class PilferedParrotApp(HarnessWorkflow):
                             "output_tokens": result.output_tokens,
                         }
                     if result.live_input_tokens is not None:
-                        chat["live_context_usage"] = {
+                        _record_context_usage(chat, {
                             "input_tokens": result.live_input_tokens,
                             "output_tokens": result.live_output_tokens or 0,
-                        }
-                        if result.live_context_window_tokens is not None \
-                                and chat.get("context_limit_tokens"):
-                            chat["output_reservation_tokens"] = max(
-                                0,
-                                int(chat["context_limit_tokens"])
-                                - result.live_context_window_tokens,
-                            )
+                            "context_window_tokens": result.live_context_window_tokens,
+                        })
             try:
                 append_run(
                     self.config["ledger"], provider=provider, prompt=prompt, cwd=cwd,
@@ -1891,6 +1918,8 @@ class PilferedParrotApp(HarnessWorkflow):
                     self.store.save()
                     if self.runs.get(chat_id) is active:
                         self.runs.pop(chat_id, None)
+            with self.budget_condition:
+                self.budget_refreshed_at = 0
 
     @staticmethod
     def _message(chat: dict[str, Any], message_id: str) -> dict[str, Any]:
@@ -2117,6 +2146,14 @@ class PilferedParrotApp(HarnessWorkflow):
                 if provider == "qwen" or run_config.get(provider, {}).get("adapter") \
                 == "openai_compatible" else [],
             )
+            def report_usage(usage: dict[str, Any]) -> None:
+                with self.store.lock:
+                    current = self.store.data["chat"]
+                    if any(message.get("id") == pending_id and message.get("pending")
+                           for message in current.get("messages", [])):
+                        _record_context_usage(current, usage)
+
+            setattr(active.cancel_event, "_pilferedparrot_usage", report_usage)
             result = capture_dispatch(
                 provider, content, cwd, conversation,
                 run_config, active.cancel_event,
@@ -2136,17 +2173,11 @@ class PilferedParrotApp(HarnessWorkflow):
                         "output_tokens": result.output_tokens,
                     }
                 if result.live_input_tokens is not None:
-                    chat_thread["live_context_usage"] = {
+                    _record_context_usage(chat_thread, {
                         "input_tokens": result.live_input_tokens,
                         "output_tokens": result.live_output_tokens or 0,
-                    }
-                    if result.live_context_window_tokens is not None \
-                            and chat_thread.get("context_limit_tokens"):
-                        chat_thread["output_reservation_tokens"] = max(
-                            0,
-                            int(chat_thread["context_limit_tokens"])
-                            - result.live_context_window_tokens,
-                        )
+                        "context_window_tokens": result.live_context_window_tokens,
+                    })
         except RunCancelled:
             reply = "Stopped."
         except Exception as error:
@@ -2216,6 +2247,9 @@ class PilferedParrotApp(HarnessWorkflow):
                     self.store.save()
                 if self.chat_run is active:
                     self.chat_run = None
+
+            with self.budget_condition:
+                self.budget_refreshed_at = 0
 
     def cancel_chat(self) -> dict[str, Any]:
         with self.runs_lock:
