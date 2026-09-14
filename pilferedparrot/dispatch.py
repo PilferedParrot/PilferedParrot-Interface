@@ -16,6 +16,7 @@ from typing import Any, Callable
 from .config import (
     codex_additional_write_dirs, expanded_path, model_context_window, resolve_command,
 )
+from .desktop_auth import provider_environment
 from .model import Conversation
 from .processes import provider_argv
 from .qwen import run_compatible_agent, run_qwen_agent
@@ -115,6 +116,7 @@ def _capture_process(
         text=True, encoding="utf-8", errors="replace",
         cwd=cwd,
         start_new_session=True,
+        env=provider_environment(),
     )
     deadline = time.monotonic() + timeout_seconds
     first_communicate = True
@@ -160,6 +162,7 @@ def _stream_process(
         cwd=cwd,
         bufsize=1,
         start_new_session=True,
+        env=provider_environment(),
     )
     assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
     lines: Queue[tuple[str, str | None]] = Queue()
@@ -387,6 +390,7 @@ def dispatch_codex(prompt: str, cwd: Path, conversation: Conversation, config: d
     proc = subprocess.Popen(
         provider_argv(command), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None,
         text=True, encoding="utf-8", errors="replace", cwd=cwd, bufsize=1,
+        env=provider_environment(),
     )
     assert proc.stdin is not None and proc.stdout is not None
     proc.stdin.write(prompt)

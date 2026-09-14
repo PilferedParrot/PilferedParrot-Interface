@@ -11,6 +11,7 @@
   <link rel="icon" href="/pilferedparrot-icon.png" type="image/png">
   <link rel="stylesheet" href="/app.css">
   <link rel="stylesheet" href="/expanded-content.css">
+  <link rel="stylesheet" href="/code-actions.css">
 </head>
 <body>
   <header class="native-titlebar" id="nativeTitlebar" hidden>
@@ -207,15 +208,15 @@
   <dialog id="terminalDialog" aria-labelledby="terminalTitle">
     <form method="dialog" class="dialog-card" id="terminalForm">
       <div class="dialog-heading">
-        <h2 id="terminalTitle">Run in terminal?</h2>
+        <h2 id="terminalTitle">Run with AI?</h2>
         <button type="button" class="dialog-close" data-dialog-close aria-label="Close" title="Close"><span aria-hidden="true">×</span></button>
       </div>
       <p>The command will run in <code id="terminalCwd"></code>.</p>
       <pre class="terminal-command"><code id="terminalCommand"></code></pre>
-      <p class="terminal-note">The terminal will show the folder and command before running it. If the command uses <code>sudo</code>, review that line before entering your password in the terminal.</p>
+      <p class="terminal-note">The AI in this session will execute the command and report the result here. If <code>sudo</code> needs your password, use the desktop password prompt.</p>
       <div class="dialog-actions">
         <button value="cancel" class="secondary" formnovalidate>Cancel</button>
-        <button value="default" id="confirmTerminal"><span aria-hidden="true">▶</span> Run in terminal</button>
+        <button value="default" id="confirmTerminal"><span aria-hidden="true">▶</span> Run with AI</button>
       </div>
     </form>
   </dialog>
@@ -281,6 +282,7 @@
   </dialog>
   <div class="toast" id="toast" popover="manual" role="status" aria-live="polite" aria-atomic="true"></div>
   <script src="/markdown.js"></script>
+  <script src="/code-actions.js"></script>
   <script src="/expanded-content.js"></script>
   <script src="/identity.js"></script>
   <script src="/provider-updates.js"></script>

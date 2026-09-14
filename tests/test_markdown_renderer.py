@@ -115,7 +115,7 @@ class MarkdownRendererTests(unittest.TestCase):
         self.assertIn("inline ```bash echo malformed``` remains text", output)
         self.assertNotIn("<code>", output)
 
-    def test_command_buttons_keep_raw_fence_indexes_and_single_line_rules(self):
+    def test_command_buttons_keep_raw_fence_indexes_and_length_rules(self):
         output = self.render(
             "```python\nprint('not shell')\n```\n"
             "```bash\necho safe\n```\n"
@@ -127,11 +127,11 @@ class MarkdownRendererTests(unittest.TestCase):
                 "shellLanguages": ["bash", "sh"],
             },
         )
-        self.assertEqual(output.count("data-run-command"), 2)
+        self.assertEqual(output.count("data-run-command"), 3)
         self.assertIn('data-block-index="1"', output)
+        self.assertIn('data-block-index="2"', output)
         self.assertIn('data-block-index="3"', output)
         self.assertNotIn('data-block-index="0"', output)
-        self.assertNotIn('data-block-index="2"', output)
         self.assertIn(
             'data-message-id="assistant-1&quot;&gt;&lt;img src=x&gt;"', output,
         )

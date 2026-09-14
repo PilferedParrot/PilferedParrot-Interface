@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ctypes
+import weakref
+from unittest.mock import patch
 from types import SimpleNamespace
 import unittest
 
@@ -23,6 +25,7 @@ from pilferedparrot.native_window import (
     _XEvent,
     _X_NET_WM_STATE_REMOVE,
     _RESTORE_POLLS,
+    _DECORATION_POLL_SECONDS,
     _XWindow,
     _gesture_rect,
     _is_allowed,
@@ -265,6 +268,88 @@ class NativeWindowTests(unittest.TestCase):
         self.assertEqual(_X_NET_WM_STATE_REMOVE, 0)
         self.assertGreater(_RESTORE_POLLS, 0)
         self.assertLessEqual(_RESTORE_POLLS, 20)
+
+    def test_x11_decoration_repair_only_writes_for_a_live_foreground_binding(self):
+        backend = _X11Backend()
+        binding = _BackendBinding(backend, 41, MARKER, "chromium", 9)
+        writes = []
+        backend._identity_valid = lambda x, d, candidate: candidate is binding
+        backend._active = lambda x, d: 41
+        backend._motif_hints = lambda x, d, handle: (2, 1)
+        backend._remove_decorations = lambda x, d, handle: writes.append(handle)
+        self.assertTrue(backend._repair_decorations(None, None, binding))
+        self.assertEqual(writes, [41])
+        backend._motif_hints = lambda x, d, handle: (2, 0)
+        self.assertTrue(backend._repair_decorations(None, None, binding))
+        self.assertEqual(writes, [41])
+        backend._identity_valid = lambda x, d, candidate: False
+        self.assertFalse(backend._repair_decorations(None, None, binding))
+        self.assertEqual(writes, [41])
+
+    def test_x11_motif_hints_reads_format32_using_xlib_ulong_stride(self):
+        values = (ctypes.c_ulong * 5)(2, 0, 1, 0, 0)
+
+        class FakeXlib:
+            def XGetWindowProperty(self, *args):
+                args[7]._obj.value = 17
+                args[8]._obj.value = 32
+                args[9]._obj.value = 5
+                args[10]._obj.value = 0
+                args[11]._obj.value = ctypes.cast(values, ctypes.c_void_p).value
+                return 0
+
+            def XFree(self, _data):
+                return 0
+
+        backend = _X11Backend()
+        backend._atom = lambda x, d, name: 17
+        self.assertEqual(backend._motif_hints(FakeXlib(), 1, 41), (2, 1))
+
+    def test_x11_decoration_repair_pauses_unfocused_and_resumes(self):
+        backend = _X11Backend()
+        binding = _BackendBinding(backend, 41, MARKER, "chromium", 9)
+        writes = []
+        focus = iter((99, 41))
+        backend._identity_valid = lambda x, d, candidate: True
+        backend._active = lambda x, d: next(focus)
+        backend._motif_hints = lambda x, d, handle: (2, 1)
+        backend._remove_decorations = lambda x, d, handle: writes.append(handle)
+        self.assertTrue(backend._repair_decorations(None, None, binding))
+        self.assertTrue(backend._repair_decorations(None, None, binding))
+        self.assertEqual(writes, [41])
+
+    def test_x11_decoration_watcher_stops_after_identity_loss(self):
+        backend = _X11Backend()
+        binding = _BackendBinding(backend, 41, MARKER, "chromium", 9)
+        states = iter((True, False))
+        checks = []
+
+        def checked(operation):
+            checks.append(operation(None, None))
+            return checks[-1]
+
+        backend._checked = checked
+        backend._repair_decorations = lambda x, d, candidate: next(states)
+        with patch("pilferedparrot.native_window.time.sleep") as sleep:
+            backend._watch_decorations(lambda: binding)
+        self.assertEqual(checks, [True, False])
+        sleep.assert_called_once_with(_DECORATION_POLL_SECONDS)
+
+    def test_x11_decoration_watcher_does_not_retain_released_binding(self):
+        backend = _X11Backend()
+        binding = _BackendBinding(backend, 41, MARKER, "chromium", 9)
+        reference = weakref.ref(binding)
+        backend._checked = lambda operation: operation(None, None)
+        backend._repair_decorations = lambda x, d, candidate: True
+
+        def release(_seconds):
+            nonlocal binding
+            binding = None
+            self.assertIsNone(reference(), "watcher retained the released window")
+
+        with patch("pilferedparrot.native_window.time.sleep", side_effect=release) as sleep:
+            backend._watch_decorations(reference)
+        sleep.assert_called_once_with(_DECORATION_POLL_SECONDS)
 
     def test_win32_pointer_and_rectangle_are_fixed_width_native_structures(self):
         self.assertEqual(ctypes.sizeof(_POINT), 8)

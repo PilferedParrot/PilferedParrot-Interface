@@ -14,6 +14,7 @@ import re
 import sys
 import threading
 import time
+import weakref
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
@@ -241,6 +242,7 @@ _X_NET_WM_STATE_TOGGLE = 2
 _X_NET_WM_STATE_REMOVE = 0
 _RESTORE_POLL_SECONDS = 0.02
 _RESTORE_POLLS = 10
+_DECORATION_POLL_SECONDS = 0.25
 
 
 class _X11Backend(_Backend):
@@ -409,20 +411,71 @@ class _X11Backend(_Backend):
     def _active(self, x: Any, display: int) -> int:
         return self._cardinal(x, display, x.XDefaultRootWindow(display), "_NET_ACTIVE_WINDOW") or 0
 
-    def _valid(self, x: Any, display: int, binding: _BackendBinding) -> bool:
-        if self._active(x, display) != binding.handle:
-            return False
+    def _identity_valid(self, x: Any, display: int, binding: _BackendBinding) -> bool:
         title, window_class = self._identity(x, display, binding.handle)
         title_ok = title == binding.expected_title or _RESTORED_TITLE.match(title) is not None
         pid = self._cardinal(x, display, binding.handle, "_NET_WM_PID")
         return title_ok and window_class == binding.window_class and (binding.process_id is None or pid == binding.process_id)
 
+    def _valid(self, x: Any, display: int, binding: _BackendBinding) -> bool:
+        return self._active(x, display) == binding.handle and self._identity_valid(x, display, binding)
+
     def _remove_decorations(self, x: Any, display: int, handle: int) -> None:
         # flags=MWM_HINTS_DECORATIONS (2), decorations=0.
+        # Xlib stores format-32 values in unsigned long slots on LP64.
         hints = (ctypes.c_ulong * 5)(2, 0, 0, 0, 0)
         atom = self._atom(x, display, "_MOTIF_WM_HINTS")
         x.XChangeProperty(display, handle, atom, atom, 32, _X_PROP_MODE_REPLACE, ctypes.cast(hints, ctypes.POINTER(ctypes.c_ubyte)), 5)
         x.XFlush(display)
+
+    def _motif_hints(self, x: Any, display: int, handle: int) -> tuple[int, int] | None:
+        """Read flags and decorations from Motif hints, if the property exists."""
+        actual_type, actual_format = _XAtom(), ctypes.c_int()
+        items, after, data = ctypes.c_ulong(), ctypes.c_ulong(), ctypes.c_void_p()
+        atom = self._atom(x, display, "_MOTIF_WM_HINTS")
+        status = x.XGetWindowProperty(
+            display, handle, atom, 0, 5, 0, atom,
+            ctypes.byref(actual_type), ctypes.byref(actual_format),
+            ctypes.byref(items), ctypes.byref(after), ctypes.byref(data),
+        )
+        if status or actual_type.value != atom or actual_format.value != 32 or items.value < 3 or not data.value:
+            if data.value:
+                x.XFree(data)
+            return None
+        try:
+            values = ctypes.cast(data, ctypes.POINTER(ctypes.c_ulong))
+            return int(values[0]), int(values[2])
+        finally:
+            x.XFree(data)
+
+    def _repair_decorations(self, x: Any, display: int, binding: _BackendBinding) -> bool:
+        """Repair a WM/Chromium rewrite only while the binding is still foreground."""
+        if not self._identity_valid(x, display, binding):
+            return False
+        # Keep watching while another window is foreground; never mutate it.
+        if self._active(x, display) != binding.handle:
+            return True
+        hints = self._motif_hints(x, display, binding.handle)
+        if hints is None or not (hints[0] & 2) or hints[1] != 0:
+            self._remove_decorations(x, display, binding.handle)
+        return True
+
+    def _watch_decorations(self, binding_ref: weakref.ReferenceType[_BackendBinding]) -> None:
+        """Watch a bound window without retaining it after its page is gone."""
+        while True:
+            binding = binding_ref()
+            if binding is None:
+                return
+            try:
+                alive = self._checked(
+                    lambda x, d: self._repair_decorations(x, d, binding),
+                )
+            except (NativeWindowError, OSError, ctypes.ArgumentError):
+                return
+            if not alive:
+                return
+            binding = None
+            time.sleep(_DECORATION_POLL_SECONDS)
 
     def bind(self, expected_title: str) -> _BackendBinding | None:
         try:
@@ -435,7 +488,15 @@ class _X11Backend(_Backend):
                     return None
                 self._remove_decorations(x, display, handle)
                 return _BackendBinding(self, handle, expected_title, window_class, self._cardinal(x, display, handle, "_NET_WM_PID"))
-            return self._checked(operation)
+            binding = self._checked(operation)
+            if binding is not None:
+                threading.Thread(
+                    target=self._watch_decorations,
+                    args=(weakref.ref(binding),),
+                    name="pilferedparrot-x11-decorations",
+                    daemon=True,
+                ).start()
+            return binding
         except (NativeWindowError, OSError, ctypes.ArgumentError):
             return None
 

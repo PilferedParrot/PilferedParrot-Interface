@@ -100,7 +100,10 @@
       result.push({
         type: "fence",
         language: opening[1] ? opening[1].toLowerCase() : "",
-        code: lines.slice(index + 1, closing).join("\n").trim(),
+        // The fence markers are syntax; every character between them is code.
+        // Do not trim here: indentation and deliberate leading/trailing blank
+        // lines must survive both display and copy.
+        code: lines.slice(index + 1, closing).join("\n"),
         blockIndex: blockIndex,
       });
       blockIndex += 1;
@@ -177,15 +180,18 @@
         var language = item.language;
         var languageClass = language ? " language-" + escapeHtml(language) : "";
         var attrs = language ? " data-language=\"" + escapeHtml(language) + "\"" : "";
-        var button = "";
+        var button = "<button type=\"button\" class=\"copy-code-button\" data-copy-code " +
+          "title=\"Copy code\" aria-label=\"Copy code\">Copy</button>";
+        var runnable = false;
         var target = options.commandTarget;
-        if (target && isShell(language) && code && code.indexOf("\n") < 0 &&
+        if (target && isShell(language) && code &&
             code.length <= MAX_RUNNABLE_COMMAND_LENGTH) {
-          button = "<button type=\"button\" class=\"run-command\" data-run-command data-message-id=\"" +
+          runnable = true;
+          button += "<button type=\"button\" class=\"run-command\" data-run-command data-message-id=\"" +
             escapeHtml(target.messageId) + "\" data-block-index=\"" + item.blockIndex +
-            "\" title=\"Run in terminal\" aria-label=\"Run command in terminal\">▶</button>";
+            "\" title=\"Run with AI\" aria-label=\"Run command with AI\">▶</button>";
         }
-        output += "<div class=\"code-block" + (button ? " runnable" : "") + "\"" + attrs + ">" +
+        output += "<div class=\"code-block" + (runnable ? " runnable" : "") + "\"" + attrs + ">" +
           button + "<pre><code class=\"" + languageClass.slice(1) + "\">" + escapeHtml(code) +
           "</code></pre></div>";
         index += 1;

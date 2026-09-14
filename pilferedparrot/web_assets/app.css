@@ -138,6 +138,7 @@ body.chrome-theme {
   --chrome-theme-message-surface: color-mix(in srgb, var(--chrome-theme-section, #151e29) 88%, transparent);
   --chrome-theme-composer-surface: color-mix(in srgb, var(--chrome-theme-section, #151e29) 90%, transparent);
   background:
+    linear-gradient(var(--artwork-veil, transparent), var(--artwork-veil, transparent)),
     var(--chrome-theme-background-image) var(--chrome-theme-background-position) / auto auto var(--chrome-theme-background-repeat),
     var(--bg);
 }

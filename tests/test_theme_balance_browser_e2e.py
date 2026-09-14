@@ -183,6 +183,8 @@ class ThemeBalanceBrowserEndToEndTests(unittest.TestCase):
                 with self.subTest(palette=palette, kind=kind):
                     page = self._page(theme, kind)
                     self._seed_content(page, kind)
+                    page.get_by_label("Balanced", exact=True).check()
+                    page.get_by_role("button", name="Close", exact=True).click()
                     styles = self._surface_styles(page, kind)
                     self.assertEqual(page._theme_balance_page_errors, [])
                 # Readable authored values stay authored after CSS color conversion.

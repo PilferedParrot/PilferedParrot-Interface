@@ -1691,13 +1691,18 @@ async function cancelMessage() {
 
 function runTerminalCommand(button) {
   const chat = activeChat();
-  if (!chat) return;
+  if (!chat || messageSubmissionPending || activeRunning() || harnessRunning() || chat.harness_parent || selectionSavePending) {
+    toast("Wait for the current work to finish before running a command.");
+    return;
+  }
   const command = button.closest(".code-block")?.querySelector("code")?.textContent || "";
   terminalTarget = {
     button,
     chatId: chat.id,
     messageId: button.dataset.messageId,
     blockIndex: Number(button.dataset.blockIndex),
+    command,
+    requestId: globalThis.crypto?.randomUUID?.() || `command-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   };
   $("#terminalCwd").textContent = chat.cwd;
   $("#terminalCommand").textContent = command;
@@ -1706,28 +1711,35 @@ function runTerminalCommand(button) {
 
 async function confirmTerminalCommand() {
   const target = terminalTarget;
-  if (!target) return;
+  if (!target || messageSubmissionPending) return;
+  messageSubmissionPending = true;
   target.button.disabled = true;
   $("#confirmTerminal").disabled = true;
-  // Restore browser focus before the native terminal opens, so closing the
-  // dialog cannot subsequently bring PPI back in front of the password prompt.
+  // Close before starting work so a desktop password prompt can take focus.
   $("#terminalDialog").close();
   try {
-    await api(`/api/chats/${encodeURIComponent(target.chatId)}/terminal`, {
+    const updated = await api(`/api/chats/${encodeURIComponent(target.chatId)}/commands`, {
       method: "POST",
       body: JSON.stringify({
         message_id: target.messageId,
         block_index: target.blockIndex,
+        command: target.command,
+        request_id: target.requestId,
       }),
     });
-    toast("Opened command in a terminal.");
+    state.chats = state.chats.map(item => item.id === updated.id ? updated : item);
+    render();
+    schedulePoll();
+    toast("Sent command to the AI in this session.");
   } catch (error) {
     terminalTarget = target;
     $("#terminalDialog").showModal();
     toast(error.message);
   } finally {
+    messageSubmissionPending = false;
     if (target.button.isConnected) target.button.disabled = false;
     $("#confirmTerminal").disabled = false;
+    render();
   }
 }
 

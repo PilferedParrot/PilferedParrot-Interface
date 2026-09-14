@@ -84,7 +84,7 @@ class SharedAppearanceBrowserEndToEndTests(unittest.TestCase):
 
     def test_separate_profiles_ignore_old_storage_and_share_durable_server_state(self):
         work = self._work(self._context({
-            "tone": "darker", "surface": "minimal", "readability": "stronger",
+            "tone": "darker", "surface": "minimal", "readability": "standard",
         }))
         chat = self._chat(self._context({
             "tone": "original", "surface": "maximal", "readability": "standard",
@@ -92,21 +92,25 @@ class SharedAppearanceBrowserEndToEndTests(unittest.TestCase):
 
         work_dialog = self._preferences(work)
         chat_dialog = self._preferences(chat)
-        self._expect_appearance(work_dialog, "Original", "Balanced", "Standard")
-        self._expect_appearance(chat_dialog, "Original", "Balanced", "Standard")
+        self._expect_appearance(work_dialog, "Darker", "Minimal", "Standard")
+        self._expect_appearance(chat_dialog, "Darker", "Minimal", "Standard")
 
-        work_dialog.get_by_label("Darker", exact=True).check()
+        work_dialog.get_by_label("Original", exact=True).check()
         work_dialog.get_by_label("Maximal", exact=True).check()
         work_dialog.get_by_label("Stronger", exact=True).check()
-        self._expect_appearance(chat_dialog, "Darker", "Maximal", "Stronger")
+        self._expect_appearance(chat_dialog, "Original", "Maximal", "Stronger")
 
-        chat_dialog.get_by_label("Original", exact=True).check()
+        chat_dialog.get_by_label("Darker", exact=True).check()
         chat_dialog.get_by_label("Minimal", exact=True).check()
         chat_dialog.get_by_label("Standard", exact=True).check()
-        self._expect_appearance(work_dialog, "Original", "Minimal", "Standard")
+        self._expect_appearance(work_dialog, "Darker", "Minimal", "Standard")
 
         fresh = self._work(self._context())
-        self._expect_appearance(self._preferences(fresh), "Original", "Minimal", "Standard")
+        self._expect_appearance(self._preferences(fresh), "Darker", "Minimal", "Standard")
+
+    def test_fresh_profile_uses_new_appearance_defaults(self):
+        page = self._work(self._context())
+        self._expect_appearance(self._preferences(page), "Darker", "Minimal", "Standard")
 
     def test_rapid_local_changes_survive_delayed_poll_and_write_responses(self):
         page = self._work(self._context())
@@ -124,15 +128,16 @@ class SharedAppearanceBrowserEndToEndTests(unittest.TestCase):
         page.route("**/api/preferences/appearance", delay_first_response)
         page.evaluate("void globalThis.PilferedParrotAppearanceSync.connect().refresh()")
         dialog = self._preferences(page)
-        dialog.get_by_label("Darker", exact=True).check()
         dialog.get_by_label("Original", exact=True).check()
         expect(dialog.get_by_label("Original", exact=True)).to_be_checked(timeout=5_000)
-        expect(dialog.get_by_label("Balanced", exact=True)).to_be_checked(timeout=5_000)
+        dialog.get_by_label("Maximal", exact=True).check()
+        expect(dialog.get_by_label("Maximal", exact=True)).to_be_checked(timeout=5_000)
         self.assertTrue(delayed["get"])
+        page.wait_for_timeout(500)
         self.assertTrue(delayed["post"])
 
         fresh = self._work(self._context())
-        self._expect_appearance(self._preferences(fresh), "Original", "Balanced", "Standard")
+        self._expect_appearance(self._preferences(fresh), "Original", "Maximal", "Standard")
 
     def test_poll_does_not_roll_back_a_choice_while_its_save_is_in_flight(self):
         entered = threading.Event()
@@ -149,15 +154,15 @@ class SharedAppearanceBrowserEndToEndTests(unittest.TestCase):
         self.addCleanup(release.set)
         page = self._work(self._context())
         dialog = self._preferences(page)
-        dialog.get_by_label("Darker", exact=True).check()
+        dialog.get_by_label("Original", exact=True).check()
         self.assertTrue(entered.wait(timeout=2), "appearance save did not reach server")
 
         # The visible-page poll runs after one second. It must not GET the
         # still-old server state and roll back this optimistic selection.
         time.sleep(1.2)
-        expect(dialog.get_by_label("Darker", exact=True)).to_be_checked(timeout=2_000)
+        expect(dialog.get_by_label("Original", exact=True)).to_be_checked(timeout=2_000)
         release.set()
-        expect(dialog.get_by_label("Darker", exact=True)).to_be_checked(timeout=5_000)
+        expect(dialog.get_by_label("Original", exact=True)).to_be_checked(timeout=5_000)
 
     def test_overlapping_focus_refreshes_are_serialized(self):
         page = self._work(self._context())
@@ -205,7 +210,7 @@ class SharedAppearanceBrowserEndToEndTests(unittest.TestCase):
 
         page.route("**/api/preferences/appearance", reject_one_save)
         dialog = self._preferences(page)
-        dialog.get_by_label("Darker", exact=True).check()
+        dialog.get_by_label("Original", exact=True).check()
         expect(page.locator("#toast")).to_contain_text("Appearance save failed", timeout=5_000)
-        expect(dialog.get_by_label("Original", exact=True)).to_be_checked(timeout=5_000)
+        expect(dialog.get_by_label("Darker", exact=True)).to_be_checked(timeout=5_000)
         self.assertTrue(rejected)

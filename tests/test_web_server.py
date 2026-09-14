@@ -38,6 +38,57 @@ def bare_handler(handler_type, *, path: str = "/api/status", port: int = 8765):
 
 
 class WebServerHTTPTests(unittest.TestCase):
+    def test_assistant_command_route_requires_work_capability_and_same_origin(self):
+        for capability, origin in (
+            (None, "http://127.0.0.1:8765"),
+            ("wrong-token", "http://127.0.0.1:8765"),
+            ("chat-token", "http://127.0.0.1:8765"),
+            ("dashboard-token", None),
+            ("dashboard-token", "http://127.0.0.1:9999"),
+        ):
+            with self.subTest(capability=capability, origin=origin):
+                app = FakeApp()
+                original_context = app.capability_context
+                app.capability_context = lambda supplied: (
+                    {"scope": "chat", "window_id": "chat", "provider": "codex"}
+                    if supplied == "chat-token" else original_context(supplied)
+                )
+                app.run_assistant_command = MagicMock()
+                handler = bare_handler(web_server.make_handler(app), path="/api/chats/session/commands")
+                if capability is not None:
+                    handler.headers["X-PilferedParrot-Capability"] = capability
+                if origin is not None:
+                    handler.headers["Origin"] = origin
+                handler._read_json = MagicMock()
+                handler._json = MagicMock()
+
+                handler.do_POST()
+
+                app.run_assistant_command.assert_not_called()
+                handler._read_json.assert_not_called()
+                handler._json.assert_called_once_with(
+                    {"error": "local control authorization failed"}, HTTPStatus.FORBIDDEN,
+                )
+
+    def test_assistant_command_route_uses_authorized_session_identity(self):
+        app = FakeApp()
+        app.run_assistant_command = MagicMock(return_value={"id": "session"})
+        handler = bare_handler(web_server.make_handler(app), path="/api/chats/session/commands")
+        handler.headers.update({
+            "X-PilferedParrot-Capability": "dashboard-token",
+            "Origin": "http://127.0.0.1:8765",
+        })
+        payload = {"message_id": "message", "block_index": 0, "command": "pwd", "request_id": "request"}
+        handler._read_json = MagicMock(return_value=payload)
+        handler._json = MagicMock()
+
+        handler.do_POST()
+
+        app.run_assistant_command.assert_called_once_with(
+            "session", payload, window_id="main", window_provider="codex",
+        )
+        handler._json.assert_called_once_with({"id": "session"}, HTTPStatus.ACCEPTED)
+
     def test_native_window_route_derives_identity_from_capability_context(self):
         for scope, window_id in (("dashboard", "provider-launch"), ("chat", "chat")):
             with self.subTest(scope=scope):

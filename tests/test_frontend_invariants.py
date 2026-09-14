@@ -223,12 +223,12 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertRegex(restore, r"querySelectorAll[\s\S]*work-items")
         self.assertRegex(restore, r"scrollTop\s*=")
 
-    def test_single_line_assistant_commands_have_terminal_action(self):
+    def test_assistant_commands_have_ai_action(self):
         render_messages = _function_body(self.app_js, "renderMessages")
         run_command = _function_body(self.app_js, "runTerminalCommand")
         confirm_command = _function_body(self.app_js, "confirmTerminalCommand")
         self.assertIn("data-run-command", self.markdown_js)
-        self.assertRegex(self.markdown_js, r'code\.indexOf\(\"\\n\"\)\s*<\s*0')
+        self.assertIn("data-copy-code", self.markdown_js)
         self.assertIn("commandTarget: assistant && message.id", render_messages)
         self.assertIn("shellLanguages: CODE_BLOCK_LANGUAGES", render_messages)
         self.assertIn('id="terminalDialog"', self.index_html)
@@ -237,7 +237,7 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertIn("sudo", self.index_html)
         self.assertRegex(run_command, r"terminalDialog.*showModal")
         self.assertNotRegex(run_command, r"confirm\(")
-        self.assertRegex(confirm_command, r"/api/chats/.*?/terminal")
+        self.assertRegex(confirm_command, r"/api/chats/.*?/commands")
         self.assertRegex(confirm_command, r"message_id")
         self.assertRegex(confirm_command, r"block_index")
 

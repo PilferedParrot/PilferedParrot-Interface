@@ -32,7 +32,7 @@ scrolls. The close button and Escape dismiss without submitting. Native dialog
 focus handling returns the user to the opening control when it remains available.
 
 Primary actions use a filled button and a specific verb, such as **Use folder**,
-**Run in terminal**, or **Post message**. Secondary actions use an outlined or
+**Run with AI**, or **Post message**. Secondary actions use an outlined or
 quiet button. Place form actions at the bottom, with Cancel before the primary
 action. Close belongs in the heading, not among those actions. Place list-level
 utilities such as Add provider and Refresh together above the list.
@@ -62,8 +62,10 @@ actions may differ; their component styling does not.
 canvas and section colors. Opposite light/dark section and canvas fills use the
 canvas tone so translucent controls remain legible. Readable foregrounds target
 6:1 against the base panel, with at least 4.5:1 verified on control surfaces.
-Stronger readability adds contrast and text separation. Arbitrary artwork still
-varies pixel by pixel; use the available surface/readability settings as needed.
+Stronger readability adds contrast and text separation. An adaptive shade bounds
+the brightest or darkest artwork pixels beneath translucent surfaces. It preserves
+the original image, scale, position, and tiling. Fresh settings use Darker, Minimal,
+and Standard; saved settings continue to win over defaults.
 Never replace the palette with black merely because Minimal is selected.
 
 Balanced uses a deliberate opacity hierarchy: 64% header/composer, 52% sidebar
@@ -84,7 +86,9 @@ them. Platform-owned authentication pages and browser chrome retain platform UI.
 
 The server-backed application setting is authoritative. Do not restore appearance
 from browser-local storage: desktop Work and Chat can use independent profiles.
-The default is Original / Balanced / Standard. Apply saved settings at startup,
+The release default is Darker / Minimal / Standard on Linux and Windows. Keep
+the frontend startup/fallback values and persistent-store defaults aligned, with
+regression coverage for new installations and preserved saved choices. Apply saved settings at startup,
 propagate visible-window changes, and refresh when a window becomes visible again.
 Send partial updates so independent choices cannot clobber each other. A delayed
 read cannot overwrite a newer choice; failed saves must report the failure and

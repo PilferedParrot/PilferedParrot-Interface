@@ -25,6 +25,11 @@ class DraftWhiteboardBrowserTests(unittest.TestCase):
     def setUp(self):
         self.fixture = PilferedParrotBrowserFixture()
         self.addCleanup(self.fixture.stop)
+        # These artwork fidelity checks exercise the unmodified palette rather
+        # than the application's intentionally stronger default appearance.
+        self.fixture.app.set_appearance_preferences({
+            'tone': 'original', 'surface': 'balanced', 'readability': 'standard',
+        })
         self.context = self.browser.new_context()
         self.addCleanup(self.context.close)
         self.page = self.context.new_page()
@@ -122,7 +127,10 @@ class DraftWhiteboardBrowserTests(unittest.TestCase):
         self.assertEqual(decoded, 240)
         self.assertEqual(palette['background'], 'rgb(245, 239, 220)')
         self.assertIn('blob:', palette['image'])
-        self.assertNotIn('gradient', palette['image'])
+        # The adaptive veil is deliberately the first layer; artwork remains
+        # the following layer with its authored placement and scale.
+        self.assertIn('linear-gradient', palette['image'])
+        self.assertGreater(palette['image'].index('blob:'), palette['image'].index('linear-gradient'))
         self.assertNotIn('cover', palette['size'])
         self.assertIn('100% 100%', palette['position'])
         self.assertEqual(palette['authoredToolbar'], '#ffc442')

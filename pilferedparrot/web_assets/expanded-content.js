@@ -54,8 +54,13 @@
     copy.classList.remove("runnable");
     copy.removeAttribute("id");
     copy.querySelectorAll("[id]").forEach(function (node) { node.removeAttribute("id"); });
-    copy.querySelectorAll("button, [data-run-command], .markdown-expand-toolbar").forEach(function (node) {
+    copy.querySelectorAll("[data-run-command], .markdown-expand-toolbar").forEach(function (node) {
       node.remove();
+    });
+    copy.querySelectorAll("[data-copy-code]").forEach(function (button) {
+      button.textContent = "Copy";
+      button.setAttribute("aria-label", "Copy code");
+      button.removeAttribute("data-copy-state");
     });
     return copy;
   }

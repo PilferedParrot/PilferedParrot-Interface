@@ -30,7 +30,7 @@ class AppearancePreferencePersistenceTests(unittest.TestCase):
             store = PersistentChatStore(path, context_usage=self._usage)
 
             self.assertEqual(store.appearance_preferences(), {
-                "tone": "darker", "surface": "balanced", "readability": "standard",
+                "tone": "darker", "surface": "minimal", "readability": "standard",
             })
             self.assertEqual(store.preferences_public()["appearance"], store.appearance_preferences())
 
@@ -40,7 +40,7 @@ class AppearancePreferencePersistenceTests(unittest.TestCase):
             store = PersistentChatStore(path, context_usage=self._usage)
 
             self.assertEqual(store.set_appearance_preferences({"tone": "darker"}), {
-                "tone": "darker", "surface": "balanced", "readability": "standard",
+                "tone": "darker", "surface": "minimal", "readability": "standard",
             })
             self.assertEqual(store.set_appearance_preferences({"surface": "maximal"}), {
                 "tone": "darker", "surface": "maximal", "readability": "standard",
@@ -50,10 +50,30 @@ class AppearancePreferencePersistenceTests(unittest.TestCase):
                 "tone": "darker", "surface": "maximal", "readability": "standard",
             })
 
+    def test_fresh_store_uses_new_appearance_defaults(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = PersistentChatStore(Path(directory) / "chats.json", context_usage=self._usage)
+
+            self.assertEqual(store.appearance_preferences(), {
+                "tone": "darker", "surface": "minimal", "readability": "standard",
+            })
+
+    def test_existing_saved_appearance_choices_are_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "chats.json"
+            store = PersistentChatStore(path, context_usage=self._usage)
+            expected = {"tone": "original", "surface": "balanced", "readability": "standard"}
+
+            self.assertEqual(store.set_appearance_preferences(expected), expected)
+            restarted = PersistentChatStore(path, context_usage=self._usage)
+            self.assertEqual(restarted.appearance_preferences(), expected)
+
     def test_invalid_update_is_rejected_without_changing_preferences(self):
         with tempfile.TemporaryDirectory() as directory:
             store = PersistentChatStore(Path(directory) / "chats.json", context_usage=self._usage)
-            store.set_appearance_preferences({"tone": "darker"})
+            store.set_appearance_preferences({
+                "tone": "original", "surface": "balanced", "readability": "standard",
+            })
             before = store.appearance_preferences()
 
             for payload in ({}, {"tone": "original", "unknown": "value"}, {"surface": []}):
@@ -65,7 +85,9 @@ class AppearancePreferencePersistenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "chats.json"
             store = PersistentChatStore(path, context_usage=self._usage)
-            before = store.set_appearance_preferences({"tone": "darker"})
+            before = store.set_appearance_preferences({
+                "tone": "original", "surface": "balanced", "readability": "standard",
+            })
             persisted_before = json.loads(path.read_text(encoding="utf-8"))
 
             with patch.object(store, "save", side_effect=OSError("disk unavailable")):
@@ -75,7 +97,7 @@ class AppearancePreferencePersistenceTests(unittest.TestCase):
             self.assertEqual(store.appearance_preferences(), before)
             self.assertEqual(json.loads(path.read_text(encoding="utf-8")), persisted_before)
             self.assertEqual(store.set_appearance_preferences({"surface": "maximal"}), {
-                "tone": "darker", "surface": "maximal", "readability": "standard",
+                "tone": "original", "surface": "maximal", "readability": "standard",
             })
 
 

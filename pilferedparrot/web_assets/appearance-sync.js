@@ -1,6 +1,6 @@
 /* Server-backed synchronization for the appearance controller. */
 (function () {
-  const defaults = { tone: "original", surface: "balanced", readability: "standard" };
+  const defaults = { tone: "darker", surface: "minimal", readability: "standard" };
   const valid = {
     tone: new Set(["original", "darker"]),
     surface: new Set(["minimal", "balanced", "maximal"]),
