@@ -26,8 +26,8 @@ NOTIFICATION_PERMISSION_STATES = frozenset({
     "unasked", "granted", "denied", "dismissed", "unavailable",
 })
 APPEARANCE_DEFAULTS = {
-    "tone": "original",
-    "surface": "balanced",
+    "tone": "darker",
+    "surface": "minimal",
     "readability": "standard",
 }
 APPEARANCE_OPTIONS = {

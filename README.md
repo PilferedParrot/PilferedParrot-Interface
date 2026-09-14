@@ -4,15 +4,15 @@ PilferedParrot Interface (PPI) is a local browser interface for coding CLIs and 
 model APIs. Choose the provider for a work session, keep its project and history together, and
 open a separate read-only Chat window when you need a quick question.
 
-The current checkout is the **0.7.0-rc.16 preview**. Linux 0.6.1 remains the stable release;
+The current checkout is the **0.7.0-rc.17 preview**. Linux 0.6.1 remains the stable release;
 the Windows 10/11 x64 build is a portable preview. Preview downloads are available from the
-[0.7.0-rc.16 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.16).
+[0.7.0-rc.17 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.17).
 
 [Project site](https://pilferedparrot.github.io/PilferedParrot-Interface/) ·
-[Linux rc.16 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.16/pilferedparrot-0.7.0-rc.16-source.tar.gz) ·
+[Linux rc.17 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.17/pilferedparrot-0.7.0-rc.17-source.tar.gz) ·
 [Stable Linux release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.6.1) ·
 [Release notes](RELEASE_NOTES.md) ·
-[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.16/PilferedParrot-0.7.0-rc.16-windows-x64.zip) ·
+[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.17/PilferedParrot-0.7.0-rc.17-windows-x64.zip) ·
 [Report a bug](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new?template=bug_report.yml) ·
 [Share feedback](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new/choose)
 
@@ -27,11 +27,21 @@ opened windows, including their separate browser profiles.
 *Actual Work and Chat interface screenshots with example conversations.*
 
 Open **Preferences → Appearance** ([view the controls](docs/assets/appearance-preferences.png))
-to adjust tone, surface weight, and readability. Original / Balanced / Standard is
-the shared default. Minimal reveals more artwork, while Maximal gives panels more
+to adjust tone, surface weight, and readability. **Darker / Minimal / Standard** is
+the shared default for new installations and missing preferences. Existing saved
+choices take priority and survive upgrades. Minimal reveals more artwork, while Maximal gives panels more
 presence; both retain the same blue-tinted palette. Legacy per-browser appearance
 settings are replaced by the shared app setting. Theme artwork keeps its placement
 and scale. Linux and Windows include the same interface.
+
+Every fenced code or text block has a **Copy** button, including expanded views,
+and copying preserves indentation and blank lines. In Work, **Run with AI** sends
+a reviewed shell block to the current session’s provider, reports progress in the
+conversation, and preserves your unsent draft. On Linux desktops with Zenity and
+a private runtime directory, provider commands can use a desktop sudo password
+prompt; an existing `SUDO_ASKPASS` setting takes priority. Passwords pass directly
+from the helper to sudo. Terminals, explicit `sudo -n`/`-S`, and provider sandbox
+restrictions retain their normal behavior.
 
 Wide tables and preformatted charts keep their top-right fullscreen control.
 Close the expanded view with its upper-right button or Escape.
@@ -85,7 +95,7 @@ for authentication and integration limits.
 
 ### Upgrading an existing installation
 
-Download the [rc.16 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.16/pilferedparrot-0.7.0-rc.16-source.tar.gz),
+Download the [rc.17 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.17/pilferedparrot-0.7.0-rc.17-source.tar.gz),
 extract it, and run `./bin/pilferedparrot --version` before replacing your launcher with
 `./bin/install-pilferedparrot-desktop`. Keep the extracted directory in place. Existing
 configuration, browser profiles, conversations, and run metadata remain in their current local
@@ -93,7 +103,7 @@ state directory; do not replace your `config.json` unless you intend to reconfig
 
 ## Windows preview
 
-Download the [0.7.0-rc.16 Windows x64 ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.16/PilferedParrot-0.7.0-rc.16-windows-x64.zip),
+Download the [0.7.0-rc.17 Windows x64 ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.17/PilferedParrot-0.7.0-rc.17-windows-x64.zip),
 extract it to a directory you control, and run `PilferedParrot.exe`. The package includes Python,
 needs no installation or administrator rights, and uses Chrome, Chromium, or Microsoft Edge. Keep
 the console window open while PPI runs and keep the extracted directory together. The executable

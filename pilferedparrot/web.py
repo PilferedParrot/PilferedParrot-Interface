@@ -446,7 +446,7 @@ def _fenced_code_block_details(content: str) -> list[tuple[str | None, str]]:
             break
         language = opening.group(1)
         blocks.append((language.lower() if language else None,
-                       "\n".join(lines[index + 1:closing]).strip()))
+                       "\n".join(lines[index + 1:closing])))
         index = closing + 1
     return blocks
 
@@ -2297,9 +2297,10 @@ class PilferedParrotApp(HarnessWorkflow):
                 "chat_history": self.store.chat_history_public(selected_provider),
             }
 
-    def launch_terminal_command(
+    def _assistant_command(
         self, chat_id: str, payload: dict[str, Any], *, window_id: str | None = None,
-    ) -> None:
+        multiline: bool = False,
+    ) -> tuple[str, Path]:
         message_id = payload.get("message_id")
         block_index = payload.get("block_index")
         if not isinstance(message_id, str) or not message_id:
@@ -2318,13 +2319,49 @@ class PilferedParrotApp(HarnessWorkflow):
             cwd = Path(chat["cwd"])
         if language and language not in CODE_BLOCK_LANGUAGES:
             raise ValueError("only shell command blocks can be run")
-        if not command or "\n" in command or len(command) > 4_000:
+        if not command.strip() or len(command) > 4_000:
+            raise ValueError("command must contain between 1 and 4,000 characters")
+        if not multiline and "\n" in command.strip():
             raise ValueError("only a single non-empty command line can be run")
         if not cwd.is_dir():
             raise ValueError(f"project folder does not exist: {cwd}")
         if sys.platform == "win32" and language in {"bash", "sh", "zsh", "fish"}:
             raise ValueError("This command requires a Unix shell; use a PowerShell command on Windows")
+        return command, cwd
+
+    def launch_terminal_command(
+        self, chat_id: str, payload: dict[str, Any], *, window_id: str | None = None,
+    ) -> None:
+        command, cwd = self._assistant_command(chat_id, payload, window_id=window_id)
         launch_terminal(command, cwd)
+
+    def run_assistant_command(
+        self, chat_id: str, payload: dict[str, Any], *,
+        window_id: str | None = None, window_provider: str | None = None,
+    ) -> dict[str, Any]:
+        """Run a reviewed stored command through the session's normal provider."""
+        request_id = _request_id(payload.get("request_id"))
+        with self.runs_lock:
+            command, _cwd = self._assistant_command(
+                chat_id, payload, window_id=window_id, multiline=True,
+            )
+            if payload.get("command") != command:
+                raise ValueError("The command changed. Close this dialog and review it again.")
+            with self.store.lock:
+                chat = self._owned_chat(chat_id, window_id)
+                if any(message.get("id") == request_id for message in chat["messages"]):
+                    return self.store.public(chat)
+            prompt = (
+                "Run this command in this session's project folder, verify the result, "
+                "and report the outcome here. If administrator authentication is needed, "
+                "use the desktop password prompt (sudo -A when SUDO_ASKPASS is configured)."
+                "\n\n```shell\n" + command + "\n```"
+            )
+            return self.send_message(chat_id, {
+                "content": prompt, "request_id": request_id,
+                # A Play action must not consume the user's unsent composer draft.
+                "draft": None,
+            }, window_id=window_id, window_provider=window_provider)
 
     def provider_auth_action(self, provider: str, action: str) -> dict[str, Any]:
         """Launch a provider-owned browser sign-in or clear its stored CLI login."""

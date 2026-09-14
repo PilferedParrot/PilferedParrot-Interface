@@ -29,7 +29,7 @@ from urllib.request import urlopen
 ASSET_ROOT = Path(__file__).resolve().parent / "web_assets"
 RUNTIME_ROOT = Path(__file__).resolve().parent
 ASSET_NAMES = (
-    "index.html", "chat.html", "app.css", "expanded-content.css", "markdown.js", "expanded-content.js", "identity.js", "provider-updates.js", "app.js", "chat.js", "icon.svg",
+    "index.html", "chat.html", "app.css", "expanded-content.css", "code-actions.css", "markdown.js", "code-actions.js", "expanded-content.js", "identity.js", "provider-updates.js", "app.js", "chat.js", "icon.svg",
     "pilferedparrot-icon.png", "company-logo.png", "company-logo-dark.png", "whiteboard-ui.js", "appearance.js", "appearance-sync.js",
 )
 API_GENERATION = 23
@@ -84,6 +84,7 @@ class ServerApp(Protocol):
     def activate_chat(self, chat_id: str, *, window_id: str) -> Any: ...
     def cancel_message(self, chat_id: str, *, window_id: str) -> Any: ...
     def launch_terminal_command(self, chat_id: str, payload: dict[str, Any], *, window_id: str) -> None: ...
+    def run_assistant_command(self, chat_id: str, payload: dict[str, Any], *, window_id: str, window_provider: str) -> dict[str, Any]: ...
     def delete_chat(self, chat_id: str, *, window_id: str) -> None: ...
     def persist_dashboard_capability(self, origin: str) -> None: ...
     def recover_interrupted(self) -> int: ...
@@ -412,6 +413,8 @@ def make_handler(
                 self._asset("app.css", "text/css; charset=utf-8")
             elif path == "/expanded-content.css":
                 self._asset("expanded-content.css", "text/css; charset=utf-8")
+            elif path == "/code-actions.css":
+                self._asset("code-actions.css", "text/css; charset=utf-8")
             elif path == "/app.js":
                 self._asset("app.js", "text/javascript; charset=utf-8")
             elif path == "/appearance-sync.js":
@@ -422,6 +425,8 @@ def make_handler(
                 self._asset("markdown.js", "text/javascript; charset=utf-8")
             elif path == "/expanded-content.js":
                 self._asset("expanded-content.js", "text/javascript; charset=utf-8")
+            elif path == "/code-actions.js":
+                self._asset("code-actions.js", "text/javascript; charset=utf-8")
             elif path == "/identity.js":
                 self._asset("identity.js", "text/javascript; charset=utf-8")
             elif path == "/provider-updates.js":
@@ -697,6 +702,10 @@ def make_handler(
                 elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "terminal":
                     app.launch_terminal_command(parts[2], payload, window_id=window_id)
                     self._json({"ok": True}, HTTPStatus.ACCEPTED)
+                elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "commands":
+                    self._json(app.run_assistant_command(
+                        parts[2], payload, window_id=window_id, window_provider=window_provider,
+                    ), HTTPStatus.ACCEPTED)
                 else:
                     self.send_error(HTTPStatus.NOT_FOUND)
             except KeyError:

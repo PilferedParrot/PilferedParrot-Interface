@@ -1,3 +1,26 @@
+## PilferedParrot Interface 0.7.0-rc.17 preview
+
+The current interface is now the release baseline for Linux/source and Windows.
+Fresh installations default to **Darker / Minimal / Standard**, matching the
+maintainer's saved appearance. Existing saved choices remain authoritative across
+upgrades and separate Work and Chat windows. Imported artwork receives adaptive
+shading so bright details do not obscure text; its scale and placement stay intact.
+Background themes remain user-selected.
+
+Every fenced code or text block has a Copy button, including expanded views.
+Copying preserves indentation and blank lines. Work's Run with AI action sends the
+reviewed shell block through the current session's normal provider, keeps the
+unsent draft, and prevents duplicate execution when a request is retried.
+On Linux desktops with Zenity, a private provider-only sudo askpass helper supports
+desktop password entry without passing passwords through PPI. Existing helpers,
+terminal behavior, and provider sandbox restrictions continue to apply.
+
+Linux/X11 keeps the custom title bar intact when Chromium restores native window
+decorations. The repair follows the bound window identity and stops when released.
+
+Finish active jobs, close the old app, then reopen the updated app. This remains
+a preview alongside stable Linux 0.6.1.
+
 ## PilferedParrot Interface 0.7.0-rc.16 preview
 
 Work and Chat now use one transparent, blue-tinted design: shared headers, sidebar

@@ -1,0 +1,31 @@
+.copy-code-button {
+  position: absolute;
+  z-index: 1;
+  top: 7px;
+  right: 7px;
+  display: grid;
+  place-items: center;
+  width: 96px;
+  min-width: 96px;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--border, #3a526a);
+  border-radius: 8px;
+  background: var(--surface-control, var(--panel, #17283b));
+  color: var(--text, #b9d7fb);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+}
+.copy-code-button:hover { border-color: var(--accent, #5184b8); background: var(--surface-selected, #1d354d); color: var(--text-strong, white); }
+.copy-code-button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.code-block .copy-code-button + .run-command { right: 111px; }
+.code-block pre, .code-block.runnable pre { padding-top: 60px; }
+.markdown-expansion-rendered .copy-code-button { position: absolute; }
+body.chrome-theme .copy-code-button { background: var(--surface-control); color: var(--text); border-color: var(--border); }
+body.chrome-theme .copy-code-button:hover { background: var(--surface-selected); color: var(--text); }
+@media (max-width: 600px) {
+  .copy-code-button { min-width: 96px; width: 96px; height: 44px; }
+  .code-block .copy-code-button + .run-command { right: 111px; width: 44px; height: 44px; }
+}

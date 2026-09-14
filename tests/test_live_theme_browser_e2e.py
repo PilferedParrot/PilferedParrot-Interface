@@ -36,6 +36,11 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
     def setUp(self):
         self.fixture = PilferedParrotBrowserFixture()
         self.addCleanup(self.fixture.stop)
+        # Pixel and authored-color assertions below cover the original
+        # appearance profile, not the intentionally stronger product default.
+        self.fixture.app.set_appearance_preferences({
+            "tone": "original", "surface": "balanced", "readability": "standard",
+        })
         self.context = self.browser.new_context(viewport={"width": 1200, "height": 800})
         self.addCleanup(self.context.close)
 
@@ -272,7 +277,8 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
                     timeout=5_000,
                 )
                 fallback = page.evaluate("() => getComputedStyle(document.body).backgroundImage")
-                self.assertTrue(fallback.startswith("none"), fallback)
+                self.assertIn("linear-gradient", fallback)
+                self.assertNotIn("url(", fallback)
                 self.assertIn("51, 68, 85", page.evaluate("() => getComputedStyle(document.body).backgroundColor"))
                 # Keep Work registered until context cleanup so its window-close
                 # grace timer cannot shut down the fixture during Chat checks.
@@ -422,11 +428,21 @@ class LiveThemeBrowserEndToEndTests(unittest.TestCase):
                 pixels = [self._screenshot_pixel(
                     page.screenshot(clip={"x": x, "y": y, "width": 1, "height": 1}),
                 ) for x, y in points]
-                # The native titlebar has no frame artwork of its own: the
-                # page background image remains visible through it.
-                self.assertEqual(pixels[0][:3], (238, 171, 42))
-                self.assertEqual(pixels[1][:3], (238, 171, 42))
-                self.assertEqual(pixels[2][:3], (240, 224, 208))
+                source_pixel = page.evaluate("""async () => {
+                    const image = new Image();
+                    image.src = themeBackgroundObjectUrl;
+                    await image.decode();
+                    const canvas = document.createElement('canvas');
+                    canvas.width = canvas.height = 1;
+                    const context = canvas.getContext('2d');
+                    context.drawImage(image, 0, 0);
+                    return Array.from(context.getImageData(0, 0, 1, 1).data).slice(0, 3);
+                }""")
+                # The original root artwork remains byte-for-byte faithful;
+                # titlebar screenshots deliberately include the adaptive veil.
+                self.assertEqual(source_pixel, [238, 171, 42])
+                self.assertNotEqual(pixels[0][:3], tuple(source_pixel))
+                self.assertNotEqual(pixels[1][:3], tuple(source_pixel))
                 self.assertEqual(pixels[3][:3], (43, 157, 94))
 
                 theme.clear()

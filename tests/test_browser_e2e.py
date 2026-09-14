@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 import unittest
 from urllib.parse import urlparse
 from unittest.mock import patch
@@ -214,49 +215,44 @@ class BrowserEndToEndTests(unittest.TestCase):
 
         command_message = self.page.locator("article.message.assistant").nth(1)
         buttons = command_message.locator("[data-run-command]")
-        expected_blocks = ["1", "3"]
+        expected_blocks = ["1", "2", "3"]
         if sys.platform == "win32":
             expected_blocks.append("4")
         expect(buttons).to_have_count(len(expected_blocks))
         self.assertEqual(buttons.evaluate_all("nodes => nodes.map(node => node.dataset.blockIndex)"), expected_blocks)
         expect(self.page.locator("article.message.user [data-run-command]")).to_have_count(0)
         dialog = self.page.locator("#terminalDialog")
+        buttons.first.click()
+        expect(dialog).to_be_visible()
+        expect(dialog.locator("#terminalCommand")).to_have_text("echo first")
+        expected_command = "echo first"
         if sys.platform == "win32":
-            # Windows deliberately rejects Unix shell fences at the server
-            # boundary, even though the markdown action remains visible.
-            buttons.first.click()
-            expect(dialog).to_be_visible()
-            expect(dialog.locator("#terminalCommand")).to_have_text("echo first")
+            # Run with AI retains the server's platform validation. A Unix
+            # shell fence is rejected; the stored PowerShell fence can run.
             with patch("pilferedparrot.web.launch_terminal") as launch, \
-                 self.page.expect_response("**/terminal") as rejected_response:
+                 self.page.expect_response("**/commands") as rejected_response:
                 dialog.locator("#confirmTerminal").click()
             self.assertEqual(rejected_response.value.status, 400)
             expect(self.page.locator("#toast")).to_contain_text("requires a Unix shell")
             launch.assert_not_called()
-            dialog.get_by_role("button", name="Cancel").click()
-
-            # A single stored PowerShell command is accepted; The launcher stays
-            # mocked so this browser test never opens a real terminal.
-            buttons.nth(2).click()
-            expect(dialog.locator("#terminalCommand")).to_have_text(
-                "Write-Output 'accepted on Windows'",
-            )
-            with patch("pilferedparrot.web.launch_terminal") as launch, \
-                 self.page.expect_response("**/terminal") as accepted_response:
-                dialog.locator("#confirmTerminal").click()
-            self.assertTrue(accepted_response.value.ok)
-            expect(self.page.locator("#toast")).to_contain_text("Opened command in a terminal.")
-            self.assertTrue(launch.called)
-        else:
-            buttons.first.click()
+            self.assertEqual(self.fixture.provider.requests, [])
             expect(dialog).to_be_visible()
-            expect(dialog.locator("#terminalCommand")).to_have_text("echo first")
-            with patch("pilferedparrot.web.launch_terminal") as launch:
-                dialog.locator("#confirmTerminal").click()
-                expect(self.page.locator("#toast")).to_contain_text("Opened command in a terminal.")
-            self.assertTrue(launch.called)
+            dialog.get_by_role("button", name="Cancel").click()
+            buttons.last.click()
+            expected_command = "Write-Output 'accepted on Windows'"
+            expect(dialog.locator("#terminalCommand")).to_have_text(expected_command)
+        with patch("pilferedparrot.web.launch_terminal") as launch, \
+             self.page.expect_response("**/commands") as command_response:
+            dialog.locator("#confirmTerminal").click()
+        self.assertTrue(command_response.value.ok, command_response.value.text())
+        launch.assert_not_called()
+        expect(self.page.locator("#toast")).to_contain_text("Sent command to the AI")
+        deadline = time.monotonic() + 5
+        while not self.fixture.provider.requests and time.monotonic() < deadline:
+            self.page.wait_for_timeout(50)
+        self.assertIn(expected_command, self.fixture.provider.requests[-1][1])
 
-    def test_terminal_dialog_closes_before_launch_and_reopens_for_retry(self):
+    def test_command_dialog_reopens_after_failed_request_for_retry(self):
         command = "echo visible-command"
         with self.fixture.app.store.lock:
             chat = self.fixture.app.store.data["chats"][0]
@@ -270,25 +266,27 @@ class BrowserEndToEndTests(unittest.TestCase):
         dialog = self.page.locator("#terminalDialog")
         requests = []
 
-        def reject_launch(route):
+        def reject_command(route):
             requests.append(route.request.post_data_json)
             self.assertFalse(dialog.evaluate("node => node.open"))
             route.fulfill(status=500, content_type="application/json",
-                          body='{"error":"Terminal could not be opened"}')
+                          body='{"error":"Command could not be sent"}')
 
-        self.page.route("**/terminal", reject_launch)
+        self.page.route("**/commands", reject_command)
         dialog.locator("#confirmTerminal").click()
         expect(dialog).to_be_visible()
-        expect(self.page.locator("#toast")).to_contain_text("Terminal could not be opened")
+        expect(self.page.locator("#toast")).to_contain_text("Command could not be sent")
         expect(dialog.locator("#terminalCommand")).to_have_text(command)
         expect(dialog.locator("#confirmTerminal")).to_be_enabled()
-        self.page.unroute("**/terminal", reject_launch)
-        with patch("pilferedparrot.web.launch_terminal") as launch:
+        self.page.unroute("**/commands", reject_command)
+        with self.page.expect_response("**/commands") as retried_response:
             dialog.locator("#confirmTerminal").click()
-            expect(self.page.locator("#toast")).to_contain_text("Opened command in a terminal.")
-        expect(dialog).not_to_be_visible()
-        launch.assert_called_once_with(command, self.fixture.project)
-        self.assertEqual(requests, [{"message_id": "terminal-retry", "block_index": 0}])
+        self.assertTrue(retried_response.value.ok)
+        expect(self.page.locator("#toast")).to_contain_text("Sent command to the AI")
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0]["command"], command)
+        self.assertEqual(requests[0]["message_id"], "terminal-retry")
+        self.assertIn("request_id", requests[0])
 
     def test_markdown_edge_cases_do_not_create_quoted_or_malformed_actions(self):
         content = (

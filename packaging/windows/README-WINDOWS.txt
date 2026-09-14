@@ -1,7 +1,7 @@
 PilferedParrot Interface for Windows
 ====================================
 
-This is the 0.7.0-rc.16 preview for Windows 10/11 x64. It is a portable package:
+This is the 0.7.0-rc.17 preview for Windows 10/11 x64. It is a portable package:
 extract the ZIP and run PilferedParrot.exe. Python and the application are included,
 so no Python installation, installer, or administrator rights are required.
 
@@ -27,3 +27,7 @@ Windows provider accounts and CLIs are not live-certified by this package.
 To update, close PPI, extract the new ZIP into a new or clean directory, and run the
 new PilferedParrot.exe. Update shortcuts that point to the old extracted directory.
 Use PilferedParrot.exe --help for command-line options.
+
+New installations use Darker / Minimal / Standard appearance in Work and Chat.
+Saved choices survive upgrades. Copy buttons preserve code/text whitespace, and
+Run with AI sends a reviewed shell block to the current Work session provider.

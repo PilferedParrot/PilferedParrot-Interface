@@ -2,7 +2,7 @@
    appearance-sync.js keeps separate browser profiles on the same settings. */
 (function () {
   "use strict";
-  const defaults = { tone: "original", surface: "balanced", readability: "standard" };
+  const defaults = { tone: "darker", surface: "minimal", readability: "standard" };
   const valid = {
     tone: new Set(["original", "darker"]),
     surface: new Set(["minimal", "balanced", "maximal"]),
@@ -63,6 +63,21 @@
     const action = mix(panel, luminance(panel) > .179 ? "#246080" : "#4285ae", .7);
     const halo = luminance(text) > .179 ? "#061b2b" : "#ffffff";
     const artwork = themed && root.getPropertyValue("--chrome-theme-background-image").includes("url(");
+    // Theme palette contrast alone says nothing about a bright star underneath
+    // translucent text. Bound the artwork's brightest (or darkest) pixels too.
+    let veil = "transparent";
+    if (artwork) {
+      const worst = luminance(text) > .179 ? "#ffffff" : "#000000";
+      const target = preferences.readability === "stronger" ? 7 : 4.5;
+      let opacity = 0;
+      for (; opacity < 100; opacity++) {
+        const light = luminance(mix(worst, halo, opacity / 100));
+        if ([text, muted, accent].every(color =>
+          (Math.max(light, luminance(color)) + .05) /
+          (Math.min(light, luminance(color)) + .05) >= target)) break;
+      }
+      veil = `${halo}${Math.round(opacity * 2.55).toString(16).padStart(2, "0")}`;
+    }
     const shadow = artwork
       ? (preferences.readability === "stronger" ? `0 1px 3px ${halo}, 0 0 6px ${halo}66` : `0 1px 2px ${halo}99`)
       : "none";
@@ -73,6 +88,7 @@
       "--selection-tint": mix(panel, accent, .14),
       "--action-bg": action, "--action-text": readable(action, "#ffffff"),
       "--surface-text-shadow": shadow, "--appearance-halo": halo,
+      "--artwork-veil": veil,
       "--chrome-theme-background": background, "--chrome-theme-section": panel,
       "--chrome-theme-panel-text": text, "--chrome-theme-text": text,
       "--chrome-theme-link": accent,
