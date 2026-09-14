@@ -585,6 +585,7 @@ class PersistentChatStore:
             allowance_percent=chat.get("context_window_percent"),
             live_input_tokens=(chat.get("live_context_usage") or {}).get("input_tokens"),
             live_output_tokens=(chat.get("live_context_usage") or {}).get("output_tokens"),
+            observed_at=(chat.get("live_context_usage") or {}).get("observed_at"),
             overhead_tokens=0 if fresh_session else chat.get("context_overhead_tokens", 0),
             output_reservation_tokens=(
                 0 if fresh_session else chat.get("output_reservation_tokens", 0)
@@ -621,6 +622,7 @@ class PersistentChatStore:
             allowance_percent=chat_thread.get("context_window_percent"),
             live_input_tokens=(chat_thread.get("live_context_usage") or {}).get("input_tokens"),
             live_output_tokens=(chat_thread.get("live_context_usage") or {}).get("output_tokens"),
+            observed_at=(chat_thread.get("live_context_usage") or {}).get("observed_at"),
             overhead_tokens=chat_thread.get("context_overhead_tokens", 0),
             output_reservation_tokens=chat_thread.get("output_reservation_tokens", 0),
         )

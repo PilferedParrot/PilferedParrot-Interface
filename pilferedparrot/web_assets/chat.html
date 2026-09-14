@@ -50,6 +50,10 @@
             <strong id="chatConnectionProvider"></strong>
             <span class="chat-connection-mode">Read-only chat</span>
           </section>
+          <section class="chat-allowance" aria-label="Provider allowance">
+            <div class="section-heading">Allowance</div>
+            <div id="chatProviderUsage"></div>
+          </section>
           <details class="chat-window-context sidebar-disclosure" id="contextDetails">
             <summary id="chatContextHeading">Context window <span id="contextSummary">No data yet</span></summary>
             <div class="context-pie-card" id="chatContext"></div>
@@ -148,6 +152,7 @@
   </dialog>
   <div class="toast" id="toast" popover="manual" role="status" aria-live="polite" aria-atomic="true"></div>
   <script src="/markdown.js"></script>
+  <script src="/usage.js"></script>
   <script src="/code-actions.js"></script>
   <script src="/expanded-content.js"></script>
   <script src="/identity.js"></script>

@@ -233,6 +233,7 @@ class ContextDataTests(unittest.TestCase):
             self.assertEqual(set(public["context_usage"]), {
                 "used_tokens", "limit_tokens", "max_tokens", "allowance_percent",
                 "percent", "estimated", "basis", "transcript_tokens", "breakdown",
+                "source", "observed_at",
             })
             self.assertTrue(public["context_usage"]["estimated"])
             self.assertEqual(public["context_usage"]["basis"], "live_next_request")

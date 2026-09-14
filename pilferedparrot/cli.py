@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,10 +30,19 @@ def budget_text(budget: ProviderBudget) -> str:
         return budget.note or "ready"
     windows = budget.windows or ((budget.window,) if budget.window else ())
     if windows:
-        return "; ".join(
-            f"{window.label or 'included usage'}: {window.remaining_percent:.0f}% left"
-            for window in windows
-        )
+        parts = []
+        for window in windows:
+            reset = "reset unavailable"
+            if window.resets_at is not None:
+                try:
+                    reset = "resets " + datetime.fromtimestamp(window.resets_at).astimezone().strftime("%a %H:%M %Z")
+                except (ValueError, OSError, OverflowError):
+                    pass
+            parts.append(
+                f"{window.label or 'included usage'}: {window.used_percent:.0f}% used "
+                f"({window.remaining_percent:.0f}% left), {reset}"
+            )
+        return "; ".join(parts)
     return budget.note or "included usage unavailable"
 
 

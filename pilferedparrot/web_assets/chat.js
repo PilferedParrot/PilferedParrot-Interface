@@ -4,6 +4,7 @@ const state = {
   chat: { messages: [], pending: false, model: "gpt-5.6-terra" },
   chat_history: [], chatViewId: null, chat_model: "gpt-5.6-terra",
   chat_model_choices: [], capability: "", windowProvider: "codex",
+  budgets: {}, budgetsLoaded: false,
   model_catalog: {}, providers: [], modelPolls: {},
   draftModel: null, model_context_windows: {}, browser_theme: { active: false },
   preferences: {},
@@ -31,6 +32,8 @@ try { nativeWindowRequested ||= sessionStorage.getItem(NATIVE_WINDOW_SESSION_KEY
 let nativeWindowInitializing = null;
 if (fragmentCapability) history.replaceState(null, "", location.pathname + location.search);
 let pollTimer = null;
+let budgetPollTimer = null;
+let budgetRefresh = null;
 let themeBackgroundObjectUrl = null;
 const themeImageObjectUrls = { frame: null, frame_overlay: null, toolbar: null, attribution: null };
 let themeApplyGeneration = 0;
@@ -271,9 +274,14 @@ function contextBreakdownMarkup(usage) {
   const reserved = Math.max(0, Number(usage.breakdown?.output_reservation) || 0);
   const reservation = reserved
     ? `<p>Response capacity reserved (not used): ${reserved.toLocaleString()} tokens</p>` : "";
+  const source = usage.source === "provider" ? "Provider telemetry" : "Local next-request estimate";
+  const observed = Number(usage.observed_at);
+  const age = observed > 0 ? Math.max(0, Math.floor(Date.now() / 1000 - observed)) : null;
+  const update = age === null ? " · update time unavailable" : age < 60 ? " · updated just now" : ` · updated ${Math.floor(age / 60)}m ago`;
   return `<details class="context-breakdown">
       <summary>Estimate details</summary>
       <p>${CONTEXT_ESTIMATE_DISCLOSURE}</p>
+      <p>${source}${update}</p>
       <p>${CONTEXT_INCLUDED}</p>
       <p>Transcript estimate: ${transcript.toLocaleString()} tokens</p>
       ${reservation}
@@ -461,6 +469,42 @@ function renderContextSummary(usage, status) {
   summary.title = "Estimated context usage. Expand for details and context settings.";
 }
 
+function renderAllowance() {
+  const usageNode = $("#chatProviderUsage");
+  const provider = state.windowProvider;
+  if (usageNode) usageNode.innerHTML = state.budgetsLoaded
+    ? globalThis.PilferedParrotUsage.markup(provider, state.budgets[provider])
+    : '<div class="provider-usage unavailable"><span>Checking allowance…</span></div>';
+}
+
+async function refreshBudgets(showErrors = false) {
+  if (budgetRefresh) return budgetRefresh;
+  budgetRefresh = api("/api/budgets").then((budgets) => {
+    state.budgets = budgets || {};
+    state.budgetsLoaded = true;
+    renderAllowance();
+    return budgets;
+  }).catch((error) => {
+    state.budgetsLoaded = true;
+    Object.values(state.budgets).forEach(budget => { budget.refresh_failed = true; });
+    renderAllowance();
+    if (showErrors) toast(error.message);
+    return null;
+  }).finally(() => { budgetRefresh = null; });
+  return budgetRefresh;
+}
+
+function scheduleBudgetPoll() {
+  if (budgetPollTimer !== null) clearTimeout(budgetPollTimer);
+  budgetPollTimer = null;
+  if (document.hidden) return;
+  budgetPollTimer = setTimeout(async () => {
+    budgetPollTimer = null;
+    await refreshBudgets(false);
+    scheduleBudgetPoll();
+  }, chatRunning() ? 15_000 : 60_000);
+}
+
 function contextPieMarkup(usage, adjustable = false) {
   if (!usage) return '<div class="context-pie-empty">No context data yet</div>';
   const used = Math.max(0, Number(usage.used_tokens) || 0);
@@ -545,6 +589,7 @@ function render() {
   $("#chatThreadTitle").textContent = archived ? (chat.title || "Archived Chat") : (chat.title || "Chat");
   const displayedProvider = chat.provider || state.windowProvider;
   $("#chatConnectionProvider").textContent = providerLabel(displayedProvider);
+  renderAllowance();
   $("#chatIdentity").textContent = `${providerLabel(displayedProvider)} · ${modelLabel(chat.model || selectedModel, displayedProvider)} · separate read-only instance`;
   if (!messages.length && !chat.pending) {
     node.innerHTML = '<div class="welcome chat-empty"><img class="company-logo welcome-logo" src="/company-logo-dark.png" alt="PilferedParrot Global Industries, makers of 3D Bumper Billiards."><h1>What would you like to discuss?</h1><p>Explore an idea or plan a next step. This conversation is read-only.</p></div>';
@@ -657,6 +702,7 @@ async function refreshState() {
   const follow = node.scrollHeight - node.scrollTop - node.clientHeight < 120;
   const previous = node.scrollTop;
   const initial = await api("/api/state");
+  refreshBudgets(false).catch(() => {});
   if (sequence < stateAppliedSequence || reasoningSavePending) return;
   stateAppliedSequence = sequence;
   applyServerState(initial);
@@ -676,7 +722,10 @@ function schedulePoll() {
       stateAppliedSequence = sequence;
       state.chat = current;
       render();
-      if (wasRunning && !chatRunning()) notifyCompletion();
+      if (wasRunning && !chatRunning()) {
+        notifyCompletion();
+        refreshBudgets(false).catch(() => {});
+      }
     }
     catch (error) { toast(error.message); }
     finally { if (chatRunning()) schedulePoll(); }
@@ -707,6 +756,7 @@ async function sendChatMessage(event) {
     });
     state.chat = response;
     state.chatViewId = state.chat.id;
+    scheduleBudgetPoll();
     schedulePoll();
   } catch (error) {
     let accepted = false;
@@ -1044,6 +1094,8 @@ async function init() {
     await refreshBrowserTheme();
     state.initialized = true;
     render();
+    refreshBudgets(false);
+    scheduleBudgetPoll();
     schedulePoll();
   } catch (error) { toast(error.message); }
   finally { scheduleThemeRefresh(); }
@@ -1105,16 +1157,21 @@ setupChatSidebarResizer();
 window.addEventListener("focus", () => {
   initializeNativeWindow().catch(() => {});
   refreshState().catch(() => {});
+  refreshBudgets(false).catch(() => {});
+  scheduleBudgetPoll();
   refreshBrowserTheme().catch(() => {});
   scheduleThemeRefresh(0);
 });
 
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
+    refreshBudgets(false).catch(() => {});
+    scheduleBudgetPoll();
     refreshBrowserTheme().catch(() => {});
     scheduleThemeRefresh(0);
-  } else if (themePollTimer !== null) {
-    clearTimeout(themePollTimer); themePollTimer = null;
+  } else {
+    if (themePollTimer !== null) { clearTimeout(themePollTimer); themePollTimer = null; }
+    if (budgetPollTimer !== null) { clearTimeout(budgetPollTimer); budgetPollTimer = null; }
   }
 });
 

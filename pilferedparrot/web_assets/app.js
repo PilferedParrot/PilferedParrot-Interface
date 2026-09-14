@@ -515,9 +515,14 @@ function contextBreakdownMarkup(usage) {
   const reserved = Math.max(0, Number(usage.breakdown?.output_reservation) || 0);
   const reservation = reserved
     ? `<p>Response capacity reserved (not used): ${reserved.toLocaleString()} tokens</p>` : "";
+  const source = usage.source === "provider" ? "Provider telemetry" : "Local next-request estimate";
+  const observed = Number(usage.observed_at);
+  const age = relativeTime(observed);
+  const update = observed > 0 ? ` · updated ${age === "now" ? "just now" : `${age} ago`}` : " · update time unavailable";
   return `<details class="context-breakdown">
       <summary>Estimate details</summary>
       <p>${CONTEXT_ESTIMATE_DISCLOSURE}</p>
+      <p>${source}${update}</p>
       <p>${CONTEXT_INCLUDED}</p>
       <p>Transcript estimate: ${transcript.toLocaleString()} tokens</p>
       ${reservation}
@@ -700,81 +705,15 @@ function providerReachabilityText(provider, budget) {
 }
 
 function budgetWindows(budget) {
-  const windows = Array.isArray(budget?.windows) && budget.windows.length
-    ? budget.windows : (budget?.window ? [budget.window] : []);
-  return windows.filter((window) => Number.isFinite(Number(window.remaining_percent)));
-}
-
-function codexWeeklyWindow(budget) {
-  const weekly = budgetWindows(budget).filter((window) =>
-    window.window_minutes === 10080 || /\bweekly\b/i.test(window.label || ""));
-  return weekly.find((window) => /^codex\s*[·:–-]/i.test(window.label || ""))
-    || weekly[0] || null;
+  return globalThis.PilferedParrotUsage.windows(budget);
 }
 
 function providerUsageWindows(provider, budget) {
-  if (provider === "codex") {
-    const weekly = codexWeeklyWindow(budget);
-    return weekly ? [weekly] : [];
-  }
-  return [];
+  return globalThis.PilferedParrotUsage.supportedWindows(provider, budget);
 }
 
 function providerUsageUnavailableMarkup(budget) {
-  // Usage availability is an adapter-owned contract. Keep this rendering
-  // provider-neutral and only show a note when the backend supplied one.
-  if (!["unavailable", "unsupported"].includes(budget?.usage_status)
-      || !budget?.usage_note) return "";
-  return `<p class="usage-unavailable-note">${escapeHtml(budget.usage_note)}</p>`;
-}
-
-function allowanceResetTime(timestamp) {
-  const milliseconds = Number(timestamp) * 1000;
-  const date = new Date(milliseconds);
-  if (!(milliseconds > 0) || Number.isNaN(date.getTime())) {
-    return { short: "Reset unavailable", exact: "Reset time unavailable", datetime: "" };
-  }
-  const exact = `Resets ${date.toLocaleString([], {
-    weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
-  })}`;
-  const minutes = Math.ceil((milliseconds - Date.now()) / 60_000);
-  if (minutes <= 0) return { short: "Reset due", exact, datetime: date.toISOString() };
-  if (minutes < 60) {
-    return { short: `Resets in ${minutes}m`, exact, datetime: date.toISOString() };
-  }
-  if (minutes < 24 * 60) {
-    const hours = Math.floor(minutes / 60);
-    const remainder = minutes % 60;
-    return {
-      short: `Resets in ${hours}h${remainder ? ` ${remainder}m` : ""}`,
-      exact,
-      datetime: date.toISOString(),
-    };
-  }
-  return {
-    short: `Resets ${date.toLocaleString([], {
-      weekday: "short", hour: "numeric",
-    })}`,
-    exact,
-    datetime: date.toISOString(),
-  };
-}
-
-function allowanceLabel(provider, window) {
-  return window.label || "Included usage";
-}
-
-function allowanceMarkup(provider, window) {
-  const remaining = Math.max(0, Math.min(100, Number(window.remaining_percent)));
-  const reset = allowanceResetTime(window.resets_at);
-  const label = allowanceLabel(provider, window);
-  const resetMarkup = reset.datetime
-    ? `<time class="allowance-reset" datetime="${escapeHtml(reset.datetime)}" title="${escapeHtml(reset.exact)}" aria-label="${escapeHtml(reset.exact)}">${escapeHtml(reset.short)}</time>`
-    : `<span class="allowance-reset" title="${escapeHtml(reset.exact)}">${escapeHtml(reset.short)}</span>`;
-  return `<div class="allowance-row">
-    <div class="allowance-head"><span class="allowance-label">${escapeHtml(label)}</span><strong>${Math.round(remaining)}% left</strong></div>
-    <div class="allowance-meter"><div class="allowance-track" role="progressbar" aria-label="${escapeHtml(label)} remaining" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(remaining)}"><span style="width:${remaining}%"></span></div>${resetMarkup}</div>
-  </div>`;
+  return globalThis.PilferedParrotUsage.markup("unknown", budget);
 }
 
 function renderProviders() {
@@ -792,15 +731,12 @@ function renderProviders() {
     const auth = AUTH_TEXT[budget.auth_status] || STATUS_TEXT[budget.status] || "Sign-in unavailable";
     const reachability = providerReachabilityText(provider, budget);
     const status = reachability ? `${auth} · ${reachability}` : auth;
-    const allowances = providerUsageWindows(provider, budget)
-      .map((window) => allowanceMarkup(provider, window)).join("");
-    const usageUnavailable = providerUsageUnavailableMarkup(budget);
+    const usageMarkup = globalThis.PilferedParrotUsage.markup(provider, budget);
     const model = modelLabel(provider, "");
     return `<div class="provider-card" title="${escapeHtml(budget.note || label)}">
       <div class="provider-card-head"><span><i class="status-dot ${budget.reachability === "reachable" ? "available" : ""}"></i><strong>${escapeHtml(label)}</strong></span><b>${escapeHtml(status)}</b></div>
       ${model === "Provider-selected model" ? "" : `<div class="provider-model">${escapeHtml(model)}</div>`}
-      ${allowances ? `<div class="allowances">${allowances}</div>` : ""}
-      ${usageUnavailable}
+      ${usageMarkup}
     </div>`;
   }).join("");
   renderProviderConnections();
@@ -910,6 +846,7 @@ async function refreshBudgets(showErrors = false) {
     })
     .catch((error) => {
       state.budgetsLoaded = true;
+      Object.values(state.budgets).forEach(budget => { budget.refresh_failed = true; });
       renderProviders();
       if (showErrors) toast(error.message);
       return null;
@@ -921,11 +858,13 @@ async function refreshBudgets(showErrors = false) {
 function scheduleBudgetPoll() {
   reportActiveSession();
   if (budgetPollTimer !== null) clearTimeout(budgetPollTimer);
+  budgetPollTimer = null;
+  if (document.hidden) return;
   budgetPollTimer = setTimeout(async () => {
     budgetPollTimer = null;
     await refreshBudgets(false);
     scheduleBudgetPoll();
-  }, BUDGET_POLL_MS);
+  }, anyRunning() ? 15_000 : BUDGET_POLL_MS);
 }
 
 function workLabel(item) {
@@ -1564,6 +1503,7 @@ async function sendMessage(event) {
     // A Qwen request may start its local server. Update the dashboard as soon
     // as submission returns instead of waiting for the minute poll interval.
     refreshBudgets(false);
+    scheduleBudgetPoll();
     schedulePoll();
   } catch (error) {
     try {
@@ -2313,8 +2253,9 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
     refreshBudgets(false); scheduleBudgetPoll();
     refreshBrowserTheme(false).catch(() => {}); scheduleThemeRefresh(0);
-  } else if (themePollTimer !== null) {
-    clearTimeout(themePollTimer); themePollTimer = null;
+  } else {
+    if (themePollTimer !== null) { clearTimeout(themePollTimer); themePollTimer = null; }
+    if (budgetPollTimer !== null) { clearTimeout(budgetPollTimer); budgetPollTimer = null; }
   }
 });
 window.addEventListener("pagehide", () => {

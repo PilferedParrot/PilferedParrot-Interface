@@ -1,3 +1,24 @@
+## PilferedParrot Interface 0.7.0-rc.18 preview
+
+Work and Chat show every included-usage window reported by OpenAI, including
+five-hour and weekly windows when available. Each bucket shows percentage used,
+percentage left, reset time, and data freshness. Separate model allowances retain
+their names; a missing five-hour window is never inferred from weekly usage.
+API-key users see that API billing is separate from ChatGPT plan allowances.
+Unavailable, stale, failed-refresh, and reset-due readings are labelled explicitly.
+The terminal budget command also shows used percentages and reset times.
+
+Codex context estimates update during a response from local per-request telemetry,
+including when compaction reduces the count. The interface shows the source and
+last observation time. Local log reads run at most once per second, and allowance
+probes share a 30-second cache across windows. No prompts or model requests are
+sent to refresh either display. Other providers retain labelled estimates when
+per-request context telemetry is unavailable.
+
+The changes are shared by Linux/source and Windows x64 packages. Finish active
+jobs, close the old app, then reopen the updated app. This remains a preview
+alongside stable Linux 0.6.1.
+
 ## PilferedParrot Interface 0.7.0-rc.17 preview
 
 The current interface is now the release baseline for Linux/source and Windows.
