@@ -7,8 +7,8 @@ release lines are not supported.
 
 | Version | Supported |
 | --- | --- |
-| 0.6.0 (Linux and Windows preview) and the current default branch | Yes |
-| 0.5.x and older releases | No; upgrade to the latest release |
+| 0.7.x (Linux/source stable; Windows unsigned preview) and the current default branch | Yes |
+| 0.6.x and older releases | No; upgrade to the latest release |
 
 ## Reporting a vulnerability
 
@@ -93,9 +93,8 @@ and Origin checks. Capabilities travel in URL fragments, are omitted from server
 revoked when isolated windows exit. Keep `web.host` on a loopback address; remote exposure is not
 supported.
 
-Completed assistant responses may offer a terminal button for single-line fenced commands. A click
-first shows the exact command and project folder for confirmation, then launches the stored command
-in a graphical terminal rooted at the conversation's project folder; the browser cannot supply a
-replacement command or working directory. The command runs as
-the operator and may request elevation through `sudo`, so inspect it before clicking. This action is
-not covered by the Qwen Bubblewrap sandbox.
+Completed assistant responses may offer **Run with AI** for a reviewed shell block. A click first
+shows the exact block and project folder for confirmation, then sends it through the current Work
+session provider with duplicate-request protection; provider permissions remain authoritative. The
+legacy terminal endpoint remains a separate action and is not covered by the Qwen Bubblewrap
+sandbox.

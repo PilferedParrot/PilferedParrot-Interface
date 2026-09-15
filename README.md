@@ -4,15 +4,15 @@ PilferedParrot Interface (PPI) is a local browser interface for coding CLIs and 
 model APIs. Choose the provider for a work session, keep its project and history together, and
 open a separate read-only Chat window when you need a quick question.
 
-The current checkout is the **0.7.0-rc.18 preview**. Linux 0.6.1 remains the stable release;
-the Windows 10/11 x64 build is a portable preview. Preview downloads are available from the
-[0.7.0-rc.18 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.18).
+The current checkout is the **0.7.0 stable release**. Linux/source is stable; the Windows 10/11
+x64 build remains an unsigned portable preview. Downloads are available from the
+[0.7.0 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0).
 
 [Project site](https://pilferedparrot.github.io/PilferedParrot-Interface/) ·
-[Linux rc.18 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.18/pilferedparrot-0.7.0-rc.18-source.tar.gz) ·
-[Stable Linux release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.6.1) ·
+[Linux 0.7.0 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0/pilferedparrot-0.7.0-source.tar.gz) ·
+[Stable 0.7.0 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0) ·
 [Release notes](RELEASE_NOTES.md) ·
-[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.18/PilferedParrot-0.7.0-rc.18-windows-x64.zip) ·
+[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0/PilferedParrot-0.7.0-windows-x64.zip) ·
 [Report a bug](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new?template=bug_report.yml) ·
 [Share feedback](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new/choose)
 
@@ -86,11 +86,11 @@ dependencies. Bubblewrap is used for Qwen's Linux shell tools and is disabled on
 
 ## Linux
 
-Linux 0.6.1 is the stable, best-validated release, with strongest validation on Linux Mint with
+Linux 0.7.0 is the stable, best-validated release, with strongest validation on Linux Mint with
 X11. Install Python 3.12+, Chrome or Chromium, and (if using Qwen shell tools) Bubblewrap.
 
 ```bash
-git clone --branch v0.6.1 https://github.com/PilferedParrot/PilferedParrot-Interface.git
+git clone --branch v0.7.0 https://github.com/PilferedParrot/PilferedParrot-Interface.git
 cd PilferedParrot-Interface
 cp config.example.json config.json
 ./bin/pilferedparrot
@@ -108,7 +108,7 @@ for authentication and integration limits.
 
 ### Upgrading an existing installation
 
-Download the [rc.18 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.18/pilferedparrot-0.7.0-rc.18-source.tar.gz),
+Download the [0.7.0 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0/pilferedparrot-0.7.0-source.tar.gz),
 extract it, and run `./bin/pilferedparrot --version` before replacing your launcher with
 `./bin/install-pilferedparrot-desktop`. Keep the extracted directory in place. Existing
 configuration, browser profiles, conversations, and run metadata remain in their current local
@@ -116,7 +116,7 @@ state directory; do not replace your `config.json` unless you intend to reconfig
 
 ## Windows preview
 
-Download the [0.7.0-rc.18 Windows x64 ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0-rc.18/PilferedParrot-0.7.0-rc.18-windows-x64.zip),
+Download the [0.7.0 Windows x64 preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0/PilferedParrot-0.7.0-windows-x64.zip),
 extract it to a directory you control, and run `PilferedParrot.exe`. The package includes Python,
 needs no installation or administrator rights, and uses Chrome, Chromium, or Microsoft Edge. Keep
 the console window open while PPI runs and keep the extracted directory together. The executable

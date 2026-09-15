@@ -1,3 +1,42 @@
+# PilferedParrot Interface 0.7.0 release readiness — 2026-09-14
+
+0.7.0 promotes the current Work and Chat interface to the stable Linux/source
+release. The application matches 0.7.0-rc.18 plus the installed whiteboard discovery
+guidance: give workers relevant excerpts and share board access only when needed.
+The interface, appearance defaults, and provider behavior are preserved.
+Windows 10/11 x64 includes the same application as an unsigned platform preview.
+
+## Release verification
+
+The release branch must pass the repository's required Python 3.12, 3.13, and
+3.14 checks, Linux Chromium browser tests, Windows x64 build and smoke tests,
+and CodeQL before merge. The Windows job also exercises native window controls,
+terminal behavior, and the same browser suite. The release assets are built from
+the verified release tree and distributed with a combined `SHA256SUMS` manifest.
+See [the 0.7.0 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0)
+for the published assets and linked CI evidence.
+
+Local unittest discovery found **670 tests**: **567 passed**, with 100 browser
+cases run separately and three Windows-only cases reserved for Windows CI. All
+**100 browser tests passed** with mandatory Playwright. Source compilation,
+JavaScript and launcher syntax, release hygiene, and website image/overflow checks
+at 1440, 390, and 320 pixels passed.
+
+Local verification uses isolated temporary application state and synthetic
+providers; it does not consume provider accounts or alter installed conversations.
+The browser checks cover Work and Chat layouts, appearance synchronization, Copy,
+Run with AI, expanded content, drafts, whiteboard, and live usage displays.
+
+The maintainer has approved the current local Linux experience for release.
+The historical live provider evidence below retains its original scope; this
+release does not claim new Windows provider-account certification or interactive
+Windows 10/11 and Wayland certification. Windows Bubblewrap shell execution remains
+disabled. Existing configuration, conversations, and appearance preferences remain
+in their local state directories when upgrading; close the app after active jobs
+finish, then use the new source launcher or extracted Windows executable.
+
+## Earlier release evidence
+
 # PilferedParrot Interface 0.6.1 release readiness — 2026-09-06
 
 Version 0.6.1 fixes native terminal visibility and command display on Linux and Windows.
