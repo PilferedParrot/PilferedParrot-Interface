@@ -1,3 +1,42 @@
+## PilferedParrot Interface 0.7.0
+
+0.7.0 makes the current Work and Chat experience the stable Linux/source release,
+bringing together the improvements tested throughout the 0.7.0 previews. The
+Windows 10/11 x64 portable package includes the same application and remains an
+unsigned platform preview.
+
+### Highlights
+
+- Work and Chat share a blue-tinted interface, consistent spacing and controls,
+  and live theme artwork. Appearance settings synchronize across separate windows.
+  Fresh installations use **Darker / Minimal / Standard**; saved choices survive upgrades.
+- Copy preserves whitespace in fenced code and text, including expanded views.
+  Wide tables and charts can expand to full screen. Work's **Run with AI** sends
+  a reviewed shell block through the current provider and preserves unsent drafts.
+- Codex allowance displays show each reported window's used and remaining
+  percentages, reset time, and freshness. Context estimates update during responses
+  from local usage records without extra model requests.
+- Drafts and shared whiteboard notes persist locally. New conversations ask leads
+  to give workers relevant excerpts and share board access only when needed.
+- Linux desktop integration includes provider sudo password dialogs when supported,
+  and repairs Chromium's restored window decorations to retain the custom title bar.
+
+Work continues through the selected provider. The manual Harness controls have
+been retired; existing task records and backend APIs remain available.
+
+### Install or upgrade
+
+Download the source archive or Windows x64 ZIP and verify it against `SHA256SUMS`.
+Finish active jobs before closing the old app. On Linux, run
+`bin/install-pilferedparrot-desktop` from the new extracted directory to update the
+launcher. On Windows, extract the complete ZIP and update shortcuts to its
+`PilferedParrot.exe`. Keep existing configuration, browser profiles, conversations,
+and local state. Reopening an older installation does not install this release.
+
+Provider CLIs, accounts, and local model servers are installed separately. Windows
+provider accounts and CLIs have not been live-certified; its Bubblewrap shell is
+disabled. See the [README](README.md) and [validation record](docs/release-readiness.md).
+
 ## PilferedParrot Interface 0.7.0-rc.18 preview
 
 Work and Chat show every included-usage window reported by OpenAI, including

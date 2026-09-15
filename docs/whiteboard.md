@@ -7,7 +7,10 @@ configuration to choose another dedicated directory. Board notes stay outside pr
 
 Every new provider conversation receives a short discovery note once. Resumes reuse that note;
 a model/provider change or fresh context receives it again. Harness workers use the same path.
-The note asks native workers to pass the pointer to their own delegated workers. There are no
+The discovery note asks leads to give workers relevant excerpts and share board access only
+when their task requires it. This is delegation guidance, not an access restriction; workers
+may still inherit the pointer through provider history. Fresh provider conversations receive
+the revised note, while existing histories retain their earlier instructions. There are no
 background model calls, mandatory check-ins, or whole-board history inserted into prompts.
 
 Compatible local/API models have `whiteboard_read` and `whiteboard_post` tools. Reads return at most

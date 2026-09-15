@@ -77,7 +77,10 @@ class WhiteboardTests(unittest.TestCase):
 
     def test_discovery_once_and_reset_and_compatible_tools(self):
         conversation = Conversation(provider='qwen')
-        self.assertIn('whiteboard_post', whiteboard_discovery(conversation, self.config))
+        discovery = whiteboard_discovery(conversation, self.config)
+        self.assertIn('whiteboard_post', discovery)
+        self.assertNotIn('Pass this pointer to delegated workers', discovery)
+        self.assertIn('share board access only when their task requires it', discovery)
         self.assertEqual(whiteboard_discovery(conversation, self.config), '')
         conversation.reset('qwen')
         self.config['qwen']['read_only'] = True
@@ -89,6 +92,8 @@ class WhiteboardTests(unittest.TestCase):
             capture_dispatch('codex', 'task', self.root, conversation, self.config)
             capture_dispatch('codex', 'next', self.root, conversation, self.config)
         self.assertIn('Shared model whiteboard', adapter.run.call_args_list[0].args[0])
+        self.assertNotIn('Pass this pointer to delegated workers', adapter.run.call_args_list[0].args[0])
+        self.assertIn('Give workers relevant excerpts', adapter.run.call_args_list[0].args[0])
         self.assertEqual(adapter.run.call_args_list[1].args[0], 'next')
 
     def test_web_discovery_survives_reload_and_model_change(self):
