@@ -16,13 +16,13 @@ import uuid
 import webbrowser
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from . import __version__
+from .web_server import BrowserHTTPServer as ThreadingHTTPServer
 from .adapters import ProviderCapabilities, adapter_for
 from .budgets import collect_budgets
 from .config import (

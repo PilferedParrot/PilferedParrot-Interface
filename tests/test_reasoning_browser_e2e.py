@@ -106,15 +106,24 @@ class ReasoningBrowserEndToEndTests(unittest.TestCase):
         self.addCleanup(self.context.close)
         self.external_requests = []
         self.page_errors = []
+        self.failed_requests = []
         self.context.on("request", self._record_external_request)
         self.page = self.context.new_page()
         self.page.on("pageerror", lambda error: self.page_errors.append(error))
+        self.page.on("requestfailed", lambda request: self.failed_requests.append(
+            (request.url, request.failure),
+        ))
+        # Cleanups also run when startup fails in setUp; tearDown does not.
+        self.addCleanup(self._assert_browser_health)
         self.page.goto(self.fixture.browser_url, wait_until="domcontentloaded")
         expect(self.page.get_by_role("textbox", name="Message")).to_be_enabled(timeout=5_000)
 
-    def tearDown(self):
+    def _assert_browser_health(self):
         self.assertEqual(self.external_requests, [])
-        self.assertEqual(self.page_errors, [])
+        self.assertEqual(self.page_errors, [], (
+            "browser emitted an unhandled JavaScript error; "
+            f"failed requests: {self.failed_requests}"
+        ))
 
     def _record_external_request(self, request):
         if urlparse(request.url).hostname not in {"127.0.0.1", "localhost", "::1"}:

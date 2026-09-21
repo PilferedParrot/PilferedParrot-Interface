@@ -7,13 +7,13 @@ import tempfile
 import threading
 import time
 from copy import deepcopy
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import urlopen
 
 from pilferedparrot import web
 from pilferedparrot.config import DEFAULTS
 from pilferedparrot.dispatch import RunResult
+from pilferedparrot.web_server import BrowserHTTPServer
 
 
 class FakeBudget:
@@ -184,7 +184,7 @@ class PilferedParrotBrowserFixture:
                 )
             if not hasattr(self.app, "dashboard_capability"):
                 self.app.dashboard_capability = self.app.csrf_token
-            self.server = ThreadingHTTPServer(
+            self.server = BrowserHTTPServer(
                 ("127.0.0.1", 0), web.make_handler(self.app),
             )
             port = int(self.server.server_address[1])

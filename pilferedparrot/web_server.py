@@ -138,7 +138,14 @@ def web_authority(host: str, port: int) -> str:
     return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
 
 
-class IPv6ThreadingHTTPServer(ThreadingHTTPServer):
+class BrowserHTTPServer(ThreadingHTTPServer):
+    # A new browser page opens several connections for its scripts and styles.
+    # The older Python default of five pending connections can refuse assets
+    # on Windows before the serving thread has accepted the burst.
+    request_queue_size = 64
+
+
+class IPv6ThreadingHTTPServer(BrowserHTTPServer):
     address_family = socket.AF_INET6
 
 
@@ -757,7 +764,7 @@ def serve(
     read_capability: Callable[[str, dict[str, Any]], str | None],
     browser_url: Callable[[str, str], str], browser_open: Callable[[str], Any],
     status: Callable[[str], str], terminate: Callable[[str, int], None],
-    http_server: Callable[..., Any] = ThreadingHTTPServer,
+    http_server: Callable[..., Any] = BrowserHTTPServer,
     ipv6_http_server: Callable[..., Any] = IPv6ThreadingHTTPServer,
     timer_factory: Callable[..., Any] = threading.Timer,
 ) -> int:
