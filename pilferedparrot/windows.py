@@ -42,7 +42,6 @@ def prepare_arguments(argv: list[str]) -> list[str]:
 
 def self_test() -> int:
     """Exercise the bundled server, assets and storage without provider access."""
-    from http.server import ThreadingHTTPServer
     from urllib.error import HTTPError
     from urllib.request import Request, urlopen
 
@@ -50,7 +49,7 @@ def self_test() -> int:
     from .config import load_config
     from .ledger import append_run
     from .web import PilferedParrotApp, make_handler
-    from .web_server import ASSET_NAMES, ASSET_ROOT
+    from .web_server import ASSET_NAMES, ASSET_ROOT, BrowserHTTPServer
 
     with tempfile.TemporaryDirectory(prefix="pilferedparrot-self-test-") as directory:
         root = Path(directory)
@@ -64,7 +63,7 @@ def self_test() -> int:
             "config_path": str(root / "unused.toml"), "models_cache": str(root / "unused.json"),
         })
         app = PilferedParrotApp(config, root)
-        server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+        server = BrowserHTTPServer(("127.0.0.1", 0), make_handler(app))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         origin = f"http://127.0.0.1:{server.server_port}"
