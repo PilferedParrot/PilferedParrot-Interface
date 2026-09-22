@@ -116,6 +116,15 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
 ]
 
 
+def _runtime_mounts() -> list[str]:
+    """Expose system tools without assuming a merged-/usr distribution layout."""
+    mounts: list[str] = []
+    for name in ("/usr", "/bin", "/sbin", "/lib", "/lib64"):
+        if Path(name).is_dir():
+            mounts.extend(["--ro-bind", name, name])
+    return mounts
+
+
 class QwenToolbox:
     def __init__(
         self,
@@ -272,7 +281,15 @@ class QwenToolbox:
 
     def _file_diff(self, path: Path) -> str:
         before = self._baselines[path]
-        after = path.read_text(encoding="utf-8")
+        # A shell command can replace a file or one of its parents with a
+        # symlink after a file tool records its baseline. Check the current
+        # target before reading on the host, including when Git is unavailable.
+        current = path.resolve()
+        if self._root_for(current) is None:
+            raise PermissionError(f"path escapes workspace: {self._display(path)}")
+        if current.stat().st_size > self.file_limit:
+            raise ValueError(f"file is larger than {self.file_limit} bytes")
+        after = current.read_text(encoding="utf-8")
         relative = self._display(path)
         diff = difflib.unified_diff(
             [] if before is None else before.splitlines(keepends=True),
@@ -301,36 +318,33 @@ class QwenToolbox:
             "--die-with-parent",
             "--new-session",
             "--unshare-pid",
-            "--ro-bind", "/", "/",
+            "--tmpfs", "/",
+            *_runtime_mounts(),
             "--tmpfs", "/tmp",
-            "--tmpfs", "/run",
             "--dir", "/tmp/home",
             "--dev", "/dev",
             "--proc", "/proc",
         ]
         if self.config.get("shell_network") is not True:
             argv.append("--unshare-net")
+        # Mount only runtime configuration needed by common tools. The remaining
+        # host filesystem is absent, including other home directories and drives.
+        for runtime_path in (
+            "/etc/ld.so.cache", "/etc/nsswitch.conf", "/etc/passwd", "/etc/group",
+            "/etc/hosts", "/etc/resolv.conf", "/etc/localtime",
+            "/etc/ssl/certs", "/etc/ca-certificates",
+            "/etc/pki/tls/certs", "/etc/pki/ca-trust/extracted/pem",
+        ):
+            if Path(runtime_path).exists():
+                argv.extend(["--ro-bind", runtime_path, runtime_path])
 
-        # A read-only root still exposes every operator-readable credential and
-        # document. Hide the home directory, then mount back only the selected
-        # workspace. An entire-home workspace reaches this branch only after
-        # the operator enables the explicit allow_home_workspace override.
-        home = Path.home().resolve()
-        if self.cwd != home:
-            argv.extend(["--tmpfs", str(home)])
-            # The mask replaces home with an empty tmpfs, so every root below it
-            # needs its mount point recreated before the bind can attach.
-            for root in self.roots:
-                if home in root.parents:
-                    argv.extend(["--dir", str(root)])
-
-        # Put the root binds after /tmp and the home mask so roots below either
-        # location remain visible and writable.
+        # Selected roots are the only persistent write destinations. Bubblewrap
+        # creates their mount-point parents in the otherwise empty root.
         for root in self.roots:
             argv.extend(["--bind", str(root), str(root)])
         argv.extend([
             "--chdir", str(self.cwd),
-            "/bin/bash", "-lc", command,
+            "/bin/bash", "-c", command,
         ])
         environment = {
             "HOME": "/tmp/home",
@@ -362,31 +376,59 @@ class QwenToolbox:
             target = self._path(path)
             root = self._root_for(target) or self.cwd
             pathspec = ["--", str(target.relative_to(root))]
-        try:
-            probe = subprocess.run(
-                ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+        changed_paths = self._baselines
+        if path:
+            changed_paths = {
+                changed: baseline for changed, baseline in self._baselines.items()
+                if changed == target or target in changed.parents
+            }
+        # Git can execute commands from repository config (fsmonitor and clean
+        # filters, for example). Give it only the workspace and system binaries,
+        # read-only, so repository hooks cannot inspect other project data or
+        # persist changes even in read-only Chat.
+        bwrap = shutil.which("bwrap") if sys.platform != "win32" else None
+        if bwrap is None:
+            rendered = [self._file_diff(changed) for changed in changed_paths]
+            return "\n".join(rendered) if rendered else "Git review requires Linux and Bubblewrap; no file-tool changes yet"
+
+        prefix = [
+            bwrap, "--die-with-parent", "--new-session", "--unshare-pid",
+            "--unshare-net", "--tmpfs", "/", *_runtime_mounts(), "--tmpfs", "/tmp",
+            "--dir", "/tmp/home", "--dev", "/dev", "--proc", "/proc",
+        ]
+        prefix.extend(["--ro-bind", str(root), str(root), "--chdir", str(root)])
+        environment = {
+            "HOME": "/tmp/home",
+            "PATH": "/usr/bin:/bin",
+            "TMPDIR": "/tmp",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+        }
+
+        def git(*args: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [*prefix, "/usr/bin/git", "--no-optional-locks", "-c", "core.fsmonitor=false",
+                 "-c", "core.hooksPath=/dev/null", "-c", "submodule.recurse=false",
+                 "-C", str(root), *args],
                 text=True, encoding="utf-8", errors="replace", capture_output=True,
+                env=environment, timeout=max(1, min(self.shell_timeout, self.shell_max_timeout)),
             )
+        try:
+            probe = git("rev-parse", "--show-toplevel")
         except FileNotFoundError:
             probe = None
         if probe is None or probe.returncode:
-            changed_paths = self._baselines
-            if path:
-                changed_paths = {
-                    changed: baseline for changed, baseline in self._baselines.items()
-                    if changed == target or target in changed.parents
-                }
             rendered = [self._file_diff(changed) for changed in changed_paths]
-            reason = "Git is not installed" if probe is None else "workspace is not a Git repository"
+            reason = "Git is not installed" if probe is None else "Git metadata is unavailable within the workspace"
             return "\n".join(rendered) if rendered else f"{reason}; no file-tool changes yet"
         commands = [
-            ["git", "-C", str(root), "status", "--short", *pathspec],
-            ["git", "-C", str(root), "diff", "--no-ext-diff", "--no-color", *pathspec],
-            ["git", "-C", str(root), "diff", "--cached", "--no-ext-diff", "--no-color", *pathspec],
+            ("status", "--short", "--ignore-submodules=all", *pathspec),
+            ("diff", "--no-ext-diff", "--no-textconv", "--no-color", "--ignore-submodules=all", *pathspec),
+            ("diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-color", "--ignore-submodules=all", *pathspec),
         ]
         sections: list[str] = []
         for command in commands:
-            completed = subprocess.run(command, text=True, encoding="utf-8", errors="replace", capture_output=True)
+            completed = git(*command)
             text = completed.stdout.rstrip()
             if text:
                 sections.append(text)

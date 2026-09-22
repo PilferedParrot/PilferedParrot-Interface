@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
@@ -78,6 +79,30 @@ class ProviderRunOrchestratorTests(unittest.TestCase):
     def test_invalid_mode_is_rejected(self):
         with self.assertRaises(ValueError):
             ProviderRunOrchestrator(self.config).prepare("codex", Path("/work"), mode="write")
+
+    def test_first_turn_does_not_require_unused_roots_or_guess_write_intent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.config["codex"].update(
+                sandbox="danger-full-access",
+                additional_write_dirs=[str(root / "unmounted-drive")],
+            )
+            chat = {"cwd": str(root), "messages": [], "requested_provider": "codex"}
+            store = Mock(lock=threading.RLock())
+            store.get.return_value = chat
+            thread_factory = Mock()
+            heuristic = Mock(return_value=Path("/etc"))
+            runner = ProviderRunOrchestrator(
+                self.config, store=store, thread_factory=thread_factory,
+                outside_write_target=heuristic,
+            )
+            runner.send_message("chat-1", {
+                "content": "Fix the parser here using /etc/hosts as input.",
+            })
+            thread_factory.return_value.start.assert_called_once()
+            heuristic.assert_not_called()
+            self.assertEqual(chat["cwd"], str(root))
+            self.assertEqual(self.config["codex"]["sandbox"], "danger-full-access")
 
 
 if __name__ == "__main__":

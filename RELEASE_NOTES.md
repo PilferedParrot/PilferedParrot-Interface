@@ -1,3 +1,26 @@
+## PilferedParrot Interface 0.7.1
+
+0.7.1 repairs Work execution and local tool isolation across the Linux/source release and
+unsigned Windows preview. Earlier release archives remain unchanged; install 0.7.1 to receive
+these fixes. The named manual Harness UI was retired in 0.7.0-rc.12, while affected
+provider and tool paths also exist in the 0.5.x and 0.6.x releases.
+
+- Unused Codex additional write roots no longer block startup in `read-only` or
+  `danger-full-access`. Existing, writable additional roots are passed only in `workspace-write`.
+- Work no longer treats a path mentioned in a prompt as a request for file permission. The
+  selected provider's sandbox and approval rules still govern actual operations.
+- Qwen's Linux shell uses an isolated filesystem containing only required runtime files and
+  selected write roots. Git review runs separately in a read-only, network-disabled sandbox;
+  when Git metadata is unavailable there, review reports file-tool changes instead. File-tool
+  diffs recheck resolved paths so a changed symlink cannot redirect a host read outside the
+  selected roots.
+
+Release archives are built from the verified release tree and listed with `SHA256SUMS` at the
+[0.7.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.1).
+See the [Actions runs](https://github.com/PilferedParrot/PilferedParrot-Interface/actions) and
+release body for completed validation results.
+Windows provider accounts and CLIs are not live-certified by this package.
+
 ## PilferedParrot Interface 0.7.0
 
 0.7.0 makes the current Work and Chat experience the stable Linux/source release,

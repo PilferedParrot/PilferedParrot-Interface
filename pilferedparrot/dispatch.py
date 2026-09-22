@@ -442,7 +442,12 @@ def _codex_command(conversation: Conversation, config: dict[str, Any], cwd: Path
     approval_policy = codex.get("approval_policy")
     if approval_policy is not None:
         approval_policy = str(approval_policy).strip().lower()
-        if approval_policy not in {"untrusted", "on-failure", "on-request", "never"}:
+        if approval_policy == "untrusted":
+            raise ValueError(
+                "Codex approval policy 'untrusted' is no longer supported; "
+                "choose on-request, on-failure, or never"
+            )
+        if approval_policy not in {"on-failure", "on-request", "never"}:
             raise ValueError(f"unsupported Codex approval policy: {approval_policy}")
         command += ["--config", f'approval_policy="{approval_policy}"']
     context_limit = codex.get("context_window_limit_tokens")
@@ -461,14 +466,17 @@ def _codex_command(conversation: Conversation, config: dict[str, Any], cwd: Path
         # native multi-agent tools. A thread limit excludes the primary and
         # would still allow a child. Older CLIs must support agents.enabled.
         command += ["--config", "agents.enabled=false"]
-    for path in codex_additional_write_dirs(config):
+    additional_write_dirs = (
+        codex_additional_write_dirs(config) if sandbox == "workspace-write" else ()
+    )
+    for path in additional_write_dirs:
         if path != cwd:
             command += ["--add-dir", str(path)]
-    if sandbox != "read-only":
+    if sandbox == "workspace-write":
         from .whiteboard import whiteboard_directory
         board = whiteboard_directory(config)
         board.mkdir(parents=True, exist_ok=True)
-        if board != cwd and board not in codex_additional_write_dirs(config):
+        if board != cwd and board not in additional_write_dirs:
             command += ["--add-dir", str(board)]
     if codex.get("model"):
         command += ["--model", codex["model"]]

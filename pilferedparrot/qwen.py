@@ -250,9 +250,17 @@ def run_compatible_agent(
         )
     if additional_dirs:
         listed = "\n".join(f"- {root}" for root in additional_dirs)
+        access = "readable" if bool(provider_config.get("read_only")) else "readable and writable"
         system_prompt += (
-            "\nThese additional roots are also readable and writable. Reach them with "
-            f"absolute paths; everything else outside the workspace is denied.\n{listed}\n"
+            f"\nThese additional roots are also {access}. Reach them with absolute paths. "
+            f"File tools are limited to the workspace and these roots.\n{listed}\n"
+        )
+    if not bool(provider_config.get("read_only")):
+        system_prompt += (
+            "\nShell tools can also read installed system binaries and selected runtime "
+            "configuration, and use disposable temporary storage. Other host data is hidden. "
+            "Use system python3; custom toolchains outside the selected roots require "
+            "explicit configuration. Git review runs with read-only workspace access.\n"
         )
     system = {"role": "system", "content": system_prompt}
     max_turns = int(provider_config.get("max_tool_turns", 24))
