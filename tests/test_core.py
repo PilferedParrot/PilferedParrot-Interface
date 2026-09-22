@@ -2011,7 +2011,8 @@ class WebStoreTests(unittest.TestCase):
                     self.assertEqual(passed_config["codex"]["sandbox"], "workspace-write")
                     self.assertEqual(passed_config["codex"]["additional_write_dirs"], [])
 
-    def test_first_turn_ignores_unused_missing_codex_write_roots(self):
+    @patch("pilferedparrot.dispatch.provider_command", return_value="codex")
+    def test_first_turn_ignores_unused_missing_codex_write_roots(self, _command):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for sandbox in ("danger-full-access", "read-only"):
