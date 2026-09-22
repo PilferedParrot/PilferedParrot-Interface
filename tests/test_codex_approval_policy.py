@@ -11,7 +11,7 @@ class CodexApprovalPolicyTests(unittest.TestCase):
     @patch("pilferedparrot.dispatch.provider_command", return_value="codex")
     def test_policy_is_added_to_fresh_and_resumed_commands(self, _command):
         config = load_config(Path("/definitely/missing/config.json"))
-        for policy in ("untrusted", "on-failure", "on-request", "never"):
+        for policy in ("on-failure", "on-request", "never"):
             for session_id in (None, "thread-1"):
                 with self.subTest(policy=policy, session_id=session_id):
                     config["codex"]["approval_policy"] = policy
@@ -33,6 +33,13 @@ class CodexApprovalPolicyTests(unittest.TestCase):
         config = load_config(Path("/definitely/missing/config.json"))
         config["codex"]["approval_policy"] = "always"
         with self.assertRaisesRegex(ValueError, "unsupported Codex approval policy: always"):
+            _codex_command(Conversation(), config, Path.cwd())
+
+    @patch("pilferedparrot.dispatch.provider_command", return_value="codex")
+    def test_removed_untrusted_policy_explains_replacement(self, _command):
+        config = load_config(Path("/definitely/missing/config.json"))
+        config["codex"]["approval_policy"] = "untrusted"
+        with self.assertRaisesRegex(ValueError, "untrusted.*no longer supported.*on-request"):
             _codex_command(Conversation(), config, Path.cwd())
 
 

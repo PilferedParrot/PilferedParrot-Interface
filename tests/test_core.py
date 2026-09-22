@@ -635,6 +635,17 @@ class CodexDispatchTests(unittest.TestCase):
             _codex_command(Conversation(), config, Path.cwd())
 
     @patch("pilferedparrot.dispatch.provider_command", return_value="codex")
+    def test_other_sandboxes_ignore_stale_additional_write_roots(self, _command):
+        config = load_config(Path("/definitely/missing/config.json"))
+        config["codex"]["additional_write_dirs"] = ["/definitely/missing/project"]
+        for sandbox in ("read-only", "danger-full-access"):
+            with self.subTest(sandbox=sandbox):
+                config["codex"]["sandbox"] = sandbox
+                command = _codex_command(Conversation(), config, Path.cwd())
+                self.assertEqual(command[command.index("--sandbox") + 1], sandbox)
+                self.assertNotIn("--add-dir", command)
+
+    @patch("pilferedparrot.dispatch.provider_command", return_value="codex")
     def test_invocation_can_override_codex_reasoning_effort(self, _command):
         config = load_config(Path("/definitely/missing/config.json"))
         for effort in ("low", "minimal", "ultra"):
@@ -1972,7 +1983,7 @@ class WebStoreTests(unittest.TestCase):
                 {"input_tokens": 12, "output_tokens": 4},
             )
 
-    def test_first_turn_rejects_unapproved_project_mismatch_before_dispatch(self):
+    def test_first_turn_path_mentions_do_not_change_workspace_or_permissions(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             selected = root / "selected"
@@ -1983,14 +1994,48 @@ class WebStoreTests(unittest.TestCase):
             config = _web_config(directory)
             config["codex"]["additional_write_dirs"] = []
             app = PilferedParrotApp(config, selected)
-            chat = app.create_chat({"provider": "codex", "cwd": selected})
-            with patch("pilferedparrot.web.capture_dispatch") as dispatch, \
-                 self.assertRaisesRegex(ValueError, "project mismatch"):
-                app.send_message(chat["id"], {
-                    "content": f"Implement the fix in {other}.", "provider": "codex",
-                })
-            dispatch.assert_not_called()
-            self.assertEqual(app.store.get(chat["id"])["messages"], [])
+            for prompt in (
+                f"Fix the parser here using {other} as a reference.",
+                f"Fix the parser here; do not modify {other}.",
+                f"Implement the fix in {other}.",
+            ):
+                with self.subTest(prompt=prompt):
+                    chat = app.create_chat({"provider": "codex", "cwd": selected})
+                    with patch("pilferedparrot.web.capture_dispatch",
+                               return_value=RunResult("done", 0, "thread")) as dispatch:
+                        app.send_message(chat["id"], {"content": prompt, "provider": "codex"})
+                        self._wait_for_chat(app, chat["id"])
+                    dispatch.assert_called_once()
+                    self.assertEqual(dispatch.call_args.args[2], selected)
+                    passed_config = dispatch.call_args.args[4]
+                    self.assertEqual(passed_config["codex"]["sandbox"], "workspace-write")
+                    self.assertEqual(passed_config["codex"]["additional_write_dirs"], [])
+
+    @patch("pilferedparrot.dispatch.provider_command", return_value="codex")
+    def test_first_turn_ignores_unused_missing_codex_write_roots(self, _command):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for sandbox in ("danger-full-access", "read-only"):
+                with self.subTest(sandbox=sandbox):
+                    config = _web_config(directory)
+                    config["codex"].update(
+                        sandbox=sandbox,
+                        additional_write_dirs=[str(root / "disconnected-drive")],
+                    )
+                    app = PilferedParrotApp(config, root)
+                    chat = app.create_chat({"provider": "codex", "cwd": root})
+
+                    def capture(provider, prompt, cwd, conversation, run_config, cancel):
+                        command = _codex_command(conversation, run_config, cwd)
+                        self.assertEqual(command[command.index("--sandbox") + 1], sandbox)
+                        self.assertNotIn("--add-dir", command)
+                        return RunResult("done", 0, "thread")
+
+                    with patch("pilferedparrot.web.capture_dispatch", side_effect=capture) as dispatch:
+                        app.send_message(chat["id"], {"content": "Inspect the local project.", "provider": "codex"})
+                        updated = self._wait_for_chat(app, chat["id"])
+                    dispatch.assert_called_once()
+                    self.assertEqual(updated["messages"][-1]["content"], "done")
 
     def test_qwen_home_workspace_requires_explicit_opt_in(self):
         with tempfile.TemporaryDirectory() as directory:

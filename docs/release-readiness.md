@@ -1,3 +1,29 @@
+# PilferedParrot Interface 0.7.1 release verification
+
+0.7.1 is a reliability and security patch for source/Linux and the unsigned Windows
+x64 preview. It repairs unused Codex additional-root validation, removes the prompt-path
+permission heuristic, and narrows Qwen shell and Git filesystem access. The named manual
+Harness UI was retired in 0.7.0-rc.12; affected provider and tool paths also exist
+in 0.5.x and 0.6.x releases. Prior archives are immutable and require an explicit upgrade.
+
+## Required verification and publication
+
+- Run focused regressions, the full Python suite, browser checks, and release hygiene on the
+  integrated release tree.
+- Require Python 3.12/3.13/3.14, Playwright Chromium, Windows x64, and CodeQL checks before
+  release. Windows CI builds the portable package and smoke tests its executable.
+- Build the source archive and combined `SHA256SUMS` from the verified release tree. Publish
+  matching assets under the 0.7.1 tag.
+
+The [Actions runs](https://github.com/PilferedParrot/PilferedParrot-Interface/actions) and
+[0.7.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.1)
+hold the actual CI evidence, assets, and checksums. This document records the criteria, not a
+claim that the checks passed.
+
+The 0.7.0 evidence below describes that earlier release and does not validate the 0.7.1 patch.
+
+## Earlier release evidence
+
 # PilferedParrot Interface 0.7.0 release readiness — 2026-09-14
 
 0.7.0 promotes the current Work and Chat interface to the stable Linux/source

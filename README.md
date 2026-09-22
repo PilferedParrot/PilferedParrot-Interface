@@ -4,15 +4,16 @@ PilferedParrot Interface (PPI) is a local browser interface for coding CLIs and 
 model APIs. Choose the provider for a work session, keep its project and history together, and
 open a separate read-only Chat window when you need a quick question.
 
-The current checkout is the **0.7.0 stable release**. Linux/source is stable; the Windows 10/11
-x64 build remains an unsigned portable preview. Downloads are available from the
-[0.7.0 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0).
+**0.7.1** is a reliability and security update for the stable Linux/source channel and unsigned
+Windows 10/11 x64 preview. Release assets and completed verification are linked from the
+[0.7.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.1);
+the [Actions runs](https://github.com/PilferedParrot/PilferedParrot-Interface/actions) show CI results.
 
 [Project site](https://pilferedparrot.github.io/PilferedParrot-Interface/) ·
-[Linux 0.7.0 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0/pilferedparrot-0.7.0-source.tar.gz) ·
-[Stable 0.7.0 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0) ·
+[Linux 0.7.1 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.1/pilferedparrot-0.7.1-source.tar.gz) ·
+[0.7.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.1) ·
 [Release notes](RELEASE_NOTES.md) ·
-[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0/PilferedParrot-0.7.0-windows-x64.zip) ·
+[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.1/PilferedParrot-0.7.1-windows-x64.zip) ·
 [Report a bug](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new?template=bug_report.yml) ·
 [Share feedback](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new/choose)
 
@@ -86,11 +87,11 @@ dependencies. Bubblewrap is used for Qwen's Linux shell tools and is disabled on
 
 ## Linux
 
-Linux 0.7.0 is the stable, best-validated release, with strongest validation on Linux Mint with
-X11. Install Python 3.12+, Chrome or Chromium, and (if using Qwen shell tools) Bubblewrap.
+Linux is the stable, best-validated channel, with strongest validation on Linux Mint with X11.
+Install Python 3.12+, Chrome or Chromium, and (if using Qwen shell tools) Bubblewrap.
 
 ```bash
-git clone --branch v0.7.0 https://github.com/PilferedParrot/PilferedParrot-Interface.git
+git clone --branch v0.7.1 https://github.com/PilferedParrot/PilferedParrot-Interface.git
 cd PilferedParrot-Interface
 cp config.example.json config.json
 ./bin/pilferedparrot
@@ -108,7 +109,7 @@ for authentication and integration limits.
 
 ### Upgrading an existing installation
 
-Download the [0.7.0 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0/pilferedparrot-0.7.0-source.tar.gz),
+Download the [0.7.1 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.1/pilferedparrot-0.7.1-source.tar.gz),
 extract it, and run `./bin/pilferedparrot --version` before replacing your launcher with
 `./bin/install-pilferedparrot-desktop`. Keep the extracted directory in place. Existing
 configuration, browser profiles, conversations, and run metadata remain in their current local
@@ -116,7 +117,7 @@ state directory; do not replace your `config.json` unless you intend to reconfig
 
 ## Windows preview
 
-Download the [0.7.0 Windows x64 preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.0/PilferedParrot-0.7.0-windows-x64.zip),
+Download the [0.7.1 Windows x64 preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.1/PilferedParrot-0.7.1-windows-x64.zip),
 extract it to a directory you control, and run `PilferedParrot.exe`. The package includes Python,
 needs no installation or administrator rights, and uses Chrome, Chromium, or Microsoft Edge. Keep
 the console window open while PPI runs and keep the extracted directory together. The executable
@@ -142,6 +143,20 @@ Choose a project folder before starting work. Qwen file and shell tools are limi
 project by default; its Linux shell runs without network access unless enabled in local config.
 Codex and Claude keep their own authentication, sandbox, approvals, and network behavior. PPI
 does not receive provider passwords or manage provider account credentials.
+
+For Codex, `codex.additional_write_dirs` in local `config.json` grants extra roots only when
+`codex.sandbox` is `workspace-write`. Paths must exist and be writable by the operator. The list
+is unused in `read-only` and `danger-full-access`; leave removable drives out of global roots
+unless the task needs them. PPI no longer decides file access from paths mentioned in a prompt.
+The selected provider's sandbox and permissions govern actual operations.
+
+For Qwen on Linux, Bubblewrap exposes the selected project and configured additional roots as
+persistent write locations, with an ephemeral `/tmp` and only needed system runtime files. Other
+host data is hidden by default. Git review runs in a separate read-only, network-disabled sandbox.
+When the sandbox cannot see Git metadata, review falls back to changes recorded by Qwen's file
+tools; that fallback is narrower than a full Git diff. File-tool diffs recheck resolved paths
+before reading, including if a symlink changed after a file was edited. Windows keeps Qwen file
+tools but has no Bubblewrap shell.
 
 For the full provider and tool details, read [provider compatibility](docs/provider-compatibility.md),
 [whiteboard access and limits](docs/whiteboard.md), and the [Harness review](docs/harness-review.md).

@@ -26,7 +26,7 @@ from .web_server import BrowserHTTPServer as ThreadingHTTPServer
 from .adapters import ProviderCapabilities, adapter_for
 from .budgets import collect_budgets
 from .config import (
-    codex_additional_write_dirs, compatible_api_headers, context_window_percent,
+    compatible_api_headers, context_window_percent,
     provider_default_workspace,
     effective_model, expanded_path,
     load_config, model_catalog, model_context_window, model_effective_context_window_percent,
@@ -71,7 +71,6 @@ ASSET_NAMES = _server.ASSET_NAMES
 CODE_BLOCK_LANGUAGES = frozenset({
     "bash", "console", "fish", "powershell", "shell", "sh", "terminal", "zsh",
 })
-ABSOLUTE_PATH = re.compile(r"(?<![\w.])(/[^\s`'\"<>|]+)")
 API_GENERATION = 21
 CHAT_MODEL_OPTIONS = ("gpt-5.6-terra", "gpt-5.6-luna")
 MESSAGE_MAX_CHARS = 40_000
@@ -151,10 +150,6 @@ def _compatible_provider_config(definition: dict[str, Any]) -> dict[str, Any]:
 # Include a conservative schema allowance until per-request telemetry replaces
 # the entire prompt estimate with the provider's live input count.
 CODEX_TOOL_DEFINITION_ESTIMATE_TOKENS = 2_000
-WRITE_SCOPE_INTENT = re.compile(
-    r"\b(?:write access|writable|work(?:ing)?\s+(?:on|in)|implement|build|modify|edit|fix|create)\b",
-    re.IGNORECASE,
-)
 
 
 def _estimated_tokens(characters: int) -> int:
@@ -420,37 +415,6 @@ def _validate_provider_workspace(provider: str, cwd: Path, config: dict[str, Any
             f"{provider} cannot use the entire home directory as its workspace unless "
             f"{provider}.allow_home_workspace is explicitly enabled"
         )
-
-
-def _repository_root(path: Path) -> Path:
-    # A directory named directly by the operator is already the least-surprising
-    # scope. Only walk upward for a mentioned file, where the checkout root is
-    # more useful than granting one file's parent directory.
-    if path.is_dir():
-        return path
-    current = path.parent
-    for candidate in (current, *current.parents):
-        if (candidate / ".git").exists():
-            return candidate
-    return current
-
-
-def _outside_write_target(prompt: str, writable_roots: tuple[Path, ...]) -> Path | None:
-    """Spot an unambiguous project mismatch before consuming a provider turn."""
-    if not WRITE_SCOPE_INTENT.search(prompt):
-        return None
-    outside: list[Path] = []
-    for match in ABSOLUTE_PATH.finditer(prompt):
-        raw = match.group(1).rstrip(".,;:!?)]}")
-        candidate = Path(raw).expanduser()
-        if not candidate.exists():
-            continue
-        target = _repository_root(candidate.resolve())
-        if any(target == root or root in target.parents for root in writable_roots):
-            continue
-        if target not in outside:
-            outside.append(target)
-    return outside[0] if len(outside) == 1 else None
 
 
 def _fenced_code_block_details(content: str) -> list[tuple[str | None, str]]:
@@ -1644,16 +1608,9 @@ class PilferedParrotApp(HarnessWorkflow):
                         payload.get("cwd") or chat["cwd"], self.renamed_repository_root,
                     ))
                     _validate_provider_workspace(provider, requested_cwd, self.config)
-                    writable_roots = (requested_cwd,)
-                    if provider == "codex":
-                        writable_roots += codex_additional_write_dirs(self.config)
-                    outside_target = _outside_write_target(prompt, writable_roots)
-                    if outside_target is not None:
-                        raise ValueError(
-                            f"project mismatch: this task appears to modify {outside_target}, "
-                            f"but the writable project is {requested_cwd}; choose that Project folder"
-                            + (" or add it to codex.additional_write_dirs" if provider == "codex" else "")
-                        )
+                    # A path mentioned in prose can be an input, example, or
+                    # explicit exclusion. Keep the selected workspace and let
+                    # provider/tool permissions enforce actual file operations.
                     chat["cwd"] = str(requested_cwd)
                 percent = _context_percent(chat.get(
                     "context_window_percent", context_window_percent(self.config, provider),
