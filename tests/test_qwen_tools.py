@@ -57,15 +57,15 @@ class GitDiffSandboxTests(unittest.TestCase):
             root.mkdir()
             marker = parent / "ran-outside"
             workspace_marker = root / "ran-inside"
-            secret = parent / "external-secret"
-            secret.write_text("external-only-content\n")
+            outside_document = parent / "external-document.txt"
+            outside_document.write_text("external-only-content\n")
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             hook = root / "hook.sh"
             hook.write_text(
                 "#!/bin/sh\n"
                 f"printf executed > '{marker}'\n"
                 f"printf executed > '{workspace_marker}'\n"
-                f"cat '{secret}' 2>/dev/null\n"
+                f"cat '{outside_document}' 2>/dev/null\n"
                 "cat\n"
             )
             hook.chmod(0o755)
@@ -134,7 +134,7 @@ class ShellSandboxTests(unittest.TestCase):
             extra = parent / "extra"
             root.mkdir()
             extra.mkdir()
-            hidden = parent / "outside-secret"
+            hidden = parent / "unselected-document.txt"
             hidden.write_text("must remain hidden")
             toolbox = QwenToolbox(root, {"shell_network": False}, [extra])
             command = (
