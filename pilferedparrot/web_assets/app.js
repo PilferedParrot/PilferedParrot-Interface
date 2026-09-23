@@ -1041,6 +1041,20 @@ function acpText(value, limit = 8_000) {
   return escapeHtml(text.length > limit ? `${text.slice(0, limit)}\n… Preview shortened.` : text);
 }
 
+function acpDiffMarkup(block, key, limit) {
+  const path = typeof block.path === "string" ? block.path : "Changed file";
+  const pathId = `${key}-path`;
+  const beforeId = `${key}-before`;
+  const afterId = `${key}-after`;
+  const oldText = block.oldText === null ? "New file" : block.oldText;
+  return `<section class="acp-diff" role="region" aria-label="File change: ${acpText(path, 1_000)}">
+    <div class="acp-diff-path" id="${escapeHtml(pathId)}">${acpText(path, 1_000)}</div>
+    <div class="acp-diff-pair">
+      <div role="group" aria-labelledby="${escapeHtml(beforeId)} ${escapeHtml(pathId)}"><strong id="${escapeHtml(beforeId)}">Before</strong><pre>${acpText(oldText, limit)}</pre></div>
+      <div role="group" aria-labelledby="${escapeHtml(afterId)} ${escapeHtml(pathId)}"><strong id="${escapeHtml(afterId)}">After</strong><pre>${acpText(block.newText, limit)}</pre></div>
+    </div></section>`;
+}
+
 function acpToolCards(message, openState) {
   const tools = new Map();
   for (const entry of Array.isArray(message.acp_updates) ? message.acp_updates : []) {
@@ -1054,17 +1068,14 @@ function acpToolCards(message, openState) {
     tools.set(update.toolCallId, previous);
   }
   if (!tools.size) return "";
-  return `<div class="acp-tools" aria-label="Agent actions">${[...tools.values()].map((tool) => {
+  return `<div class="acp-tools" role="region" aria-label="Agent actions">${[...tools.values()].map((tool) => {
     const kind = typeof tool.kind === "string" ? tool.kind : "action";
     const status = ["pending", "in_progress", "completed", "failed"].includes(tool.status)
       ? tool.status : "pending";
     const content = Array.isArray(tool.content) ? tool.content : [];
-    const details = content.map((block) => {
+    const details = content.map((block, blockIndex) => {
       if (block?.type === "diff") {
-        const oldText = block.oldText === null ? "New file" : block.oldText;
-        return `<section class="acp-diff"><div class="acp-diff-path">${acpText(block.path, 1_000)}</div>
-          <div class="acp-diff-pair"><div><strong>Before</strong><pre>${acpText(oldText, 20_000)}</pre></div>
-          <div><strong>After</strong><pre>${acpText(block.newText, 20_000)}</pre></div></div></section>`;
+        return acpDiffMarkup(block, `tool-${message.id || "message"}-${tool.toolCallId}-${blockIndex}`, 20_000);
       }
       if (block?.type === "content" && block.content?.type === "text") {
         return `<pre class="acp-tool-output">${acpText(block.content.text)}</pre>`;
@@ -1086,10 +1097,8 @@ function acpPermissionCards(message, chatId) {
   const requests = Array.isArray(message.acp_permissions) ? message.acp_permissions : [];
   return requests.map((request) => {
     const tool = request.toolCall || {};
-    const preview = Array.isArray(tool.content) ? tool.content.map((block) =>
-      block?.type === "diff" ? `<section class="acp-diff"><div class="acp-diff-path">${acpText(block.path, 1_000)}</div>
-        <div class="acp-diff-pair"><div><strong>Before</strong><pre>${acpText(block.oldText === null ? "New file" : block.oldText, 65_536)}</pre></div>
-        <div><strong>After</strong><pre>${acpText(block.newText, 65_536)}</pre></div></div></section>` : "",
+    const preview = Array.isArray(tool.content) ? tool.content.map((block, blockIndex) =>
+      block?.type === "diff" ? acpDiffMarkup(block, `permission-${request.requestId}-${blockIndex}`, 65_536) : "",
     ).join("") : "";
     const command = tool.command ? `<div class="acp-command"><strong>Command</strong><pre>${acpText(tool.command, 65_536)}</pre></div>` : "";
     const buttons = (Array.isArray(request.options) ? request.options : []).map((option) => {
@@ -1133,6 +1142,11 @@ function captureWorkScroll() {
   return positions;
 }
 
+function captureWorkLogOpenState() {
+  return new Map([...$("#messages").querySelectorAll(".work-log[data-work-key]")]
+    .map((node) => [node.dataset.workKey, node.open]));
+}
+
 function restoreWorkScroll(positions) {
   document.querySelectorAll(".work-items[data-work-key]").forEach((node) => {
     const position = positions.get(node.dataset.workKey);
@@ -1151,6 +1165,7 @@ function renderMessages() {
   } : null;
   const acpToolOpen = new Map([...$("#messages").querySelectorAll(".acp-tool-card[data-tool-key]")]
     .map((node) => [node.dataset.toolKey, node.open]));
+  const workLogOpen = captureWorkLogOpenState();
   const workScroll = captureWorkScroll();
   const identityState = globalThis.PilferedParrotIdentity.captureState($("#messages"));
   $("#welcome").classList.toggle("hidden", messages.length > 0);
@@ -1165,7 +1180,8 @@ function renderMessages() {
     const acpPermissions = assistant && message.pending && chat
       ? acpPermissionCards(message, chat.id) : "";
     const workKey = String(message.id || `message-${messageIndex}`);
-    const work = activity.length ? `<details class="work-log" ${message.pending ? "open" : ""}>
+    const workOpen = workLogOpen.has(workKey) ? workLogOpen.get(workKey) : Boolean(message.pending);
+    const work = activity.length ? `<details class="work-log" data-work-key="${escapeHtml(workKey)}" ${workOpen ? "open" : ""}>
       <summary><span>${message.pending ? `${providerLabel(provider)} is working` : "Work details"}</span><small>${activity.length} update${activity.length === 1 ? "" : "s"}</small></summary>
       <div class="work-items" data-work-key="${escapeHtml(workKey)}">${activity.map((item) => `
         <div class="work-item ${escapeHtml(item.kind || "status")}">

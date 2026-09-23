@@ -104,10 +104,15 @@ class ACPWorkBrowserEndToEndTests(unittest.TestCase):
         expect(self.page.locator(".acp-tool-card")).to_contain_text("Prepare browser preview")
         expect(self.page.locator(".acp-tool-card")).to_contain_text("preview.txt")
         expect(self.page.locator(".acp-tool-card")).to_contain_text("ACP browser preview")
+        actions = self.page.get_by_role("region", name="Agent actions")
+        expect(actions).to_be_visible()
         expect(card).to_contain_text("Write allowed.txt")
         expect(card.locator(".acp-command pre")).to_have_text(PREVIEW_COMMAND)
         expect(card.locator(".acp-diff")).to_contain_text("allowed.txt")
         expect(card.locator(".acp-diff")).to_contain_text("approved")
+        expect(card.get_by_role("region", name="File change: allowed.txt")).to_be_visible()
+        expect(card.get_by_role("group", name="Before allowed.txt")).to_contain_text("New file")
+        expect(card.get_by_role("group", name="After allowed.txt")).to_contain_text("approved")
 
         # A pending permission stays unanswered until the user chooses an option.
         allowed_path = self.fixture.project / "allowed.txt"

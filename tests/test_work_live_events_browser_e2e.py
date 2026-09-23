@@ -147,6 +147,14 @@ class WorkLiveEventsBrowserTests(unittest.TestCase):
         expect(page.get_by_text(LIVE_PROGRESS, exact=True)).to_be_visible(timeout=5_000)
         expect(page.get_by_label("OpenAI Codex is working")).to_be_visible()
 
+        work_log = page.locator(".work-log").last
+        work_log.locator("summary").click()
+        self.assertFalse(work_log.evaluate("node => node.open"))
+        second_progress = "A second live event keeps the log closed"
+        self.fixture.provider.emit_progress(PROMPT, second_progress)
+        expect(work_log.locator(".work-items")).to_contain_text(second_progress, timeout=5_000)
+        self.assertFalse(work_log.evaluate("node => node.open"))
+
         self.allow_chat_snapshots = True
         self.fixture.provider.complete(PROMPT)
         expect(page.get_by_text(f"Fake provider completed: {PROMPT}", exact=True)) \
