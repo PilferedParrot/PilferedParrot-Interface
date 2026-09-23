@@ -2,6 +2,8 @@
   "files": {
     "__init__.py": "a28186ffb93c073de236b12c3c8155af0a253a174b0c40218a0560fda8b47c27",
     "__main__.py": "b49142cacf810926320a87e16cf39101d3573b3487d17cbb750b60330fb54c89",
+    "acp_adapters.py": "79c775cc86ac1af3506f4490b887ab8128111ddf2ec69ecda7ff5888cdc6bd4f",
+    "acp_client.py": "21580b4ed8275362539a4bfa02e877eedf7d8a920c1999d727bf6198030d5497",
     "adapters.py": "91cb225cbe0e2132910a14f4ec58283e5c4b607313f715afa81fce680ccd5085",
     "antigravity.py": "8ce1be1458b4c047cb2ca732c49d6aaf3a440c0b5aba61488e6d1bda83deffdb",
     "budgets.py": "a1922a774437e6b1b3e8f9bdff45f2d9edeb88f21a75ac6e9ca757d81ea7e7d3",

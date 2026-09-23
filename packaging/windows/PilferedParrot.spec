@@ -10,6 +10,8 @@ datas = collect_data_files("pilferedparrot", include_py_files=True)
 datas.extend([
     (str(ROOT / "config.example.json"), "."),
     (str(ROOT / "packaging" / "windows" / "README-WINDOWS.txt"), "."),
+    (str(ROOT / "packaging" / "acp-adapters" / "package.json"), "packaging/acp-adapters"),
+    (str(ROOT / "packaging" / "acp-adapters" / "package-lock.json"), "packaging/acp-adapters"),
 ])
 
 a = Analysis(
