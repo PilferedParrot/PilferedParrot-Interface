@@ -635,7 +635,10 @@ _pilferedparrot_dashboard_capability = read_dashboard_capability
 
 
 class PilferedParrotApp(HarnessWorkflow):
-    def __init__(self, config: dict[str, Any], default_cwd: Path):
+    def __init__(
+        self, config: dict[str, Any], default_cwd: Path, *,
+        sqlite_state_path: Path | None = None,
+    ):
         self.config = config
         self.feedback = FeedbackStore.from_config(config)
         self.default_cwd = default_cwd
@@ -690,6 +693,7 @@ class PilferedParrotApp(HarnessWorkflow):
             technical_warning_chars=self.technical_context_warning_chars,
             chat_model=str(config["web"].get("chat_model") or CHAT_MODEL_OPTIONS[0]).strip(),
             legacy_path=legacy_chat_store_path(config),
+            sqlite_state_path=sqlite_state_path,
         )
         self.events = EventHub()
         self.acp_adapters = AdapterManager(config)

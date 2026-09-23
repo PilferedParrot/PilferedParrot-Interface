@@ -11,7 +11,8 @@ from unittest.mock import patch
 from pilferedparrot.sqlite_state import (
     RevisionConflict, SourceChanged, SQLiteStateStore, StateStoreError,
 )
-from pilferedparrot.web import ChatStore
+from pilferedparrot.config import load_config
+from pilferedparrot.web import ChatStore, PilferedParrotApp
 
 
 RAW = (
@@ -129,6 +130,32 @@ class ChatStoreSQLiteCutoverTests(unittest.TestCase):
         with self.assertRaises(StateStoreError):
             self.open_store()
         self.assertFalse(self.database.exists())
+
+    def test_app_opt_in_persists_work_session_without_rewriting_json(self):
+        config = load_config(self.root / "missing.json")
+        config["web"]["chat_store"] = str(self.source)
+        config["web"]["model_catalog_store"] = str(self.root / "models.json")
+        config["ledger"] = str(self.root / "runs.jsonl")
+        app = PilferedParrotApp(config, self.root, sqlite_state_path=self.database)
+        try:
+            work = app.create_chat({"provider": "codex", "cwd": str(self.root)})
+            app.set_draft(work["id"], {"draft": "draft saved by full app"})
+        finally:
+            app.shutdown()
+        self.assertEqual(self.source.read_bytes(), RAW)
+
+        restarted = PilferedParrotApp(config, self.root, sqlite_state_path=self.database)
+        try:
+            self.assertEqual(restarted.store.get(work["id"])["draft"],
+                             "draft saved by full app")
+            with SQLiteStateStore(self.database) as inspected:
+                snapshot = inspected.import_json(self.source)
+                self.assertTrue(any(chat.get("id") == work["id"]
+                                    for chat in snapshot.document["chats"]))
+                self.assertEqual(inspected.source_backup()[0], RAW)
+        finally:
+            restarted.shutdown()
+        self.assertEqual(self.source.read_bytes(), RAW)
 
 
 if __name__ == "__main__":
