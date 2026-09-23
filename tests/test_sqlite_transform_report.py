@@ -6,7 +6,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import pilferedparrot.sqlite_transform_report as transform_report
 from pilferedparrot.sqlite_transform_report import build_transform_report
 from pilferedparrot.web import ChatStore
 
@@ -75,6 +77,14 @@ class SQLiteTransformReportTests(unittest.TestCase):
         self.assertEqual(len(report["sample_fields"]), 16)
         self.assertLessEqual(len(report["counts"]), 256)
 
+    def test_node_budget_marks_partial_report(self):
+        raw = {"chats": [{"id": str(index)} for index in range(20)]}
+        normalized = {"chats": [{"id": f"changed-{index}"} for index in range(20)]}
+        with patch.object(transform_report, "_MAX_NODES", 12):
+            report = build_transform_report(raw, normalized)
+        self.assertTrue(report["truncated"])
+        self.assertIn("$.<bounded>", {row["path"] for row in report["counts"]})
+
     def test_chat_store_caches_first_load_report_before_save(self):
         raw = (
             '{"version":8,"chats":[{"id":"SECRET-ID-77",'
@@ -95,6 +105,41 @@ class SQLiteTransformReportTests(unittest.TestCase):
                 self.assertNotIn(secret, encoded)
             self.assertEqual(source.read_text(encoding="utf-8"), raw)
             self.assertEqual(report["metadata"]["revision"], 0)
+
+    def test_report_matches_retired_and_preserved_fields_after_save(self):
+        raw = {
+            "version": 4,
+            "chats": [],
+            "coordinator": {"id": "private-legacy-id", "messages": []},
+            "coordinator_history": [],
+            "preferences": {
+                "title": "PRIVATE-UNKNOWN-PREFERENCE",
+                "work_models": {"codex": "  private-model  "},
+            },
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "chats.json"
+            source.write_text(json.dumps(raw), encoding="utf-8")
+            store = ChatStore(source, sqlite_state_path=root / "chats.sqlite3")
+            self.addCleanup(store.close)
+            report = store.sqlite_transform_report()
+            rows = {(row["path"], row["category"], row["operation"]): row["count"]
+                    for row in report["counts"]}
+            self.assertEqual(rows[("$.coordinator", "known", "retired")], 1)
+            self.assertEqual(rows[("$.coordinator_history", "known", "retired")], 1)
+            self.assertEqual(rows[("$.preferences.<opaque>", "opaque", "opaque-retained")], 1)
+            self.assertEqual(rows[("$.preferences.work_models.<opaque>", "opaque", "changed")], 1)
+            encoded = json.dumps(report)
+            for private in ("PRIVATE-UNKNOWN-PREFERENCE", "private-legacy-id",
+                            "private-model", "codex", "$.preferences.title"):
+                self.assertNotIn(private, encoded)
+            store.save()
+            saved = store._sqlite_state.load().document
+            self.assertNotIn("coordinator", saved)
+            self.assertNotIn("coordinator_history", saved)
+            self.assertEqual(saved["preferences"]["title"], "PRIVATE-UNKNOWN-PREFERENCE")
+            self.assertEqual(saved["preferences"]["work_models"]["codex"], "private-model")
 
 
 if __name__ == "__main__":
