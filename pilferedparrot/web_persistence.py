@@ -683,6 +683,9 @@ class PersistentChatStore:
         with self.lock:
             if self._sqlite_state is not None:
                 if self._sqlite_failed or self._sqlite_revision is None:
+                    # A mutator may have changed the tree before reaching save.
+                    # Keep every rejected attempt invisible to later reads.
+                    self.data = deepcopy(self._sqlite_committed_data)
                     raise StateStoreError("SQLite chat store requires a fresh load")
                 try:
                     snapshot = deepcopy(self.data)

@@ -71,7 +71,8 @@ class ChatStoreSQLiteCutoverTests(unittest.TestCase):
             stale.set_draft("work-a", "stale writer")
         self.assertEqual(stale.get("work-a")["draft"], "unsent")
         with self.assertRaises(StateStoreError):
-            stale.save()
+            stale.delete("work-a")
+        self.assertEqual(stale.get("work-a")["draft"], "unsent")
         with SQLiteStateStore(self.database) as inspected:
             self.assertEqual(inspected.import_json(self.source).document["chats"][0]["draft"],
                              "first writer")
@@ -84,7 +85,8 @@ class ChatStoreSQLiteCutoverTests(unittest.TestCase):
             store.set_draft("work-a", "must not commit")
         self.assertEqual(store.get("work-a")["draft"], "unsent")
         with self.assertRaises(StateStoreError):
-            store.save()
+            store.delete("work-a")
+        self.assertEqual(store.get("work-a")["draft"], "unsent")
         with self.assertRaises(SourceChanged):
             self.open_store()
         self.source.write_bytes(RAW)
@@ -99,7 +101,8 @@ class ChatStoreSQLiteCutoverTests(unittest.TestCase):
                 store.set_draft("work-a", "not committed")
         self.assertEqual(store.get("work-a")["draft"], "unsent")
         with self.assertRaises(StateStoreError):
-            store.save()
+            store.delete("work-a")
+        self.assertEqual(store.get("work-a")["draft"], "unsent")
         with SQLiteStateStore(self.database) as inspected:
             snapshot = inspected.import_json(self.source)
             self.assertEqual(snapshot.revision, 0)
