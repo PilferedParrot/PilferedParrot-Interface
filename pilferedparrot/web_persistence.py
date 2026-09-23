@@ -19,6 +19,7 @@ from typing import Any, Callable, Iterable
 
 from .config import expanded_path
 from .sqlite_state import SQLiteStateStore, StateStoreError
+from .sqlite_transform_report import build_transform_report
 
 
 DEFAULT_CHAT_MODEL_OPTIONS = (
@@ -608,6 +609,7 @@ class PersistentChatStore:
         self._sqlite_committed_data: dict[str, Any] | None = None
         self._sqlite_authority: dict[str, Any] | None = None
         self._sqlite_initial_document: dict[str, Any] | None = None
+        self._sqlite_transform_report: dict[str, Any] | None = None
         self._sqlite_load_pending = False
         self._sqlite_failed = False
         try:
@@ -622,6 +624,8 @@ class PersistentChatStore:
 
     def _load(self, *, sqlite_state_path: Path | None = None) -> None:
         source = self.path
+        raw_imported_document: dict[str, Any] | None = None
+        imported_revision: int | None = None
         if not source.exists() and self.legacy_path is not None and self.legacy_path.exists():
             source = self.legacy_path
         if sqlite_state_path is not None:
@@ -634,6 +638,8 @@ class PersistentChatStore:
             self._sqlite_revision = snapshot.revision
             self._sqlite_authority = snapshot.document
             self._sqlite_initial_document = deepcopy(snapshot.document)
+            raw_imported_document = deepcopy(snapshot.document)
+            imported_revision = snapshot.revision
             self._sqlite_load_pending = True
             self.data = deepcopy(snapshot.document)
         elif source.exists():
@@ -814,6 +820,20 @@ class PersistentChatStore:
                 }
         self.data["preferences"][PROJECT_WORKROOMS] = workrooms
         self.data["version"] = 8
+        if raw_imported_document is not None:
+            self._sqlite_transform_report = build_transform_report(
+                raw_imported_document, self.data, revision=imported_revision,
+            )
+
+    def sqlite_transform_report(self) -> dict[str, Any] | None:
+        """Return the cached value-free report from the SQLite first load.
+
+        The report is computed before any save and is unavailable for the
+        ordinary JSON-backed store. It contains counts and safe schema names,
+        never state values or source paths.
+        """
+        with self.lock:
+            return deepcopy(self._sqlite_transform_report)
 
     def preferences_public(self) -> dict[str, Any]:
         with self.lock:
