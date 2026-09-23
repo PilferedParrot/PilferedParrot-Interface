@@ -55,8 +55,16 @@ class ACPClientTests(unittest.TestCase):
             self.assertFalse((root / "allowed.txt").exists())
             self.assertNotIn(SENTINEL, str(updates))
             self.assertNotIn(SENTINEL, client.stderr_tail)
-            self.assertTrue(any(update["sessionUpdate"] == "agent_message_chunk"
-                                for _, update in updates))
+            # The fake sends both a direct _auth/status_update notification
+            # and a session/update carrying that status. Neither is delivered.
+            self.assertEqual([update.get("sessionUpdate") for _, update in updates],
+                             ["agent_message_chunk"])
+            sent = [json.loads(line) for line in (root / "fake-agent-sent.jsonl").read_text().splitlines()]
+            self.assertTrue(any(message.get("method") == "_auth/status_update"
+                                for message in sent))
+            self.assertTrue(any(message.get("method") == "session/update"
+                                and message.get("params", {}).get("update", {}).get("sessionUpdate")
+                                == "_auth/status_update" for message in sent))
             messages = transcript(root)
             definitions = CONTRACT["definitions"]
             by_method = {definition["x-method"]: definition
@@ -82,14 +90,24 @@ class ACPClientTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             updates = []
+            permissions = []
+            def allow(params):
+                permissions.append(params)
+                return "yes"
             with client_for(root, on_update=lambda _session, update: updates.append(update),
-                            on_permission=lambda params: "yes") as client:
+                            on_permission=allow) as client:
                 client.initialize()
                 client.new_session(root)
                 client.set_config_option("fake-session", "model", "sol")
                 client.set_mode("fake-session", "plan")
                 self.assertEqual(client.prompt("fake-session", "write a file")["stopReason"], "end_turn")
             self.assertEqual((root / "allowed.txt").read_text(), "changed")
+            self.assertEqual(len(permissions), 1)
+            seen_permission = json.dumps(permissions[0])
+            self.assertNotIn(SENTINEL, seen_permission)
+            self.assertNotIn('"account"', seen_permission)
+            self.assertNotIn('"accountEmail"', seen_permission)
+            self.assertNotIn('"email"', seen_permission)
             self.assertTrue(any(update.get("sessionUpdate") == "config_option_update"
                                 and update["configOptions"][0]["currentValue"] == "sol"
                                 for update in updates))

@@ -11,6 +11,7 @@ from pathlib import Path
 
 root = Path.cwd()
 record = root / "fake-agent-requests.jsonl"
+sent_record = root / "fake-agent-sent.jsonl"
 session_file = root / "fake-agent-session.json"
 pending_prompt = None
 pending_permission = None
@@ -20,6 +21,8 @@ sentinel = os.environ.get("FAKE_ACP_SECRET", "private.person@example.test")
 
 
 def send(value):
+    with sent_record.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(value, separators=(",", ":")) + "\n")
     sys.stdout.write(json.dumps({"jsonrpc": "2.0", **value}, separators=(",", ":")) + "\n")
     sys.stdout.flush()
 
@@ -97,9 +100,12 @@ for raw in sys.stdin:
             continue
         pending_permission = "permission-1"
         permission = {"sessionId": session_id,
-                      "toolCall": {"toolCallId": "tool-1", "title": "Write allowed.txt"},
+                      "toolCall": {"toolCallId": "tool-1", "title": "Write allowed.txt",
+                                   "account": {"email": sentinel},
+                                   "_meta": {"accountEmail": sentinel}},
                       "options": [
-                          {"optionId": "yes", "name": "Allow once", "kind": "allow_once"},
+                          {"optionId": "yes", "name": "Allow once", "kind": "allow_once",
+                           "_meta": {"accountEmail": sentinel}},
                           {"optionId": "no", "name": "Reject once", "kind": "reject_once"},
                       ], "accountEmail": sentinel}
         if content == "malformed-permission":
