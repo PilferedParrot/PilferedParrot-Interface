@@ -57,7 +57,8 @@
     "whiteboard.py": "b02b14836f8cc8b67e7a7711b0a18f447ebc2b23d66c4e2f84e6967635fc2d97",
     "whiteboard_identity.py": "088b4c7593a3d38ac18a3fcc9a09fd203267f0b72f6fa5b87ec451c9959911e4",
     "whiteboard_native.py": "f7c86d611a2dc72f0d78507136b51f241cce701847fc9e563f445cdf14ef8e59",
-    "windows.py": "49a354ca0ccfaa7d7a24f4222551c3f5b6e2f134b5733f2eafd361a86de34dce"
+    "windows.py": "49a354ca0ccfaa7d7a24f4222551c3f5b6e2f134b5733f2eafd361a86de34dce",
+    "workspace_checkpoints.py": "b9abf0176390fa3016f470ef63b718c116928aee98a0e24b8fe1e5c6f0cc5227"
   },
   "version": "0.7.1"
 }

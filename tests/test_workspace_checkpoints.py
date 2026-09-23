@@ -14,6 +14,7 @@ from unittest.mock import patch
 from pilferedparrot import workspace_checkpoints as checkpoints
 
 
+@unittest.skipUnless(os.name == "posix", "checkpoint capture requires POSIX no-follow operations")
 class WorkspaceCheckpointTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
