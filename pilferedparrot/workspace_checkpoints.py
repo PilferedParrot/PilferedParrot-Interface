@@ -126,6 +126,13 @@ class _CheckpointStorage:
             raise RuntimeError("checkpoint storage path changed")
         if os.path.commonpath((self.workspace_real, os.path.realpath(self.path))) == self.workspace_real:
             raise RuntimeError("checkpoint storage moved into workspace")
+        if (self.folder_fd is None or self.blobs_fd is None or
+                not self._entry_is(self.name, self.store_fd, self.folder_info) or
+                not self._entry_is("blobs", self.folder_fd, self.blobs_info)):
+            raise RuntimeError("checkpoint directory link changed")
+        if (not self._same_identity(os.fstat(self.folder_fd), self.folder_info) or
+                not self._same_identity(os.fstat(self.blobs_fd), self.blobs_info)):
+            raise RuntimeError("checkpoint directory descriptor changed")
 
     def _cleanup(self) -> None:
         assert self.store_fd is not None
@@ -156,7 +163,13 @@ class _CheckpointStorage:
             linked = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:
             return False
-        return (linked.st_dev, linked.st_ino) == (expected.st_dev, expected.st_ino)
+        return _CheckpointStorage._same_identity(linked, expected)
+
+    @staticmethod
+    def _same_identity(actual: os.stat_result, expected: os.stat_result | None) -> bool:
+        return expected is not None and (
+            actual.st_dev, actual.st_ino, actual.st_uid, actual.st_mode) == (
+            expected.st_dev, expected.st_ino, expected.st_uid, expected.st_mode)
 
     def _close(self) -> None:
         for name in ("blobs_fd", "folder_fd", "store_fd"):

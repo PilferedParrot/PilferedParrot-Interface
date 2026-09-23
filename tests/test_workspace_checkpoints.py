@@ -218,6 +218,29 @@ class WorkspaceCheckpointTests(unittest.TestCase):
         self.assertEqual(list(redirect.iterdir()), [])
         self.assertEqual(list(moved.iterdir()), [])
 
+    def test_open_checkpoint_folder_moved_into_workspace_is_rejected_and_scrubbed(self):
+        (self.workspace / "payload").write_bytes(b"private bytes")
+        admin = self.workspace / ".ppi-checkpoints"
+        admin.mkdir()
+        actual_read = os.read
+        moved: Path | None = None
+
+        def read_and_move(fd: int, count: int) -> bytes:
+            nonlocal moved
+            value = actual_read(fd, count)
+            if moved is None:
+                folder, = self.storage.glob("checkpoint-*")
+                moved = admin / folder.name
+                folder.rename(moved)
+            return value
+
+        with patch.object(checkpoints.os, "read", side_effect=read_and_move):
+            with self.assertRaisesRegex(RuntimeError, "checkpoint storage changed"):
+                self.capture()
+        self.assertIsNotNone(moved)
+        self.assertEqual(list(self.storage.iterdir()), [])
+        self.assertEqual(list(moved.rglob("*")), [])
+
     def test_manifest_enospc_removes_only_this_capture(self):
         (self.workspace / "payload").write_bytes(b"private bytes")
         existing = self.storage / "keep"
