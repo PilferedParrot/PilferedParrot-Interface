@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -11,7 +12,9 @@ import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
+from pilferedparrot import acp_client
 from pilferedparrot.acp_client import ACPClient, ACPClosed, ACPError
 
 
@@ -20,8 +23,9 @@ CONTRACT = json.loads((FIXTURES / "v1_contract.json").read_text(encoding="utf-8"
 SENTINEL = "private.person@example.test"
 
 
-def client_for(root: Path, **kwargs) -> ACPClient:
+def client_for(root: Path, *, fake_env: dict[str, str] | None = None, **kwargs) -> ACPClient:
     env = {**os.environ, "FAKE_ACP_SECRET": SENTINEL}
+    env.update(fake_env or {})
     return ACPClient([sys.executable, str(FIXTURES / "fake_agent.py")],
                      cwd=root, env=env, **kwargs)
 
@@ -176,6 +180,57 @@ class ACPClientTests(unittest.TestCase):
             self.assertTrue(any(message.get("method") == "session/cancel"
                                 for message in transcript(root)))
 
+    def test_prompt_timeout_includes_blocked_stdin_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with client_for(root, fake_env={"FAKE_ACP_PAUSE_AFTER_NEW": "1"}) as client:
+                client.initialize()
+                client.new_session(root)
+                start = time.monotonic()
+                with self.assertRaises(TimeoutError):
+                    client.prompt("fake-session", "x" * 2_000_000, timeout=0.05,
+                                  cancel_grace=0.05)
+                self.assertLess(time.monotonic() - start, 1)
+                self.assert_agent_stopped(client)
+
+    def test_close_drains_full_update_queue_and_stops_dispatcher(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entered, release = threading.Event(), threading.Event()
+            def blocking_callback(_session, _update):
+                entered.set()
+                release.wait(2)
+            client = client_for(root, on_update=blocking_callback)
+            try:
+                client.initialize()
+                client.new_session(root)
+                item = ("update", "fake-session", {"sessionUpdate": "agent_message_chunk"})
+                client._updates.put_nowait(item)
+                self.assertTrue(entered.wait(1))
+                for _ in range(client._updates.maxsize):
+                    client._updates.put_nowait(item)
+                closer = threading.Thread(target=client.close)
+                closer.start()
+                time.sleep(0.05)
+                release.set()
+                closer.join(timeout=3)
+                self.assertFalse(closer.is_alive())
+                self.assertFalse(client._dispatcher.is_alive())
+            finally:
+                release.set()
+                client.close()
+
+    def test_windows_taskkill_failure_terminates_parent(self):
+        client = object.__new__(ACPClient)
+        client._stop_lock = threading.Lock()
+        client._proc = MagicMock(pid=12345)
+        client._proc.poll.return_value = None
+        with patch.object(acp_client.sys, "platform", "win32"), \
+             patch.object(acp_client.subprocess, "run", return_value=subprocess.CompletedProcess(
+                 ["taskkill"], 1)):
+            client._stop_process()
+        client._proc.terminate.assert_called_once_with()
+
     def test_malformed_permission_defaults_to_reject_and_close_reaps_agent(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -187,6 +242,52 @@ class ACPClientTests(unittest.TestCase):
                 process = client._proc
             self.assertFalse((root / "allowed.txt").exists())
             self.assertIsNotNone(process.poll())
+
+    def test_malformed_permission_never_reaches_explicit_allow_callback(self):
+        malformed = (
+            "malformed-permission", "malformed-session-type", "malformed-tool-call",
+            "malformed-tool-id", "malformed-options", "malformed-option-item",
+        )
+        for content in malformed:
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                callbacks = []
+                def allow(params):
+                    callbacks.append(params)
+                    return "yes"
+                with client_for(root, on_permission=allow) as client:
+                    client.initialize()
+                    client.new_session(root)
+                    self.assertEqual(client.prompt("fake-session", content)["stopReason"],
+                                     "end_turn")
+                self.assertEqual(callbacks, [])
+                self.assertFalse((root / "allowed.txt").exists())
+                reply = next(message for message in transcript(root)
+                             if message.get("id") == "permission-1")
+                self.assertEqual(reply["result"]["outcome"], {"outcome": "cancelled"})
+
+    def test_cancel_pending_permission_prevents_late_allow(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entered, release = threading.Event(), threading.Event()
+            def delayed_allow(_params):
+                entered.set()
+                release.wait(2)
+                return "yes"
+            with client_for(root, on_permission=delayed_allow) as client:
+                client.initialize()
+                client.new_session(root)
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(client.prompt, "fake-session", "write a file", timeout=2)
+                    self.assertTrue(entered.wait(1))
+                    client.cancel("fake-session")
+                    release.set()
+                    self.assertIn(future.result(timeout=2)["stopReason"], {"cancelled", "end_turn"})
+            self.assertFalse((root / "allowed.txt").exists())
+            replies = [message for message in transcript(root)
+                       if message.get("id") == "permission-1"]
+            self.assertEqual(len(replies), 1)
+            self.assertEqual(replies[0]["result"]["outcome"], {"outcome": "cancelled"})
 
     def test_stderr_tail_is_bounded_after_redaction(self):
         with tempfile.TemporaryDirectory() as directory:

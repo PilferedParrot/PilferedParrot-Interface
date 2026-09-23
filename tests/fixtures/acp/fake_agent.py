@@ -52,6 +52,8 @@ for raw in sys.stdin:
         session_file.write_text(json.dumps({"sessionId": session_id}), encoding="utf-8")
         result(message, {"sessionId": session_id, "configOptions": options(),
                          "modes": {"currentModeId": "default", "availableModes": []}})
+        if os.environ.get("FAKE_ACP_PAUSE_AFTER_NEW") == "1":
+            time.sleep(60)
     elif method in {"session/load", "session/resume"}:
         if session_file.exists() and message["params"]["sessionId"] == session_id:
             result(message, {"configOptions": options()})
@@ -102,6 +104,16 @@ for raw in sys.stdin:
                       ], "accountEmail": sentinel}
         if content == "malformed-permission":
             permission.pop("sessionId")
+        elif content == "malformed-session-type":
+            permission["sessionId"] = 42
+        elif content == "malformed-tool-call":
+            permission.pop("toolCall")
+        elif content == "malformed-tool-id":
+            permission["toolCall"].pop("toolCallId")
+        elif content == "malformed-options":
+            permission.pop("options")
+        elif content == "malformed-option-item":
+            permission["options"][0].pop("kind")
         send({"id": pending_permission, "method": "session/request_permission",
               "params": permission})
     elif method == "session/cancel":

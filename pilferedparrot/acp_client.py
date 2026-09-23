@@ -37,6 +37,7 @@ _PRIVATE_KEYS = frozenset({
     "refreshtoken", "authorization", "credential", "credentials", "secret", "token",
 })
 _AUTH_UPDATE = "_auth/status_update"
+_PERMISSION_KINDS = frozenset({"allow_once", "allow_always", "reject_once", "reject_always"})
 
 
 def _safe(value: Any) -> Any:
@@ -53,6 +54,30 @@ def _safe(value: Any) -> Any:
     return value
 
 
+def _valid_permission_request(params: dict[str, Any]) -> bool:
+    """Check the required ACP v1 shape before a user decision is requested."""
+    session_id = params.get("sessionId")
+    tool_call = params.get("toolCall")
+    options = params.get("options")
+    if not isinstance(session_id, str) or not session_id \
+            or not isinstance(tool_call, dict) \
+            or not isinstance(tool_call.get("toolCallId"), str) \
+            or not tool_call["toolCallId"] \
+            or not isinstance(options, list):
+        return False
+    seen: set[str] = set()
+    for option in options:
+        if not isinstance(option, dict) \
+                or not isinstance(option.get("optionId"), str) or not option["optionId"] \
+                or not isinstance(option.get("name"), str) \
+                or not isinstance(option.get("kind"), str) \
+                or option["kind"] not in _PERMISSION_KINDS \
+                or option["optionId"] in seen:
+            return False
+        seen.add(option["optionId"])
+    return True
+
+
 class ACPClient:
     """One agent process with concurrent requests and ordered update callbacks.
 
@@ -61,7 +86,8 @@ class ACPClient:
     ``on_permission(params)`` returns an
     optionId from the offered options; without it, the client rejects. A
     callback error also rejects. Client fs/terminal methods are not advertised
-    or served.
+    or served. One bounded writer queue keeps pipe backpressure inside request
+    timeouts; ``close()`` stops both the agent and transport threads.
     """
 
     def __init__(
@@ -83,7 +109,6 @@ class ACPClient:
             start_new_session=os.name != "nt",
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
         )
-        self._write_lock = threading.Lock()
         self._state_lock = threading.RLock()
         self._stop_lock = threading.Lock()
         self._stderr_lock = threading.Lock()
@@ -101,13 +126,19 @@ class ACPClient:
         self._on_permission = on_permission
         self._capabilities: dict[str, Any] = {}
         self._initialized = False
-        self._updates: queue.Queue[tuple[Any, ...] | None] = queue.Queue(maxsize=2048)
+        self._outbox: queue.Queue[str] = queue.Queue(maxsize=256)
+        self._writer_stop = threading.Event()
+        self._dispatch_stop = threading.Event()
+        self._updates: queue.Queue[tuple[Any, ...]] = queue.Queue(maxsize=2048)
         self._permission_slots = threading.BoundedSemaphore(16)
+        self._writer = threading.Thread(target=self._write_stdin, daemon=True,
+                                        name="ppi-acp-writer")
         self._reader = threading.Thread(target=self._read_stdout, daemon=True, name="ppi-acp-reader")
         self._stderr_reader = threading.Thread(target=self._read_stderr, daemon=True,
                                                name="ppi-acp-stderr")
         self._dispatcher = threading.Thread(target=self._dispatch_updates, daemon=True,
                                             name="ppi-acp-updates")
+        self._writer.start()
         self._reader.start()
         self._stderr_reader.start()
         self._dispatcher.start()
@@ -153,17 +184,37 @@ class ACPClient:
 
     def _send(self, message: dict[str, Any]) -> None:
         line = json.dumps(message, separators=(",", ":"), ensure_ascii=False) + "\n"
-        with self._write_lock:
-            with self._state_lock:
-                if self._closed or self._failure is not None:
-                    raise self._failure or ACPClosed("ACP client is closed")
+        if len(line) > self._max_line_chars:
+            raise ValueError("ACP outbound JSON-RPC line exceeds limit")
+        with self._state_lock:
+            if self._closed or self._failure is not None:
+                raise self._failure or ACPClosed("ACP client is closed")
+        try:
+            self._outbox.put_nowait(line)
+        except queue.Full as error:
+            self._fail("ACP outbound queue is full")
+            self._stop_process()
+            raise ACPClosed("ACP outbound queue is full") from error
+
+    def _write_stdin(self) -> None:
+        assert self._proc.stdin is not None
+        while not self._writer_stop.is_set():
             try:
-                assert self._proc.stdin is not None
+                line = self._outbox.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            try:
+                with self._state_lock:
+                    if self._failure is not None or self._closed:
+                        return
                 self._proc.stdin.write(line)
                 self._proc.stdin.flush()
-            except (BrokenPipeError, OSError, ValueError) as error:
-                self._fail("ACP agent stdin closed")
-                raise ACPClosed("ACP agent stdin closed") from error
+            except Exception as error:
+                self._fail(f"ACP agent stdin failed: {type(error).__name__}")
+                self._stop_process()
+                return
+            finally:
+                self._outbox.task_done()
 
     def _start_request(self, method: str, params: dict[str, Any]) -> tuple[int, Future[Any]]:
         with self._state_lock:
@@ -256,9 +307,13 @@ class ACPClient:
                     self._fail("ACP agent sent an invalid request id")
                     return
                 if method == "session/request_permission":
-                    session_id = params.get("sessionId")
+                    if not _valid_permission_request(params):
+                        self._send({"jsonrpc": "2.0", "id": request_id,
+                                    "result": {"outcome": {"outcome": "cancelled"}}})
+                        return
+                    session_id = params["sessionId"]
                     with self._state_lock:
-                        self._permissions[request_id] = session_id if isinstance(session_id, str) else ""
+                        self._permissions[request_id] = session_id
                     if self._permission_slots.acquire(blocking=False):
                         threading.Thread(target=self._answer_permission,
                                          args=(request_id, _safe(params)), daemon=True,
@@ -307,10 +362,15 @@ class ACPClient:
 
     def _dispatch_updates(self) -> None:
         while True:
-            item = self._updates.get()
             try:
-                if item is None:
+                item = self._updates.get(timeout=0.1)
+            except queue.Empty:
+                if self._dispatch_stop.is_set():
                     return
+                continue
+            try:
+                if self._dispatch_stop.is_set():
+                    continue
                 if item[0] == "complete":
                     self._finish_future(item[1], item[2])
                 elif item[0] == "update" and self._on_update is not None:
@@ -482,6 +542,8 @@ class ACPClient:
                 return
             self._closed = True
         self._fail("ACP client closed")
+        self._writer_stop.set()
+        self._dispatch_stop.set()
         self._stop_process()
         for stream in (self._proc.stdin, self._proc.stdout, self._proc.stderr):
             if stream is not None:
@@ -489,10 +551,7 @@ class ACPClient:
                     stream.close()
                 except OSError:
                     pass
-        try:
-            self._updates.put_nowait(None)
-        except queue.Full:
-            pass
+        self._writer.join(timeout=2)
         self._reader.join(timeout=2)
         self._stderr_reader.join(timeout=2)
         self._dispatcher.join(timeout=2)
@@ -506,9 +565,11 @@ class ACPClient:
                 return
             if sys.platform == "win32":
                 try:
-                    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                   timeout=2, check=False)
+                    killed = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                                            stdout=subprocess.DEVNULL,
+                                            stderr=subprocess.DEVNULL, timeout=2, check=False)
+                    if killed.returncode != 0 and self._proc.poll() is None:
+                        self._proc.terminate()
                 except (OSError, subprocess.TimeoutExpired):
                     self._proc.terminate()
             else:
