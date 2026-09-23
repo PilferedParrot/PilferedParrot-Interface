@@ -153,6 +153,27 @@ class ChatStoreSQLiteCutoverTests(unittest.TestCase):
         self.assertEqual(saved["chat_history"][0]["messages"][0]["future_message"], "keep")
         self.assertNotIn("future_chat", saved["chat"])
 
+    def test_copy_on_write_save_keeps_older_authority_immutable(self):
+        store = self.open_store()
+        store.save()
+        first_authority = store._sqlite_authority
+        first_tree = json.loads(json.dumps(first_authority))
+
+        store.set_draft("work-a", "later draft")
+        second_authority = store._sqlite_authority
+        second_tree = json.loads(json.dumps(second_authority))
+        self.assertEqual(first_authority, first_tree)
+        self.assertIs(second_authority["unknown_top"], first_authority["unknown_top"])
+
+        store.reset_chat()
+        self.assertEqual(first_authority, first_tree)
+        self.assertEqual(second_authority, second_tree)
+        self.assertEqual(second_authority["chat_history"], [])
+        with SQLiteStateStore(self.database) as inspected:
+            saved = inspected.import_json(self.source).document
+        self.assertEqual(saved["chats"][0]["draft"], "later draft")
+        self.assertEqual(saved["unknown_top"], {"keep": True})
+
     def test_deleting_session_does_not_delete_other_opaque_fields(self):
         store = self.open_store()
         store.delete("work-a")

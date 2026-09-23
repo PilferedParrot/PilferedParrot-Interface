@@ -330,17 +330,19 @@ def _merge_runtime_delta(
     """Apply a runtime change without replacing unchanged opaque subtrees.
 
     The first pass represents a known compatibility transformation. Later
-    passes represent app edits. Ambiguous object-list edits fail closed.
+    passes represent app edits. Ambiguous object-list edits fail closed. The
+    returned tree shares unchanged nodes with ``authority``; neither tree may
+    be mutated after this call.
     """
     if _same_json_value(before, after):
-        return deepcopy(authority)
+        return authority
     if isinstance(before, dict) and isinstance(after, dict) and isinstance(authority, dict):
         if not load_transform and path == ("chat",) \
                 and before.get("id") != after.get("id"):
             # reset_chat creates a new thread. The old thread may be moved to
             # chat_history, but its opaque fields do not belong to the new one.
             return deepcopy(after)
-        result = deepcopy(authority)
+        result = authority.copy()
         for key in before.keys() - after.keys():
             if not load_transform or _retired_on_load(path, key):
                 result.pop(key, None)
@@ -387,7 +389,7 @@ def _merge_runtime_delta(
                 raw_tail = _id_map(authority[first_keyed:])
                 if old_tail is not None and new_tail is not None \
                         and raw_tail is not None and set(old_tail) <= set(raw_tail):
-                    return deepcopy(authority[:first_keyed]) + [
+                    return list(authority[:first_keyed]) + [
                         _merge_runtime_delta(
                             old_tail[item["id"]], item, raw_tail[item["id"]],
                             path + (item["id"],),
@@ -402,7 +404,7 @@ def _merge_runtime_delta(
                 ]
             if len(after) >= len(before) and len(authority) == len(before) \
                     and _same_json_value(after[:len(before)], before):
-                return deepcopy(authority) + deepcopy(after[len(before):])
+                return list(authority) + deepcopy(after[len(before):])
             raise StateStoreError("ambiguous SQLite object-list mutation")
         return deepcopy(after)
     return deepcopy(after)
@@ -1107,6 +1109,9 @@ class PersistentChatStore:
                                          if item.get("id") == old_chat.get("id")]
                             if len(positions) != 1:
                                 raise StateStoreError("ambiguous SQLite Chat archive")
+                            # _merge_runtime_delta shares untouched subtrees.
+                            # Clone this list before replacing one entry.
+                            merged["chat_history"] = list(merged["chat_history"])
                             merged["chat_history"][positions[0]] = merged_archive
                     event_kwargs = {} if completed_event is None else {
                         "event_kind": "completed",
