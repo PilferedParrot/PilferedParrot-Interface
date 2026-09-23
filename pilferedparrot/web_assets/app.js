@@ -11,6 +11,7 @@ const state = {
   acpSetup: null, acpSetupMessage: "", gpuInventory: null, gpuMessage: "",
   initialized: false,
 };
+let draftACPMode = null;
 const CAPABILITY_SESSION_KEY = "pilferedparrot-dashboard-capability";
 const WINDOW_ID_SESSION_KEY = "pilferedparrot-dashboard-window-id";
 const ACTIVE_CHAT_SESSION_KEY = "pilferedparrot-dashboard-active-chat";
@@ -705,6 +706,20 @@ function renderReasoningSelect(provider, model, effort, disabled, chatSurface = 
   select.title = select.value === "ultra"
     ? "Ultra reasoning may automatically delegate work to additional agents. Applies to your next message."
     : "Higher reasoning can take longer. Applies to your next message; Default uses the configured setting.";
+}
+function renderACPModeSelect(provider, mode, disabled) {
+  const control = $("#acpModeControl");
+  const select = $("#acpModeSelect");
+  const modes = state.provider_engines?.[provider] === "acp"
+    ? state.model_catalog?.[provider]?.acp_options?.modes : null;
+  const choices = Array.isArray(modes) ? modes.filter((item) =>
+    item && typeof item.value === "string" && item.value.length <= 128) : [];
+  control.hidden = choices.length === 0;
+  select.innerHTML = '<option value="">Agent default</option>' + choices.map((item) =>
+    `<option value="${escapeHtml(item.value)}" title="${escapeHtml(item.description || "")}">${escapeHtml(item.label || item.value)}</option>`).join("");
+  select.value = choices.some((item) => item.value === mode) ? mode : "";
+  select.disabled = disabled || choices.length === 0;
+  select.title = "Applies to each turn in this Work session. Agent default leaves the agent or configured mode unchanged.";
 }
 function renderContextSummary(usage, status) {
   const summary = $("#contextSummary");
@@ -1425,6 +1440,8 @@ function renderHeader() {
   renderReasoningSelect(state.windowProvider, $("#modelSelect").value,
     chat ? chat.reasoning_effort : draftReasoningEffort,
     !state.initialized || activeRunning() || selectionSavePending);
+  renderACPModeSelect(state.windowProvider, chat?.acp_mode ?? draftACPMode,
+    !state.initialized || activeRunning() || selectionSavePending);
 }
 
 function render() {
@@ -1767,6 +1784,7 @@ async function createChat(requestedModel = "") {
         // stale draft effort when the user has selected it.
         reasoning_effort: activeChat()?.harness_parent ? undefined : activeChat() || $("#reasoningSelect").options.length
           ? $("#reasoningSelect").value || null : undefined,
+        ...($("#acpModeSelect").value ? { acp_mode: $("#acpModeSelect").value } : {}),
       }),
     });
     state.chats.unshift(chat);
@@ -1856,6 +1874,7 @@ async function sendMessage(event) {
   const selectedProvider = state.windowProvider;
   const selectedModel = $("#modelSelect").value;
   const reasoningEffort = $("#reasoningSelect").value || null;
+  const acpMode = $("#acpModeSelect").value || null;
   if (!activeChat()) {
     try {
       await createChat();
@@ -1899,6 +1918,7 @@ async function sendMessage(event) {
       body: JSON.stringify({
         content, provider: selectedProvider, model: selectedModel, cwd: submittedCwd,
         reasoning_effort: reasoningEffort,
+        ...(acpMode ? { mode: acpMode } : {}),
         request_id: requestId, draft: originalDraft,
       }),
     });
@@ -2880,6 +2900,21 @@ async function saveWorkSelection(modelChanged = false) {
 }
 $("#modelSelect").addEventListener("change", () => saveWorkSelection(true));
 $("#reasoningSelect").addEventListener("change", () => saveWorkSelection());
+$("#acpModeSelect").addEventListener("change", async () => {
+  const chat = activeChat();
+  const mode = $("#acpModeSelect").value || null;
+  if (!chat) { draftACPMode = mode; return; }
+  if (selectionSavePending || activeRunning()) return render();
+  selectionSavePending = true;
+  render();
+  try {
+    const updated = await api(`/api/chats/${chat.id}/acp-mode`, {
+      method: "POST", body: JSON.stringify({ mode }),
+    });
+    state.chats = state.chats.map((item) => item.id === updated.id ? updated : item);
+  } catch (error) { toast(error.message, "error"); }
+  finally { selectionSavePending = false; render(); }
+});
 $("#modelSelect").addEventListener("pointerdown", (event) => {
   pollProviderModels(state.windowProvider, event.currentTarget);
 });

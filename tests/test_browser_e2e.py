@@ -82,6 +82,7 @@ class BrowserEndToEndTests(unittest.TestCase):
             expect(self.page.get_by_role("button", name="Provider dashboard")).to_be_enabled()
         expect(self.page.get_by_role("button", name="Start a new work session")).to_be_enabled()
         expect(self.page.get_by_role("combobox", name="Model")).to_have_value("fake-small")
+        expect(self.page.locator("#acpModeControl")).to_be_hidden()
         expect(self.page.get_by_text("OpenAI Codex", exact=True).first).to_be_visible()
         signed_in = self.page.get_by_text("Signed in", exact=True)
         if signed_in.count():

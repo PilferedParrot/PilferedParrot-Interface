@@ -295,13 +295,17 @@ class PersistentChatStore:
         for chat in chats:
             for field_name in (
                 "window_id", "title", "cwd", "requested_provider", "requested_model",
-                "provider", "model", "provider_session_id",
+                "provider", "model", "provider_session_id", "acp_mode",
             ):
                 value = chat.get(field_name)
                 if value is not None and not isinstance(value, str):
                     raise RuntimeError(
                         f"chat history contains an invalid {field_name}: {source}"
                     )
+            mode = chat.get("acp_mode")
+            if mode is not None and (not mode.strip() or len(mode) > 128
+                                     or any(ord(char) < 32 for char in mode)):
+                chat.pop("acp_mode", None)
             messages = chat.get("messages", [])
             if not isinstance(messages, list) or not all(
                 isinstance(message, dict) for message in messages

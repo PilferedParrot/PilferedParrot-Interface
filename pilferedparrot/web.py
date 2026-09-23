@@ -1569,6 +1569,22 @@ class PilferedParrotApp(HarnessWorkflow):
         ))
         _validate_provider_workspace(provider, cwd, self.config)
         model = requested_model or effective_model(self.config, provider)
+        requested_acp_mode = payload.get("acp_mode")
+        if requested_acp_mode is not None:
+            if (provider not in {"codex", "claude"}
+                    or self.config[provider].get("engine") != "acp"):
+                raise ValueError("ACP mode is only available for ACP Work sessions")
+            if (not isinstance(requested_acp_mode, str) or not requested_acp_mode.strip()
+                    or len(requested_acp_mode) > 128
+                    or any(ord(char) < 32 for char in requested_acp_mode)):
+                raise ValueError("ACP mode must be non-empty text")
+            options = self.poll_provider_models(
+                provider, model=requested_model, window_id=window_id,
+                window_provider=provider,
+            ).get("acp_options", {}).get("modes", [])
+            if not any(isinstance(item, dict) and item.get("value") == requested_acp_mode
+                       for item in options):
+                raise ValueError("ACP mode is not advertised by the selected agent")
         explicit_reasoning = "reasoning_effort" in payload
         requested_reasoning = payload.get("reasoning_effort") if explicit_reasoning else latest_reasoning
         try:
@@ -1593,11 +1609,15 @@ class PilferedParrotApp(HarnessWorkflow):
         with self.store.lock:
             if requested_model:
                 self.store.data["preferences"]["work_models"][provider] = requested_model
-            return self.store.create(
+            chat = self.store.create(
                 cwd, provider, requested_model, context_limit, context_max, percent,
                 overhead, reservation, window_id, reasoning_effort,
                 remember_project=True,
             )
+            if requested_acp_mode is not None:
+                chat["acp_mode"] = requested_acp_mode
+                self.store.save()
+            return self.store.public(chat)
 
     def _validated_project(self, payload: dict[str, Any], provider: str) -> Path:
         raw_cwd = payload.get("cwd")
@@ -1878,6 +1898,48 @@ class PilferedParrotApp(HarnessWorkflow):
                 self.store.save()
                 return self.store.public(chat)
 
+    def set_acp_mode(
+        self, chat_id: str, payload: dict[str, Any], *, window_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Save one advertised ACP session mode for this owned Work session."""
+        if "mode" not in payload:
+            raise ValueError("mode is required")
+        value = payload.get("mode")
+        if value is not None and (not isinstance(value, str) or not value.strip()
+                                  or len(value) > 128
+                                  or any(ord(char) < 32 for char in value)):
+            raise ValueError("ACP mode must be non-empty text or null")
+        with self.runs_lock:
+            if chat_id in self.runs:
+                raise ValueError("stop the response before changing ACP mode")
+            with self.store.lock:
+                chat = self._owned_chat(chat_id, window_id)
+                provider = str(chat.get("requested_provider") or self.default_provider)
+                if provider not in {"codex", "claude"} or self.config[provider].get("engine") != "acp":
+                    raise ValueError("ACP mode is only available for ACP Work sessions")
+                model = chat.get("requested_model")
+                owner = chat.get("window_id", "main")
+            if value is not None:
+                catalog = self.poll_provider_models(
+                    provider, model=model, window_id=owner, window_provider=provider,
+                )
+                choices = catalog.get("acp_options", {}).get("modes", [])
+                if not any(isinstance(item, dict) and item.get("value") == value
+                           for item in choices):
+                    raise ValueError("ACP mode is not advertised by the selected agent")
+            with self.runs_lock:
+                if chat_id in self.runs:
+                    raise ValueError("stop the response before changing ACP mode")
+                with self.store.lock:
+                    chat = self._owned_chat(chat_id, window_id)
+                    if value is None:
+                        chat.pop("acp_mode", None)
+                    else:
+                        chat["acp_mode"] = value
+                    self.store.mark_used(chat)
+                    self.store.save()
+                    return self.store.public(chat)
+
     def activate_chat(
         self, chat_id: str, *, window_id: str | None = None,
     ) -> dict[str, Any]:
@@ -1987,7 +2049,8 @@ class PilferedParrotApp(HarnessWorkflow):
                 selected_model = requested_model or effective_model(self.config, provider)
                 acp_enabled = provider in {"codex", "claude"} and \
                     self.config.get(provider, {}).get("engine") == "acp"
-                acp_mode = payload.get("mode", self.config.get(provider, {}).get("acp_mode")) \
+                acp_mode = (payload.get("mode") or chat.get("acp_mode")
+                            or self.config.get(provider, {}).get("acp_mode")) \
                     if acp_enabled else None
                 if acp_mode is not None and (not isinstance(acp_mode, str)
                                              or not acp_mode.strip()
@@ -2025,6 +2088,8 @@ class PilferedParrotApp(HarnessWorkflow):
                 chat["requested_provider"] = provider
                 chat["requested_model"] = requested_model
                 chat["reasoning_effort"] = reasoning_effort
+                if acp_enabled and payload.get("mode"):
+                    chat["acp_mode"] = acp_mode
                 if not same_session:
                     chat.pop("live_context_usage", None)
                     chat.pop("last_turn_usage", None)

@@ -62,6 +62,83 @@ class ACPWorkBackendTests(unittest.TestCase):
         with self.app.store.lock:
             return deepcopy(self.app.store.get(self.chat["id"])["messages"])
 
+    def test_acp_mode_is_owned_bounded_advertised_and_persisted(self):
+        with patch.object(self.app, "poll_provider_models", return_value={
+            "acp_options": {"modes": [{"value": "plan"}]},
+        }) as probe:
+            updated = self.app.set_acp_mode(
+                self.chat["id"], {"mode": "plan"}, window_id="main",
+            )
+        self.assertEqual(updated["acp_mode"], "plan")
+        probe.assert_called_once()
+        with self.assertRaisesRegex(ValueError, "not advertised"):
+            with patch.object(self.app, "poll_provider_models", return_value={
+                "acp_options": {"modes": []},
+            }):
+                self.app.set_acp_mode(self.chat["id"], {"mode": "write"}, window_id="main")
+        with self.assertRaisesRegex(ValueError, "non-empty text"):
+            self.app.set_acp_mode(self.chat["id"], {"mode": "x" * 129}, window_id="main")
+        with self.assertRaises(KeyError):
+            self.app.set_acp_mode(self.chat["id"], {"mode": None}, window_id="other")
+        cleared = self.app.set_acp_mode(self.chat["id"], {"mode": None}, window_id="main")
+        self.assertNotIn("acp_mode", cleared)
+
+    def test_mode_selected_before_first_prompt_is_saved_with_new_work_session(self):
+        with patch.object(self.app, "poll_provider_models", return_value={
+            "acp_options": {"modes": [{"value": "plan"}]},
+        }):
+            chat = self.app.create_chat(
+                {"cwd": str(self.root), "acp_mode": "plan"}, window_id="main",
+                window_provider="codex",
+            )
+        self.assertEqual(chat["acp_mode"], "plan")
+        with self.assertRaisesRegex(ValueError, "only available"):
+            legacy_config = deepcopy(self.config)
+            legacy_config["codex"]["engine"] = "legacy"
+            legacy_config["web"]["chat_store"] = str(self.root / "legacy-chats.json")
+            legacy_config["web"]["model_catalog_store"] = str(self.root / "legacy-models.json")
+            legacy = PilferedParrotApp(legacy_config, self.root / "legacy")
+            try:
+                legacy.create_chat(
+                    {"cwd": str(self.root), "acp_mode": "plan"}, window_id="main",
+                    window_provider="codex",
+                )
+            finally:
+                legacy.shutdown()
+
+    def test_saved_acp_mode_is_reapplied_on_followup_turn(self):
+        calls = []
+        def fake_turn(_argv, **kwargs):
+            calls.append((kwargs["session_id"], kwargs["mode"]))
+            return _result("done", "session", "end_turn", mode=kwargs["mode"])
+        with patch.object(self.app, "poll_provider_models", return_value={
+            "acp_options": {"modes": [{"value": "plan"}]},
+        }), patch("pilferedparrot.web.run_acp_turn", side_effect=fake_turn):
+            self.app.set_acp_mode(self.chat["id"], {"mode": "plan"}, window_id="main")
+            self.app.send_message(self.chat["id"], {"content": "first"}, window_id="main")
+            self.wait_done()
+            self.app.send_message(self.chat["id"], {"content": "second"}, window_id="main")
+            self.wait_done()
+        self.assertEqual(calls, [(None, "plan"), ("session", "plan")])
+
+    def test_acp_mode_cannot_change_during_live_turn(self):
+        started, release = threading.Event(), threading.Event()
+        def fake_turn(_argv, **kwargs):
+            started.set()
+            release.wait(timeout=2)
+            return _result("done", "session", "end_turn")
+        try:
+            with patch("pilferedparrot.web.run_acp_turn", side_effect=fake_turn):
+                self.app.send_message(self.chat["id"], {"content": "hold"}, window_id="main")
+                self.assertTrue(started.wait(1))
+                with self.assertRaisesRegex(ValueError, "stop the response"):
+                    self.app.set_acp_mode(
+                        self.chat["id"], {"mode": "plan"}, window_id="main",
+                    )
+        finally:
+            release.set()
+        self.wait_done()
+
     def test_exact_model_resume_and_recursive_secret_redaction(self):
         calls = []
         def fake_turn(argv, **kwargs):

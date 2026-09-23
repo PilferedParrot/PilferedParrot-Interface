@@ -96,6 +96,36 @@ class ACPWorkBrowserEndToEndTests(unittest.TestCase):
         )
         return card
 
+    def test_mode_choice_is_saved_and_set_on_loaded_session_before_prompt(self):
+        model = self.page.locator("#modelSelect")
+        model.dispatch_event("pointerdown")
+        expect(model.locator('option[value="fake-small"]')).to_have_count(1, timeout=5_000)
+        mode = self.page.get_by_role("combobox", name="ACP mode")
+        expect(mode).to_be_visible()
+        expect(mode.locator('option[value="plan"]')).to_have_count(1)
+        mode.select_option("plan")
+        self.page.get_by_role("textbox", name="Message").fill("browser-e2e-deny")
+        self.page.get_by_role("button", name="Send").click()
+        card = self.page.get_by_role("group", name="Permission requested")
+        expect(card).to_be_visible(timeout=8_000)
+        card.get_by_role("button", name="Reject once").click()
+        expect(card).to_have_count(0, timeout=5_000)
+        with self.fixture.app.store.lock:
+            chat = next(chat for chat in self.fixture.app.store.data["chats"]
+                        if chat.get("window_id") == "main")
+            self.assertEqual(chat.get("acp_mode"), "plan")
+
+        records = [json.loads(line) for line in
+                   (self.fixture.project / "fake-agent-requests.jsonl").read_text().splitlines()]
+        self.assertEqual([item["fixture"] for item in records if "fixture" in item],
+                         ["set_mode", "prompt"])
+        self.page.reload(wait_until="domcontentloaded")
+        expect(self.page.get_by_role("textbox", name="Message")).to_be_enabled(timeout=5_000)
+        self.page.locator("#modelSelect").dispatch_event("pointerdown")
+        reloaded_mode = self.page.get_by_role("combobox", name="ACP mode")
+        expect(reloaded_mode).to_be_visible()
+        expect(reloaded_mode).to_have_value("plan")
+
     def test_streamed_acp_answer_diff_preview_and_scoped_permission_choices(self):
         card = self._send_and_wait_for_permission("browser-e2e-deny")
         expect(self.page.locator(".acp-streamed-text")).to_contain_text(

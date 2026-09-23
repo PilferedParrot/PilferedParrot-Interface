@@ -58,14 +58,23 @@ for raw in sys.stdin:
                          "agentCapabilities": {"loadSession": True,
                                                "sessionCapabilities": {"resume": {}, "close": {}}}})
     elif method == "session/new":
-        session_file.write_text(json.dumps({"sessionId": session_id}), encoding="utf-8")
+        session_file.write_text(json.dumps({"sessionId": session_id, "mode": "default"}), encoding="utf-8")
+        current_mode = "default"
         result(message, {"sessionId": session_id, "configOptions": options(),
-                         "modes": {"currentModeId": "default", "availableModes": []}})
+                         "modes": {"currentModeId": current_mode, "availableModes": [
+                             {"id": "default", "name": "Agent default"},
+                             {"id": "plan", "name": "Plan", "description": "Plan before acting"},
+                         ]}})
         if os.environ.get("FAKE_ACP_PAUSE_AFTER_NEW") == "1":
             time.sleep(60)
     elif method in {"session/load", "session/resume"}:
         if session_file.exists() and message["params"]["sessionId"] == session_id:
-            result(message, {"configOptions": options()})
+            saved_session = json.loads(session_file.read_text(encoding="utf-8"))
+            result(message, {"configOptions": options(), "modes": {
+                "currentModeId": saved_session.get("mode", "default"),
+                "availableModes": [{"id": "default", "name": "Agent default"},
+                                   {"id": "plan", "name": "Plan"}],
+            }})
         else:
             send({"id": message["id"], "error": {"code": -32000, "message": "unknown session"}})
     elif method == "session/close":
@@ -75,9 +84,16 @@ for raw in sys.stdin:
         update({"sessionUpdate": "config_option_update", "configOptions": options(model)})
         result(message, {"configOptions": options(model)})
     elif method == "session/set_mode":
+        saved_session = json.loads(session_file.read_text(encoding="utf-8"))
+        saved_session["mode"] = message["params"]["modeId"]
+        session_file.write_text(json.dumps(saved_session), encoding="utf-8")
+        with record.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"fixture": "set_mode", "modeId": message["params"]["modeId"]}) + "\n")
         update({"sessionUpdate": "current_mode_update", "currentModeId": message["params"]["modeId"]})
-        result(message, {})
+        result(message, {"currentModeId": message["params"]["modeId"]})
     elif method == "session/prompt":
+        with record.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"fixture": "prompt"}) + "\n")
         content = message["params"]["prompt"][0]["text"]
         if content == "exit":
             sys.exit(0)

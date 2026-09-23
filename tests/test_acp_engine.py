@@ -206,6 +206,19 @@ class FakeACPClient:
 
 
 class ACPWorkEngineTests(unittest.TestCase):
+    def test_fake_agent_sets_requested_mode_before_prompt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            result = run_acp_turn(
+                [sys.executable, str(FIXTURE)], cwd=root, prompt="mode test", mode="plan",
+            )
+            self.assertTrue(result.succeeded)
+            self.assertEqual(result.mode, "plan")
+            records = [json.loads(line) for line in
+                       (root / "fake-agent-requests.jsonl").read_text().splitlines()]
+            fixture_events = [item["fixture"] for item in records if "fixture" in item]
+            self.assertEqual(fixture_events, ["set_mode", "prompt"])
+
     def test_fake_agent_defaults_to_reject_and_returns_ordered_redacted_updates(self):
         sentinel = "configured-secret-marker"
         with tempfile.TemporaryDirectory() as directory:
