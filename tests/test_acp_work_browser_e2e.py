@@ -228,6 +228,65 @@ class ACPWorkBrowserEndToEndTests(unittest.TestCase):
         )
         assert_secret_absent()
 
+    def test_text_chunk_preserves_prior_dom_and_focus_then_completion_reconciles(self):
+        card = self._send_and_wait_for_permission("browser-e2e-deny")
+        self.page.evaluate("""() => {
+          const prior = document.querySelector('article.message.user');
+          const pending = document.querySelector('article.message.assistant .acp-streamed-text');
+          const focus = document.createElement('button');
+          focus.type = 'button';
+          focus.textContent = 'Keep focus';
+          prior.append(focus);
+          focus.focus();
+          window.acpDomProbe = {prior, pending, focus};
+          const chat = state.chats.find(item => item.id === state.activeId);
+          const message = chat.messages.find(item => item.pending);
+          applyAcpUpdate({chatId: chat.id}, {
+            message_id: message.id,
+            entry: {
+              id: 'browser-incremental-text-probe',
+              update: {sessionUpdate: 'agent_message_chunk',
+                       streamed_text: 'Updated <img src=x onerror=alert(1)> text'},
+            },
+          });
+        }""")
+        expect(self.page.locator(".acp-streamed-content")).to_have_text(
+            "Updated <img src=x onerror=alert(1)> text",
+        )
+        self.assertTrue(self.page.evaluate("""() => {
+          const {prior, pending, focus} = window.acpDomProbe;
+          return prior === document.querySelector('article.message.user')
+            && pending === document.querySelector('article.message.assistant .acp-streamed-text')
+            && document.activeElement === focus;
+        }"""))
+        self.assertEqual(self.page.locator(".acp-streamed-text img").count(), 0)
+        self.assertEqual(self.page.locator(".acp-streamed-text").get_attribute("aria-live"), "off")
+
+        self.page.evaluate("""() => {
+          const chat = state.chats.find(item => item.id === state.activeId);
+          const message = chat.messages.find(item => item.pending);
+          applyAcpUpdate({chatId: chat.id}, {
+            message_id: message.id,
+            entry: {
+              id: 'browser-incremental-tool-probe',
+              update: {sessionUpdate: 'tool_call', toolCallId: 'browser-probe',
+                       title: 'New tool after chunk', status: 'pending'},
+            },
+          });
+        }""")
+        expect(self.page.locator(".acp-tool-card").filter(has_text="New tool after chunk")).to_have_count(1)
+        self.assertFalse(self.page.evaluate(
+            "window.acpDomProbe.prior === document.querySelector('article.message.user')",
+        ), "tool updates should use the full render fallback")
+
+        card.get_by_role("button", name="Reject once").click()
+        expect(card).to_have_count(0, timeout=5_000)
+        expect(self.page.locator("article.message.assistant").last).to_contain_text(
+            "working on browser-e2e-deny",
+        )
+        self.assertEqual(self.page.locator(".acp-streamed-text").count(), 0)
+        self.assertNotIn("Updated <img", self.page.locator("#messages").inner_text())
+
     def test_mobile_permission_choice_scrolls_above_fixed_composer(self):
         self.page.set_viewport_size({"width": 390, "height": 844})
         card = self._send_and_wait_for_permission("browser-e2e-deny")

@@ -47,6 +47,8 @@ let pollTimer = null;
 const workEventFollowers = new Map();
 let workAccessRevoked = false;
 let acpRenderFrame = null;
+let acpRenderFull = false;
+let acpRenderTextTarget = null;
 const decidingPermissions = new Set();
 const notifiedWorkCompletions = new Set();
 let budgetPollTimer = null;
@@ -1036,9 +1038,21 @@ function workLabel(item) {
   })[item.kind] || "Update";
 }
 
-function acpText(value, limit = 8_000) {
+function acpPreview(value, limit) {
   const text = typeof value === "string" ? value : "";
-  return escapeHtml(text.length > limit ? `${text.slice(0, limit)}\n… Preview shortened.` : text);
+  return text.length > limit ? `${text.slice(0, limit)}\n… Preview shortened.` : text;
+}
+
+function acpText(value, limit = 8_000) {
+  return escapeHtml(acpPreview(value, limit));
+}
+
+const ACP_STREAM_LIMIT = 80_000;
+const ACP_TRUNCATED_NOTICE = "Earlier live text is omitted here; the completed answer will show the full response.";
+
+function acpStreamedTextMarkup(message) {
+  if (!message.streamed_text) return "";
+  return `<div class="acp-streamed-text" aria-live="off">${message.streamed_text_truncated ? `<small>${ACP_TRUNCATED_NOTICE}</small>` : ""}<span class="acp-streamed-content">${acpText(message.streamed_text, ACP_STREAM_LIMIT)}</span></div>`;
 }
 
 function acpDiffMarkup(block, limit) {
@@ -1120,12 +1134,61 @@ function acpPermissionCards(message, chatId) {
   }).join("");
 }
 
-function scheduleAcpRender() {
+function renderAcpStreamedText(chatId, messageId) {
+  const chat = activeChat();
+  const message = chat?.id === chatId && chat.messages?.find((item) => item.id === messageId && item.pending);
+  if (!message) return false;
+  const article = [...$("#messages").querySelectorAll("article.message.assistant[data-message-id]")]
+    .find((node) => node.dataset.messageId === messageId);
+  const content = article?.querySelector(".message-content");
+  const pendingLine = content?.querySelector(".pending-line");
+  if (!pendingLine) return false;
+  let streamed = content.querySelector(".acp-streamed-text");
+  if (!message.streamed_text) {
+    streamed?.remove();
+    return true;
+  }
+  if (!streamed) {
+    streamed = document.createElement("div");
+    streamed.className = "acp-streamed-text";
+    streamed.setAttribute("aria-live", "off");
+    const body = document.createElement("span");
+    body.className = "acp-streamed-content";
+    streamed.append(body);
+    content.append(streamed);
+  }
+  let notice = streamed.querySelector("small");
+  if (message.streamed_text_truncated && !notice) {
+    notice = document.createElement("small");
+    notice.textContent = ACP_TRUNCATED_NOTICE;
+    streamed.prepend(notice);
+  } else if (!message.streamed_text_truncated) {
+    notice?.remove();
+  }
+  streamed.querySelector(".acp-streamed-content").textContent =
+    acpPreview(message.streamed_text, ACP_STREAM_LIMIT);
+  return true;
+}
+
+function scheduleAcpRender(textTarget = null) {
+  if (!textTarget || (acpRenderTextTarget
+      && (acpRenderTextTarget.chatId !== textTarget.chatId
+        || acpRenderTextTarget.messageId !== textTarget.messageId))) {
+    acpRenderFull = true;
+  } else {
+    acpRenderTextTarget = textTarget;
+  }
   if (acpRenderFrame !== null) return;
   acpRenderFrame = requestAnimationFrame(() => {
     acpRenderFrame = null;
-    renderMessages();
-    renderChats();
+    const full = acpRenderFull;
+    const target = acpRenderTextTarget;
+    acpRenderFull = false;
+    acpRenderTextTarget = null;
+    if (full || !target || !renderAcpStreamedText(target.chatId, target.messageId)) {
+      renderMessages();
+      renderChats();
+    }
   });
 }
 
@@ -1188,12 +1251,12 @@ function renderMessages() {
         </div>`).join("")}</div>
     </details>` : "";
     const response = message.pending
-      ? `<div class="pending-line"><span class="thinking" aria-label="${escapeHtml(providerLabel(provider))} is working"><i></i><i></i><i></i></span><span>${escapeHtml((activity.at(-1)?.content || `Starting ${providerLabel(provider)}…`).slice(0, 240))} · ${escapeHtml(relativeTime(message.created_at))}</span></div>${message.streamed_text ? `<div class="acp-streamed-text">${message.streamed_text_truncated ? '<small>Earlier live text is omitted here; the completed answer will show the full response.</small>' : ""}${acpText(message.streamed_text, 80_000)}</div>` : ""}`
+      ? `<div class="pending-line"><span class="thinking" aria-label="${escapeHtml(providerLabel(provider))} is working"><i></i><i></i><i></i></span><span>${escapeHtml((activity.at(-1)?.content || `Starting ${providerLabel(provider)}…`).slice(0, 240))} · ${escapeHtml(relativeTime(message.created_at))}</span></div>${acpStreamedTextMarkup(message)}`
       : renderMarkdown(message.content, {
         commandTarget: assistant && message.id ? { messageId: message.id } : null,
         shellLanguages: CODE_BLOCK_LANGUAGES,
       });
-    return `<article class="message ${role} ${message.error ? "error" : ""}" data-provider="${assistant ? escapeHtml(provider) : ""}">
+    return `<article class="message ${role} ${message.error ? "error" : ""}" data-message-id="${escapeHtml(message.id || "")}" data-provider="${assistant ? escapeHtml(provider) : ""}">
       <div class="message-body"><div class="message-head"><span class="message-name">${escapeHtml(name)}</span>${message.cancelled ? '<span class="message-state">Cancelled</span>' : ""}</div>
       <div class="message-content">${work}${acpPermissions}${acpCards}${response}${assistant && !message.pending ? globalThis.PilferedParrotIdentity.render(message) : ""}</div></div>
     </article>`;
@@ -2073,6 +2136,7 @@ function applyAcpUpdate(follower, payload) {
   if (message.acp_updates.some((item) => item.id === entry.id)) return;
   message.acp_updates.push(entry);
   if (message.acp_updates.length > 512) message.acp_updates.splice(0, message.acp_updates.length - 512);
+  let textOnly = false;
   if (entry.update.sessionUpdate === "agent_message_chunk") {
     // The server redacts the aggregate before sending this replacement. Do
     // not concatenate independently filtered chunks: a secret may straddle
@@ -2082,9 +2146,10 @@ function applyAcpUpdate(follower, payload) {
     if (typeof replacement.streamed_text === "string") {
       message.streamed_text = replacement.streamed_text;
       message.streamed_text_truncated = Boolean(replacement.streamed_text_truncated);
+      textOnly = true;
     }
   }
-  scheduleAcpRender();
+  scheduleAcpRender(textOnly ? { chatId: follower.chatId, messageId: message.id } : null);
 }
 
 function applyAcpPermission(follower, payload) {
