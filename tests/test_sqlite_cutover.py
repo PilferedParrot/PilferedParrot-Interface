@@ -175,6 +175,75 @@ class ChatStoreSQLiteCutoverTests(unittest.TestCase):
         with SQLiteStateStore(self.database) as inspected:
             self.assertEqual(inspected.import_json(self.source).document, source_tree)
 
+    def test_historical_unkeyed_prefix_allows_keyed_completion_and_restart(self):
+        source_tree = json.loads(RAW)
+        source_tree["chats"][0]["messages"] = [
+            {"role": "user", "content": "history", "future_message": "keep"},
+            {"id": "pending-a", "role": "assistant", "content": "", "pending": True},
+        ]
+        self.source.write_text(json.dumps(source_tree), encoding="utf-8")
+        store = self.open_store()
+        store.save()
+        with store.lock:
+            pending = store.get("work-a")["messages"][1]
+            pending["content"] = "complete"
+            pending.pop("pending")
+            store.save()
+        store.close()
+        restarted = self.open_store()
+        with restarted.lock:
+            restarted.get("work-a")["messages"].append({
+                "id": "pending-b", "role": "assistant", "content": "", "pending": True,
+            })
+            restarted.save()
+        restarted.close()
+        recovered = self.open_store()
+        with recovered.lock:
+            pending = recovered.get("work-a")["messages"][2]
+            pending["content"] = "interrupted"
+            pending["interrupted"] = True
+            pending.pop("pending")
+            recovered.save()
+        with SQLiteStateStore(self.database) as inspected:
+            saved = inspected.import_json(self.source).document
+        self.assertEqual(saved["chats"][0]["messages"][0]["future_message"], "keep")
+        self.assertEqual(saved["chats"][0]["messages"][1]["content"], "complete")
+        self.assertTrue(saved["chats"][0]["messages"][2]["interrupted"])
+
+    def test_nested_opaque_fields_stay_out_of_browser_public_tree(self):
+        source_tree = json.loads(RAW)
+        work = source_tree["chats"][0]
+        work["attachments"] = [{"name": "legacy", "future_secret": "attachment secret"}]
+        work["harness_tasks"] = [{"status": "running", "future_secret": "task secret"}]
+        work["messages"] = [{
+            "id": "message-a", "role": "assistant", "content": "visible",
+            "activity": [{"id": "activity-a", "kind": "status", "content": "working",
+                          "future_secret": "activity secret"}],
+            "response_identity": {"provider": "codex", "future_secret": "identity secret"},
+            "acp_updates": [{"id": "update-a", "future_secret": "entry secret",
+                             "update": {"sessionUpdate": "tool_call", "toolCallId": "tool-a",
+                                        "title": "Read", "future_secret": "update secret",
+                                        "content": [{"type": "diff", "path": "file.txt",
+                                                     "newText": "text", "future_secret": "diff secret"}]}}],
+        }]
+        self.source.write_text(json.dumps(source_tree), encoding="utf-8")
+        store = self.open_store()
+        store.save()
+        public = store.list_public()[0]
+        serialized = json.dumps(public)
+        self.assertNotIn("future_secret", serialized)
+        self.assertNotIn("attachments", public)
+        self.assertEqual(public["harness_tasks"], [{"status": "running"}])
+        self.assertEqual(public["messages"][0]["activity"][0]["content"], "working")
+        self.assertEqual(public["messages"][0]["acp_updates"][0]["update"]["content"][0]["path"],
+                         "file.txt")
+        with SQLiteStateStore(self.database) as inspected:
+            saved = inspected.import_json(self.source).document
+        self.assertEqual(saved["chats"][0]["attachments"][0]["future_secret"],
+                         "attachment secret")
+        self.assertEqual(saved["chats"][0]["messages"][0]["activity"][0]["future_secret"],
+                         "activity secret")
+
     def test_load_repairs_invalid_ids_without_losing_opaque_fields(self):
         source_tree = json.loads(RAW)
         source_tree["chats"][0]["id"] = "invalid id"

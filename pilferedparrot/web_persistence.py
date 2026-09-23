@@ -64,11 +64,8 @@ _PUBLIC_SESSION_FIELDS = frozenset({
     "id", "window_id", "title", "cwd", "created_at", "updated_at",
     "requested_provider", "requested_model", "provider", "model",
     "reasoning_effort", "acp_mode", "messages", "draft", "archived",
-    "archived_at", "last_used_order", "attachments", "harness_parent",
-    "harness_child", "harness_reference", "harness_tasks", "harness_outcome",
-    "harness_route", "harness_contract", "context_chars", "context_warning",
-    "pending", "session_engine", "provider_job_id", "job_id", "job",
-    "active_job", "run_id",
+    "archived_at", "last_used_order", "harness_tasks", "context_chars", "context_warning",
+    "pending", "session_engine", "run_id",
 })
 _PUBLIC_MESSAGE_FIELDS = frozenset({
     "id", "role", "content", "created_at", "pending", "run_id",
@@ -76,23 +73,101 @@ _PUBLIC_MESSAGE_FIELDS = frozenset({
     "reasoning_effort", "engine", "acp_mode", "acp_stop_reason",
     "acp_updates", "acp_updates_truncated", "streamed_text",
     "streamed_text_truncated", "activity", "error", "interrupted",
-    "cancel_requested", "cancelled", "exit_code", "harness_contract",
-    "harness_route", "harness_reference", "response_identity",
+    "cancel_requested", "cancelled", "exit_code", "response_identity",
     "whiteboard_discovered",
 })
+
+
+def _public_fields(value: Any, allowed: frozenset[str]) -> dict[str, Any]:
+    return {key: item for key, item in value.items() if key in allowed} \
+        if isinstance(value, dict) else {}
+
+
+def _public_acp_update(entry: Any) -> dict[str, Any] | None:
+    if not isinstance(entry, dict) or not isinstance(entry.get("update"), dict):
+        return None
+    update = entry["update"]
+    if update.get("sessionUpdate") not in {"tool_call", "tool_call_update"}:
+        return None
+    public = {key: update[key] for key in (
+        "sessionUpdate", "toolCallId", "name", "title", "kind", "status",
+    ) if isinstance(update.get(key), str)}
+    content = update.get("content")
+    if isinstance(content, list):
+        public["content"] = [
+            {key: block[key] for key in ("type", "path", "oldText", "newText")
+             if isinstance(block.get(key), str)
+             or key == "oldText" and key in block and block[key] is None}
+            for block in content if isinstance(block, dict) and block.get("type") == "diff"
+        ]
+    output = update.get("rawOutput")
+    if isinstance(output, str):
+        public["rawOutput"] = output
+    elif isinstance(output, dict) and isinstance(output.get("formatted_output"), str):
+        public["rawOutput"] = {"formatted_output": output["formatted_output"]}
+    return {"id": entry["id"], "update": public} \
+        if isinstance(entry.get("id"), str) else None
 
 
 def _sqlite_public_projection(result: dict[str, Any]) -> dict[str, Any]:
     """Keep opaque future fields out of SQLite-backed browser responses."""
     projected = {key: value for key, value in result.items()
-                 if key in _PUBLIC_SESSION_FIELDS}
+                 if key in _PUBLIC_SESSION_FIELDS and (
+                     key in {"messages", "harness_tasks"}
+                     or not isinstance(value, (dict, list))
+                 )}
+    tasks = projected.get("harness_tasks")
+    if isinstance(tasks, list):
+        projected["harness_tasks"] = [
+            {"status": task["status"]} for task in tasks
+            if isinstance(task, dict) and isinstance(task.get("status"), str)
+        ]
+    else:
+        projected.pop("harness_tasks", None)
     messages = projected.get("messages")
     if isinstance(messages, list):
-        projected["messages"] = [
-            {key: value for key, value in item.items()
-             if key in _PUBLIC_MESSAGE_FIELDS} if isinstance(item, dict) else item
-            for item in messages
-        ]
+        public_messages = []
+        for item in messages:
+            message = {
+                key: value for key, value in _public_fields(item, _PUBLIC_MESSAGE_FIELDS).items()
+                if key in {"activity", "acp_updates", "response_identity"}
+                or not isinstance(value, (dict, list))
+            }
+            if not isinstance(message.get("content"), str):
+                message.pop("content", None)
+            activity = message.get("activity")
+            if isinstance(activity, list):
+                message["activity"] = [
+                    {key: update[key] for key in ("id", "kind", "content")
+                     if isinstance(update.get(key), str)} | (
+                        {"created_at": update["created_at"]}
+                        if type(update.get("created_at")) in (int, float) else {}
+                    ) for update in activity if isinstance(update, dict)
+                ]
+            else:
+                message.pop("activity", None)
+            acp_updates = message.get("acp_updates")
+            if isinstance(acp_updates, list):
+                message["acp_updates"] = [public for entry in acp_updates
+                                          if (public := _public_acp_update(entry)) is not None]
+            else:
+                message.pop("acp_updates", None)
+            identity = message.get("response_identity")
+            if isinstance(identity, dict):
+                message["response_identity"] = {
+                    key: identity[key] for key in (
+                        "provider", "requested_model", "endpoint_kind", "endpoint_origin",
+                    ) if isinstance(identity.get(key), str)
+                }
+                if isinstance(identity.get("reported_models"), list):
+                    message["response_identity"]["reported_models"] = [
+                        model for model in identity["reported_models"]
+                        if isinstance(model, str)
+                    ]
+            else:
+                message.pop("response_identity", None)
+            public_messages.append(message)
+        projected["messages"] = public_messages
     return projected
 
 
@@ -119,6 +194,11 @@ def _id_map(items: list[Any]) -> dict[str, dict[str, Any]] | None:
         return None
     result = {item["id"]: item for item in items}
     return result if len(result) == len(items) else None
+
+
+def _has_stable_id(item: Any) -> bool:
+    return isinstance(item, dict) and isinstance(item.get("id"), str) \
+        and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", item["id"]) is not None
 
 
 def _same_json_value(left: Any, right: Any) -> bool:
@@ -184,6 +264,28 @@ def _merge_runtime_delta(
                 for item in after
             ]
         if any(isinstance(item, dict) for item in (*before, *after, *authority)):
+            # Older transcripts may start with messages that have no ID. Keep
+            # that exact prefix attached to its opaque source while allowing
+            # newer, keyed messages to advance, complete, or append after it.
+            first_keyed = next((index for index, item in enumerate(before)
+                                if _has_stable_id(item)), len(before))
+            if not load_transform and first_keyed > 0 \
+                    and len(after) >= first_keyed \
+                    and len(authority) == len(before) \
+                    and _same_json_value(before[:first_keyed], after[:first_keyed]) \
+                    and all(not _has_stable_id(item) for item in authority[:first_keyed]):
+                old_tail = _id_map(before[first_keyed:])
+                new_tail = _id_map(after[first_keyed:])
+                raw_tail = _id_map(authority[first_keyed:])
+                if old_tail is not None and new_tail is not None \
+                        and raw_tail is not None and set(old_tail) <= set(raw_tail):
+                    return deepcopy(authority[:first_keyed]) + [
+                        _merge_runtime_delta(
+                            old_tail[item["id"]], item, raw_tail[item["id"]],
+                            path + (item["id"],),
+                        ) if item["id"] in old_tail else deepcopy(item)
+                        for item in after[first_keyed:]
+                    ]
             if load_transform and len(before) == len(after) == len(authority):
                 return [
                     _merge_runtime_delta(old, new, raw, path + (str(index),),
