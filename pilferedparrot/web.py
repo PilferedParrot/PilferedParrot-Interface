@@ -1677,6 +1677,29 @@ class PilferedParrotApp(HarnessWorkflow):
     def work_event_closed(self) -> bool:
         return self.events.closed
 
+    def _publish_work_event(
+        self, chat_id: str, message_id: str, kind: str, payload: dict[str, Any],
+        *, event_id: str | None = None,
+    ) -> bool:
+        """Journal first, then publish only for the still-pending local run."""
+        with self.store.lock:
+            try:
+                pending = self._message(self.store.get(chat_id), message_id)
+            except KeyError:
+                return False
+            run_id = pending.get("run_id")
+            if not pending.get("pending") or not isinstance(run_id, str) or not run_id:
+                return False
+            visible = self.store.append_live_event(
+                chat_id, run_id, kind, payload, event_id=event_id,
+            )
+            try:
+                self.events.publish(chat_id, kind, visible)
+            except RuntimeError:
+                # An already closed stream cannot undo a committed journal row.
+                pass
+            return True
+
     def current_chat_state(self) -> dict[str, Any]:
         """Expose the persisted Chat view through the server-facing app boundary."""
         return self.store.chat_public()
@@ -2143,10 +2166,7 @@ class PilferedParrotApp(HarnessWorkflow):
                 raise
 
         def publish(kind: str, payload: dict[str, Any]) -> None:
-            try:
-                self.events.publish(chat_id, kind, payload)
-            except RuntimeError:
-                pass
+            self._publish_work_event(chat_id, pending_id, kind, payload)
 
         def on_update(_session_id: str, update: dict[str, Any]) -> None:
             # Keep the store boundary safe even for a transport that skips the
@@ -2157,6 +2177,8 @@ class PilferedParrotApp(HarnessWorkflow):
             entry = {"id": uuid.uuid4().hex, "update": update}
             with self.store.lock:
                 pending = self._message(self.store.get(chat_id), pending_id)
+                if not pending.get("pending"):
+                    return
                 entries = pending.setdefault("acp_updates", [])
                 entries.append(entry)
                 if len(entries) > ACP_UPDATE_LIMIT:
@@ -2187,7 +2209,10 @@ class PilferedParrotApp(HarnessWorkflow):
                 if now - active.last_checkpoint >= 0.5:
                     self.store.save()
                     active.last_checkpoint = now
-                publish("acp_update", {"message_id": pending_id, "entry": entry})
+                self._publish_work_event(
+                    chat_id, pending_id, "acp_update",
+                    {"message_id": pending_id, "entry": entry}, event_id=entry["id"],
+                )
 
         def on_permission(params: dict[str, Any]) -> str | None:
             clean = _acp_public_value(self.config, params)
@@ -2360,6 +2385,8 @@ class PilferedParrotApp(HarnessWorkflow):
                 rendered = redact_configured_secrets(self.config, rendered)[:4_000]
                 with self.store.lock:
                     pending = self._message(self.store.get(chat_id), pending_id)
+                    if not pending.get("pending"):
+                        return
                     activity = pending.setdefault("activity", [])
                     update = {
                         "id": uuid.uuid4().hex,
@@ -2374,13 +2401,11 @@ class PilferedParrotApp(HarnessWorkflow):
                     if now - active.last_checkpoint >= 0.5:
                         self.store.save()
                         active.last_checkpoint = now
-                    try:
-                        self.events.publish(chat_id, "progress", {
-                            "message_id": pending_id, "activity": update,
-                        })
-                    except RuntimeError:
-                        # Shutdown may close the stream before a slow provider exits.
-                        pass
+                    self._publish_work_event(
+                        chat_id, pending_id, "progress",
+                        {"message_id": pending_id, "activity": update},
+                        event_id=update["id"],
+                    )
 
             setattr(active.cancel_event, "_pilferedparrot_progress", report_progress)
             def report_usage(usage: dict[str, Any]) -> None:
@@ -2389,12 +2414,10 @@ class PilferedParrotApp(HarnessWorkflow):
                     if self._message(current, pending_id).get("pending"):
                         _record_context_usage(current, usage)
                         context = self.store.context_public(current)
-                        try:
-                            self.events.publish(chat_id, "usage", {
-                                "message_id": pending_id, **context,
-                            })
-                        except RuntimeError:
-                            pass
+                        self._publish_work_event(
+                            chat_id, pending_id, "usage",
+                            {"message_id": pending_id, **context},
+                        )
 
             setattr(active.cancel_event, "_pilferedparrot_usage", report_usage)
             if engine == "acp":
@@ -2484,25 +2507,30 @@ class PilferedParrotApp(HarnessWorkflow):
                     "exit_code": 1,
                 })
         finally:
-            with self.runs_lock:
-                with self.store.lock:
-                    chat = self.store.get(chat_id)
-                    pending = self._message(chat, pending_id)
-                    if conversation is not None:
-                        pending["response_identity"] = deepcopy(conversation.response_identity)
-                    self._harness_complete(pending, result, time.monotonic() - started)
-                    pending.pop("pending", None)
-                    pending.pop("cancel_requested", None)
-                    chat["updated_at"] = int(time.time())
-                    self.store.save()
-                    try:
-                        self.events.publish(chat_id, "completed", {"message_id": pending_id})
-                    except RuntimeError:
-                        pass
+            try:
+                with self.runs_lock:
+                    with self.store.lock:
+                        chat = self.store.get(chat_id)
+                        pending = self._message(chat, pending_id)
+                        if conversation is not None:
+                            pending["response_identity"] = deepcopy(conversation.response_identity)
+                        self._harness_complete(pending, result, time.monotonic() - started)
+                        pending.pop("pending", None)
+                        pending.pop("cancel_requested", None)
+                        chat["updated_at"] = int(time.time())
+                        self.store.save(completed_event=(
+                            chat_id, pending["run_id"], pending_id,
+                        ))
+                        try:
+                            self.events.publish(chat_id, "completed", {"message_id": pending_id})
+                        except RuntimeError:
+                            pass
+            finally:
+                with self.runs_lock:
                     if self.runs.get(chat_id) is active:
                         self.runs.pop(chat_id, None)
-            with self.budget_condition:
-                self.budget_refreshed_at = 0
+                with self.budget_condition:
+                    self.budget_refreshed_at = 0
 
     @staticmethod
     def _message(chat: dict[str, Any], message_id: str) -> dict[str, Any]:

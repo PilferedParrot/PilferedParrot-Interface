@@ -679,7 +679,8 @@ class PersistentChatStore:
         if archived:
             chat_thread["archived"] = True
 
-    def save(self) -> None:
+    def save(self, *, completed_event: tuple[str, str, str] | None = None) -> None:
+        """Save the tree; an opt-in SQLite completion shares its transaction."""
         with self.lock:
             if self._sqlite_state is not None:
                 if self._sqlite_failed or self._sqlite_revision is None:
@@ -689,8 +690,15 @@ class PersistentChatStore:
                     raise StateStoreError("SQLite chat store requires a fresh load")
                 try:
                     snapshot = deepcopy(self.data)
+                    event_kwargs = {} if completed_event is None else {
+                        "event_kind": "completed",
+                        "event_payload": {"message_id": completed_event[2]},
+                        "session_key": completed_event[0],
+                        "run_id": completed_event[1],
+                        "event_id": f"completed_{completed_event[2]}",
+                    }
                     saved = self._sqlite_state.save_document(
-                        snapshot, expected_revision=self._sqlite_revision,
+                        snapshot, expected_revision=self._sqlite_revision, **event_kwargs,
                     )
                 except Exception:
                     # Callers often mutate self.data before save(). A failed
@@ -705,6 +713,32 @@ class PersistentChatStore:
                 self.path, self.data, ensure_ascii=False, indent=2,
                 trailing_newline=True, fsync=True,
             )
+
+    def append_live_event(
+        self, session_key: str, run_id: str, kind: str,
+        payload: dict[str, Any], *, event_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Commit a sanitized event before a live stream may publish it.
+
+        The JSON compatibility path keeps its existing in-memory stream. The
+        SQLite path returns the exact payload committed to the journal.
+        """
+        with self.lock:
+            if self._sqlite_state is None:
+                return payload
+            if self._sqlite_failed or self._sqlite_revision is None:
+                self.data = deepcopy(self._sqlite_committed_data)
+                raise StateStoreError("SQLite chat store requires a fresh load")
+            try:
+                event = self._sqlite_state.append_event(
+                    session_key, run_id, kind, payload, event_id=event_id,
+                    expected_revision=self._sqlite_revision,
+                )
+            except Exception:
+                self.data = deepcopy(self._sqlite_committed_data)
+                self._sqlite_failed = True
+                raise
+            return event.payload
 
     def close(self) -> None:
         with self.lock:

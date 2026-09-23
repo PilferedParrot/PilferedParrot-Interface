@@ -32,7 +32,10 @@ transport. Recent ACP updates and live text are bounded; JSON checkpoints occur
 at most every 0.5 seconds during a run, then at completion. An abrupt process
 crash can lose updates since the last checkpoint. A fixture-only Python
 constructor option can run the app against the SQLite document store while
-retaining the exact original JSON as a rollback source. Normal app startup
-still uses JSON; the SQLite event journal is not connected to the live stream.
+retaining the exact original JSON as a rollback source. In that opt-in path,
+sanitized progress commits to the event journal before browser publication;
+the final document and completion event commit together. The browser still
+uses its process-local stream cursor and reloads a snapshot after restart.
+Normal app startup still uses JSON.
 Windows runtime behavior and provider permission UI have not yet been
 certified for release.
