@@ -130,7 +130,6 @@ class SidebarBrowserEndToEndTests(unittest.TestCase):
         expect(dialog).to_be_visible()
         dialog.get_by_role("button", name="Cancel").click()
         expect(dialog).to_be_hidden()
-
         page.get_by_role("textbox", name="Message").fill("must choose a folder")
         page.get_by_role("button", name="Open sidebar").click()
         page.get_by_role("button", name="Start a new work session").click()
@@ -151,6 +150,94 @@ class SidebarBrowserEndToEndTests(unittest.TestCase):
         expect(page.get_by_role("textbox", name="Message")).to_have_value("must choose a folder")
         page.get_by_role("button", name="Send").click()
         expect(page.get_by_text("Fake provider completed: must choose a folder", exact=True)).to_be_visible(timeout=5_000)
+
+    def test_project_session_search_filters_summaries_with_keyboard_and_provider_scope(self):
+        fixture = self.fixture
+        indexed_project = fixture.root / "session-indexed-project"
+        indexed_project.mkdir()
+        app = fixture.app
+        seeded = []
+        for provider, title in (
+            ("codex", "Needle Alpha"),
+            ("codex", "Beta"),
+            ("claude", "Needle Claude Private"),
+        ):
+            chat = app.create_chat(
+                {"cwd": str(indexed_project)},
+                window_id="provider-codex", window_provider=provider,
+            )
+            with app.store.lock:
+                stored = next(item for item in app.store.data["chats"] if item["id"] == chat["id"])
+                stored["title"] = title
+                app.store.save()
+            seeded.append(chat["id"])
+
+        capability = app.issue_capability(
+            "dashboard", window_id="provider-codex", provider="codex",
+        )
+        page = self.context.new_page()
+        page.on("pageerror", lambda error: self.page_errors.append(error))
+        page.goto(
+            f"{fixture.base_url}/#capability={capability}&provider=codex&window=provider-codex",
+            wait_until="domcontentloaded",
+        )
+        expect(page.get_by_role("textbox", name="Message")).to_be_enabled(timeout=5_000)
+        search = page.get_by_role("searchbox", name="Search sessions in this project")
+        expect(search).to_be_visible()
+        expect(page.locator("#sessionSearchScope")).to_have_text("Scope: session-indexed-project")
+        expect(page.locator("#sessionSearchScope")).to_have_attribute("title", str(indexed_project))
+        expect(page.locator("#chatList .chat-item")).to_have_count(2)
+        expect(page.get_by_text("Needle Claude Private", exact=True)).to_have_count(0)
+
+        initial_ids = set(page.locator("#chatList .chat-item").evaluate_all(
+            "nodes => nodes.map(node => node.dataset.chat)"
+        ))
+        self.assertEqual(initial_ids, set(seeded[:2]))
+        active_before = page.evaluate("sessionStorage.getItem('pilferedparrot-active-chat')")
+        title_before = page.locator("#chatTitle").inner_text()
+        project_before = page.locator("#projectSelect").input_value()
+        prompt = page.get_by_role("textbox", name="Message")
+        prompt.fill("draft stays while filtering")
+        search.fill("codex")
+        expect(page.locator("#chatList .chat-item")).to_have_count(2)
+        expect(page.locator("#sessionSearchStatus")).to_have_text("2 of 2 sessions in this project match.")
+        expect(prompt).to_have_value("draft stays while filtering")
+        expect(page.locator("#chatTitle")).to_have_text(title_before)
+        self.assertEqual(page.locator("#projectSelect").input_value(), project_before)
+
+        search.fill("needle")
+        expect(page.locator("#chatList .chat-item")).to_have_count(1)
+        expect(page.get_by_text("Needle Alpha", exact=True)).to_be_visible()
+        expect(page.locator("#sessionSearchStatus")).to_have_text("1 of 2 sessions in this project match.")
+        expect(prompt).to_have_value("draft stays while filtering")
+        expect(page.locator("#chatTitle")).to_have_text(title_before)
+        self.assertEqual(page.evaluate("sessionStorage.getItem('pilferedparrot-active-chat')"), active_before)
+
+        search.press("Escape")
+        expect(search).to_have_value("")
+        expect(page.locator("#chatList .chat-item")).to_have_count(2)
+        expect(search).to_be_focused()
+        search.fill(fixture.root.name)
+        expect(page.locator("#chatList .chat-item")).to_have_count(2)
+        expect(page.locator("#sessionSearchStatus")).to_have_text("2 of 2 sessions in this project match.")
+        search.fill("no-such-session")
+        expect(page.locator("#chatList .chat-item")).to_have_count(0)
+        expect(page.locator("#sessionSearchStatus")).to_have_text("0 of 2 sessions in this project match.")
+        expect(page.get_by_text("No sessions match this search.")).to_be_visible()
+        expect(page.get_by_role("button", name="Clear session search")).to_be_visible()
+        search.press("Escape")
+        expect(search).to_have_value("")
+        expect(page.locator("#chatList .chat-item")).to_have_count(2)
+
+        search.fill(fixture.root.name)
+        search.press("Tab")
+        clear = page.get_by_role("button", name="Clear session search")
+        expect(clear).to_be_focused()
+        page.keyboard.press("Enter")
+        expect(search).to_have_value("")
+        expect(search).to_be_focused()
+        expect(page.locator("#chatList .chat-item")).to_have_count(2)
+
 
     def test_workspace_and_connection_controls_stay_in_their_groups_across_themes(self):
         page = self._load_work()

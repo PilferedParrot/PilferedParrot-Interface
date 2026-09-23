@@ -25,6 +25,8 @@ project content, custom model names, session IDs, account details, or a persiste
 installation identifier. Reports also contain the application version, broad OS
 family, schema/policy version, consent choices, and collection window length.
 No exact activity times or daily activity timeline are exported.
+Session search filters the compact summaries already loaded for the selected Work
+project. Search text stays in that window and is not added to feedback counters.
 
 Local change detection is advisory. It cannot infer why a change was made,
 distinguish a fix from customization, or establish that an installation is

@@ -89,6 +89,17 @@
 
         <section class="history-group technical-history" aria-labelledby="technicalHistoryHeading">
           <div class="history-heading" id="technicalHistoryHeading">Session history</div>
+          <div class="session-search">
+            <label for="sessionSearch">Search sessions in this project</label>
+            <div class="session-search-controls">
+              <input id="sessionSearch" type="search"
+                     placeholder="Title, provider, project name or path"
+                     aria-describedby="sessionSearchScope sessionSearchStatus" autocomplete="off">
+              <button id="clearSessionSearch" type="button" aria-label="Clear session search" hidden>Clear</button>
+            </div>
+            <span id="sessionSearchScope" class="session-search-scope"></span>
+            <p id="sessionSearchStatus" class="session-search-status" role="status" aria-live="polite"></p>
+          </div>
           <nav class="chat-list" id="chatList" aria-label="Session history"></nav>
         </section>
       </div>

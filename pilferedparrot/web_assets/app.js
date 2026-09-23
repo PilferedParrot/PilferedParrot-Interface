@@ -68,6 +68,7 @@ let projectSubmitPending = false;
 let projectDialogCreate = false;
 let projectSwitchPending = false;
 let projectPinPending = false;
+let sessionSearch = "";
 let renderedProjectOptions = "";
 let createChatPending = false;
 let selectionSavePending = false;
@@ -184,6 +185,19 @@ function projectOfChat(chat) { return chat?.project_cwd || chat?.cwd || ""; }
 function visibleChats() {
   const selected = state.selected_project || state.draftCwd;
   return windowChats().filter((chat) => !selected || projectOfChat(chat) === selected);
+}
+function searchedChats(chats) {
+  const query = sessionSearch.trim().toLocaleLowerCase();
+  if (!query) return chats;
+  const selected = state.selected_project || state.draftCwd || "";
+  const project = (state.projects || []).find((item) => item.cwd === selected);
+  const projectName = project?.name || projectFolderName(selected);
+  return chats.filter((chat) => [
+    chat.title,
+    providerLabel(chat.provider || chat.requested_provider),
+    projectName,
+    selected,
+  ].some((value) => String(value || "").toLocaleLowerCase().includes(query)));
 }
 function pendingMessage(chat = activeChat()) {
   return chat?.messages?.find((message) => message.pending)
@@ -789,12 +803,34 @@ function renderProjects() {
 
 function renderChats() {
   const list = $("#chatList");
-  const chats = visibleChats();
+  const allChats = visibleChats();
+  const chats = searchedChats(allChats);
+  const selected = state.selected_project || state.draftCwd || "";
+  const search = $("#sessionSearch");
+  const clear = $("#clearSessionSearch");
+  const status = $("#sessionSearchStatus");
+  const scope = $("#sessionSearchScope");
+  if (search && document.activeElement !== search) search.value = sessionSearch;
+  if (clear) clear.hidden = !sessionSearch;
+  if (scope) {
+    const project = (state.projects || []).find((item) => item.cwd === selected);
+    scope.textContent = selected
+      ? `Scope: ${project?.name || projectFolderName(selected)}`
+      : "Scope: selected project";
+    scope.title = selected;
+  }
+  if (status) {
+    status.textContent = sessionSearch.trim()
+      ? `${chats.length} of ${allChats.length} ${allChats.length === 1 ? "session" : "sessions"} in this project match.`
+      : `${allChats.length} ${allChats.length === 1 ? "session" : "sessions"} in this project.`;
+  }
   list.innerHTML = chats.length ? chats.map((chat) => `
     <button class="chat-item ${chat.id === state.activeId ? "active" : ""}" data-chat="${escapeHtml(chat.id)}">
       <div class="chat-item-title">${escapeHtml(chat.title)}</div>
       <div class="chat-item-meta"><span>${escapeHtml(providerLabel(chat.provider || chat.requested_provider))}</span><span>${chat.context_status && chat.context_status !== "normal" ? '<i class="limit-dot" title="Near practical limit" aria-label="Near practical limit">!</i>' : ""}${relativeTime(chat.updated_at)}</span></div>
-    </button>`).join("") : '<p class="project-empty">No sessions in this project yet.</p>';
+    </button>`).join("") : (sessionSearch.trim()
+    ? '<p class="project-empty">No sessions match this search.</p>'
+    : '<p class="project-empty">No sessions in this project yet.</p>');
   list.querySelectorAll("[data-chat]").forEach((button) => button.addEventListener("click", async () => {
     saveActiveDraft();
     const chatId = button.dataset.chat;
@@ -824,6 +860,25 @@ function renderChats() {
     }
   }));
 }
+
+$("#sessionSearch").addEventListener("input", (event) => {
+  sessionSearch = event.target.value;
+  renderChats();
+});
+$("#sessionSearch").addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && sessionSearch) {
+    event.preventDefault();
+    sessionSearch = "";
+    event.currentTarget.value = "";
+    renderChats();
+  }
+});
+$("#clearSessionSearch").addEventListener("click", () => {
+  sessionSearch = "";
+  $("#sessionSearch").value = "";
+  renderChats();
+  $("#sessionSearch").focus();
+});
 
 const STATUS_TEXT = {
   cli_missing: "CLI not found",
