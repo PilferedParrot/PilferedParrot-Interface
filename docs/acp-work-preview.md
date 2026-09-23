@@ -21,12 +21,16 @@ agent's exact command or diff and only the choices it offered. No choice, a
 timeout, cancellation, or an incomplete preview defaults to denial. A revoked
 window cannot answer a permission request; only the owning Work window can.
 
+The Work model picker reads the selected ACP agent's advertised models when
+opened. Selecting a model probes its available effort levels before saving the
+choice; this creates a temporary ACP session without sending a prompt. A saved
+model the agent no longer advertises is labeled unavailable. Chat keeps its
+existing model list and does not launch an ACP probe.
+
 The browser stream and JSON chat store remain the source branch's first live
 transport. Recent ACP updates and live text are bounded; JSON checkpoints occur
 at most every 0.5 seconds during a run, then at completion. An abrupt process
 crash can lose updates since the last checkpoint. The standalone SQLite document
 and event-journal module is being verified separately and is not the active
-store. A standalone no-prompt ACP option probe reads dynamic model, effort and
-mode lists, but the dashboard model picker is not yet connected to it. Windows
-runtime behavior and provider permission UI have not yet been certified for
-release.
+store. Windows runtime behavior and provider permission UI have not yet been
+certified for release.

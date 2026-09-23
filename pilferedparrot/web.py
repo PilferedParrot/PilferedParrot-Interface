@@ -38,6 +38,8 @@ from .config import (
 from .dispatch import RunCancelled, RunResult, capture_dispatch, _stop_process
 from .dispatch import _provider_process_environment
 from .acp_adapters import AdapterManager
+from .acp_catalog import discover_acp_options
+from .acp_client import ACPError
 from .acp_engine import ACPCancelled, run_acp_turn
 from .acp_permissions import PermissionBroker
 from .processes import provider_argv
@@ -1251,10 +1253,60 @@ class PilferedParrotApp(HarnessWorkflow):
             raise ValueError("unknown provider")
         return check_provider_update(self.config, provider)
 
-    def poll_provider_models(self, provider: str) -> dict[str, Any]:
+    def poll_provider_models(
+        self, provider: str, *, model: str | None = None,
+        window_id: str = "main", window_provider: str | None = None,
+        scope: str = "dashboard",
+    ) -> dict[str, Any]:
         """Refresh a provider's model choices without spending a model turn."""
         if provider not in self._provider_ids():
             raise ValueError("unknown provider")
+        if window_id != "main" and window_provider != provider:
+            raise PermissionError("window authorization failed")
+        if provider in {"codex", "claude"} and self.config[provider].get("engine") == "acp" \
+                and scope == "dashboard":
+            selected_model = self._normalize_model(model) if model is not None else None
+            if model is not None and selected_model is None:
+                raise ValueError("model must be a valid model ID")
+            with self.store.lock:
+                selected_project = self.store.project_state(
+                    window_id, provider, self.default_cwd, aggregate=window_id == "main",
+                )["selected_project"] or self.default_cwd
+            try:
+                workspace = _project_directory(_migrate_renamed_project_path(
+                    selected_project, self.renamed_repository_root,
+                ))
+                _validate_provider_workspace(provider, workspace, self.config)
+                argv = self.acp_adapters.locate(provider)
+                if argv is None:
+                    raise RuntimeError("ACP adapter is not installed")
+                discovered = discover_acp_options(
+                    argv, cwd=workspace, env=_provider_process_environment(),
+                    model=selected_model, timeout=10,
+                )
+            except ACPError as error:
+                if selected_model is not None and "not advertised" in str(error):
+                    raise ValueError("requested ACP model is not advertised") from None
+                raise RuntimeError("ACP option discovery failed") from None
+            except Exception:
+                raise RuntimeError("ACP option discovery failed") from None
+            options = deepcopy(discovered["models"])
+            current_model = discovered["current_model"]
+            for option in options:
+                if option["value"] == current_model:
+                    option["reasoning_efforts"] = [
+                        effort["value"] for effort in discovered["efforts"]
+                    ]
+            return {
+                "provider": provider, "default": current_model or None,
+                "options": options, "polled_at": int(time.time()), "source": "acp",
+                "acp_options": {
+                    key: deepcopy(discovered[key]) for key in (
+                        "models", "efforts", "modes", "current_model",
+                        "current_effort", "current_mode",
+                    )
+                },
+            }
         catalog = model_catalog(self.config).get(provider, {"default": None, "options": []})
         try:
             options = adapter_for(provider, self.config).models()
@@ -1441,6 +1493,7 @@ class PilferedParrotApp(HarnessWorkflow):
                 ],
                 "model_catalog": {provider: {**deepcopy(catalog.get(provider, {})),
                                                "options": deepcopy(options)}},
+                "provider_engines": {provider: self.config.get(provider, {}).get("engine", "legacy")},
                 "providers": [deepcopy(item) for item in self._provider_catalog()],
                 "preferences": self.store.preferences_public(),
             }
@@ -1469,6 +1522,11 @@ class PilferedParrotApp(HarnessWorkflow):
             "provider_templates": self.provider_templates(),
             "harness": self.harness_metadata(),
             "model_catalog": deepcopy(catalog),
+            "provider_engines": {
+                name: self.config.get(name, {}).get("engine", "legacy")
+                for name in (("codex", "claude") if window_id == "main" else (provider,))
+                if name in self._provider_ids(include_hidden=True)
+            },
             "preferences": self.store.preferences_public(),
         }
 
@@ -1750,9 +1808,12 @@ class PilferedParrotApp(HarnessWorkflow):
             return None
         if not isinstance(value, str):
             raise ValueError("reasoning effort must be a string or null")
-        effort = value.strip().lower()
-        if not effort:
+        effort = value.strip()
+        if not effort or len(effort) > 128 or any(ord(char) < 32 for char in effort):
             raise ValueError("reasoning effort must be a string or null")
+        if provider in {"codex", "claude"} and self.config[provider].get("engine") == "acp":
+            return effort
+        effort = effort.lower()
         if provider != "codex":
             raise ValueError("reasoning effort is only supported for Codex")
         option = next((item for item in model_catalog(self.config).get("codex", {}).get("options", [])

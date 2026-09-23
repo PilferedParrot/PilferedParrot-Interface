@@ -118,6 +118,21 @@ class ACPOptionCatalogTests(unittest.TestCase):
             )
         self.assertEqual([item["value"] for item in result["models"]], ["sonnet", "haiku"])
 
+    def test_model_switch_uses_returned_model_list(self):
+        class ChangingClient(FakeClient):
+            def set_config_option(self, session_id, config_id, value, *, timeout):
+                result = super().set_config_option(session_id, config_id, value, timeout=timeout)
+                result["configOptions"][0]["options"] = [
+                    {"value": "haiku", "name": "Haiku"},
+                ]
+                return result
+        with tempfile.TemporaryDirectory() as directory:
+            result = discover_acp_options(
+                ["fake"], cwd=Path(directory).resolve(), env={}, model="haiku",
+                client_factory=ChangingClient,
+            )
+        self.assertEqual([item["value"] for item in result["models"]], ["haiku"])
+
 
 if __name__ == "__main__":
     unittest.main()

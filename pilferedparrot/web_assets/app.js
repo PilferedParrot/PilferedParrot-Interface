@@ -5,9 +5,9 @@ const state = {
   projects: [], selected_project: "",
   capability: "", models: {}, model_catalog: {}, default_provider: "codex",
   model_context_windows: {}, browser_theme: { active: false }, budgetsLoaded: false,
-  windowId: "main", windowProvider: "codex", providerModels: {}, authPending: {},
+  windowId: "main", windowProvider: "codex", providerModels: {}, workModelSelections: {}, authPending: {},
   authConfirmation: {}, authCodes: {}, providers: [], provider_templates: [],
-  providerDraft: null, preferences: {}, modelPolls: {}, modelFeedback: {},
+  providerDraft: null, preferences: {}, modelPolls: {}, modelProbeSequence: {}, modelFeedback: {},
   acpSetup: null, acpSetupMessage: "", gpuInventory: null, gpuMessage: "",
   initialized: false,
 };
@@ -443,6 +443,10 @@ function providerIds() {
 
 function defaultModel(provider) { return state.model_catalog?.[provider]?.default || ""; }
 
+function isACPProvider(provider) {
+  return state.provider_engines?.[provider] === "acp";
+}
+
 function preferredModel(provider) {
   return state.preferences?.work_models?.[provider] || defaultModel(provider);
 }
@@ -475,12 +479,13 @@ function providerModelOptions(provider) {
   const selected = providerModelChoice(provider);
   const options = Array.isArray(catalog.options) ? [...catalog.options] : [];
   if (selected && !options.some((item) => item.value === selected)) {
-    options.unshift({ value: selected, label: selected });
+    options.unshift({ value: selected, label: isACPProvider(provider)
+      ? `${selected} · unavailable` : selected, unavailable: isACPProvider(provider) });
   }
   if (!options.length) return '<option value="">Provider-selected model</option>';
   const providerDefault = catalog.default ? "" :
     `<option value="" ${selected ? "" : "selected"}>Provider-selected model</option>`;
-  return providerDefault + options.map((item) => `<option value="${escapeHtml(item.value)}" ${item.value === selected ? "selected" : ""}>${escapeHtml(modelOptionLabel(item, provider))}</option>`).join("");
+  return providerDefault + options.map((item) => `<option value="${escapeHtml(item.value)}" ${item.value === selected ? "selected" : ""} ${item.unavailable ? "disabled" : ""}>${escapeHtml(modelOptionLabel(item, provider))}</option>`).join("");
 }
 
 function providerModelFeedback(provider, message) {
@@ -500,42 +505,66 @@ function modelRefreshFailure(provider) {
     : "Could not refresh models. Check the provider connection and try again.";
 }
 
-async function pollProviderModels(provider, select = null) {
-  if (!provider || state.modelPolls[provider]) return state.modelPolls[provider];
+async function pollProviderModels(provider, select = null, requestedModel = "") {
+  const probeProject = state.selected_project;
+  const probeKey = isACPProvider(provider)
+    ? `${provider}:${probeProject}:${requestedModel || "discover"}` : provider;
+  if (!provider || state.modelPolls[probeKey]) return state.modelPolls[probeKey];
+  const probeSequence = isACPProvider(provider)
+    ? (state.modelProbeSequence[provider] = (state.modelProbeSequence[provider] || 0) + 1) : 0;
   const request = (async () => {
     if (select) select.setAttribute("aria-busy", "true");
     providerModelFeedback(provider, "Checking models…");
     try {
-      const catalog = await api(`/api/providers/${encodeURIComponent(provider)}/models`);
+      const selectedModel = requestedModel;
+      const selectedChoice = select?.matches("#modelSelect") ? select.value
+        : select?.matches("[data-provider-model]") ? select.value : providerModelChoice(provider);
+      if (isACPProvider(provider) && select?.matches("#modelSelect") && selectedChoice
+          && !state.workModelSelections[provider]) {
+        state.workModelSelections[provider] = selectedChoice;
+      }
+      const suffix = isACPProvider(provider) && selectedModel
+        ? `?model=${encodeURIComponent(selectedModel)}` : "";
+      const catalog = await api(`/api/providers/${encodeURIComponent(provider)}/models${suffix}`);
+      if (isACPProvider(provider) && (state.modelProbeSequence[provider] !== probeSequence
+          || state.selected_project !== probeProject)) {
+        return catalog;
+      }
       state.model_catalog[provider] = {
         ...state.model_catalog[provider], ...catalog,
         default: catalog.default || "",
         options: Array.isArray(catalog.options) ? catalog.options : [],
       };
+      const choiceToValidate = selectedModel || selectedChoice;
+      const selectedMissing = isACPProvider(provider) && choiceToValidate
+        && !state.model_catalog[provider].options.some((item) => item.value === choiceToValidate);
       state.model_context_windows[provider] = Object.fromEntries(
         state.model_catalog[provider].options
           .filter((item) => Number(item.max_context_window || item.context_window) > 0)
           .map((item) => [item.value, Number(item.max_context_window || item.context_window)]),
       );
-      const selected = providerModelChoice(provider);
+      const selected = select?.matches("#modelSelect")
+        ? selectedModel : providerModelChoice(provider);
       if (select?.matches("[data-provider-model]")) {
         select.innerHTML = providerModelOptions(provider);
         select.value = selected;
       } else if (provider === state.windowProvider) {
-        renderModelSelect(provider, activeChat()?.requested_model || selected);
+        renderModelSelect(provider, state.workModelSelections[provider]
+          || activeChat()?.requested_model || selected);
       }
-      providerModelFeedback(provider, catalog.warning
-        ? modelRefreshFailure(provider) : "Models refreshed.");
+      providerModelFeedback(provider, selectedMissing
+        ? `Saved model “${choiceToValidate}” is not advertised by this ACP agent.`
+        : catalog.warning ? modelRefreshFailure(provider) : "Models refreshed.");
       return catalog;
     } catch (error) {
       providerModelFeedback(provider, modelRefreshFailure(provider));
       return null;
     } finally {
       if (select?.isConnected) select.removeAttribute("aria-busy");
-      delete state.modelPolls[provider];
+      delete state.modelPolls[probeKey];
     }
   })();
-  state.modelPolls[provider] = request;
+  state.modelPolls[probeKey] = request;
   return request;
 }
 
@@ -629,16 +658,18 @@ function renderModelSelect(provider, requestedModel) {
   const select = $("#modelSelect");
   const catalog = state.model_catalog?.[provider] || { default: "", options: [] };
   const options = Array.isArray(catalog.options) ? [...catalog.options] : [];
-  if (provider === "codex" && !options.some((item) => item.value === "gpt-5.6-sol")) {
+  if (provider === "codex" && !isACPProvider(provider)
+      && !options.some((item) => item.value === "gpt-5.6-sol")) {
     options.unshift({ value: "gpt-5.6-sol", label: "GPT-5.6 Sol" });
   }
-  const requested = requestedModel || preferredModel(provider) || "";
+  const requested = state.workModelSelections[provider] || requestedModel || preferredModel(provider) || "";
   if (requested && !options.some((item) => item.value === requested)) {
-    options.unshift({ value: requested, label: requested });
+    options.unshift({ value: requested, label: isACPProvider(provider)
+      ? `${requested} · unavailable` : requested, unavailable: isACPProvider(provider) });
   }
   const providerDefault = catalog.default ? "" : '<option value="">Provider-selected model</option>';
   select.innerHTML = options.length
-    ? providerDefault + options.map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(modelOptionLabel(item, provider))}</option>`).join("")
+    ? providerDefault + options.map((item) => `<option value="${escapeHtml(item.value)}" ${item.unavailable ? "disabled" : ""}>${escapeHtml(modelOptionLabel(item, provider))}</option>`).join("")
     : '<option value="">Provider-selected model</option>';
   select.value = requested;
   select.disabled = !state.initialized || activeRunning() || selectionSavePending;
@@ -647,8 +678,14 @@ function renderModelSelect(provider, requestedModel) {
 
 const REASONING_LABELS = { none: "None", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Maximum", ultra: "Ultra" };
 function reasoningOptions(provider, model) {
-  if (provider !== "codex") return [];
   const option = state.model_catalog?.[provider]?.options?.find((item) => item.value === model);
+  if (state.provider_engines?.[provider] === "acp") {
+    if (state.model_catalog?.[provider]?.acp_options?.current_model !== model) return [];
+    const liveEfforts = state.model_catalog?.[provider]?.acp_options?.efforts;
+    return Array.isArray(liveEfforts) ? liveEfforts.map((item) => item.value).filter(Boolean)
+      : Array.isArray(option?.reasoning_efforts) ? option.reasoning_efforts : [];
+  }
+  if (provider !== "codex") return [];
   return Array.isArray(option?.reasoning_efforts) ? option.reasoning_efforts : ["low", "medium", "high"];
 }
 function renderReasoningSelect(provider, model, effort, disabled, chatSurface = false) {
@@ -657,7 +694,8 @@ function renderReasoningSelect(provider, model, effort, disabled, chatSurface = 
   $("#reasoningControl").hidden = !options.length;
   const catalog = state.model_catalog?.[provider] || {};
   const defaultLabel = (chatSurface ? catalog.chat_reasoning_default_label : catalog.reasoning_default_label)
-    || (chatSurface ? "Chat default" : "Codex default");
+    || (state.provider_engines?.[provider] === "acp"
+      ? "Agent default" : chatSurface ? "Chat default" : "Codex default");
   select.innerHTML = `<option value="">${escapeHtml(defaultLabel)}</option>` + options.map((value) =>
     `<option value="${escapeHtml(value)}">${escapeHtml(REASONING_LABELS[value] || value)}</option>`).join("");
   select.value = options.includes(effort) ? effort : "";
@@ -733,6 +771,7 @@ function renderChats() {
     const chatId = button.dataset.chat;
     try {
       const full = await hydrateChat(chatId);
+      if (chatId !== state.activeId) delete state.workModelSelections[state.windowProvider];
       state.activeId = chatId;
       try { sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, chatId); } catch (_error) {}
       state.draftCwd = projectOfChat(full);
@@ -1304,7 +1343,8 @@ function renderHeader() {
     context.className = "context-pie-card";
     renderContextSummary(null);
   }
-  renderModelSelect(state.windowProvider, chat?.requested_model || "");
+  renderModelSelect(state.windowProvider, state.workModelSelections[state.windowProvider]
+    || chat?.requested_model || "");
   renderReasoningSelect(state.windowProvider, $("#modelSelect").value,
     chat ? chat.reasoning_effort : draftReasoningEffort,
     !state.initialized || activeRunning() || selectionSavePending);
@@ -1653,6 +1693,7 @@ async function createChat(requestedModel = "") {
       }),
     });
     state.chats.unshift(chat);
+    if (state.workModelSelections) delete state.workModelSelections[provider];
     state.activeId = chat.id;
     state.selected_project = chat.project_cwd || chat.cwd;
     reportActiveSession();
@@ -1692,6 +1733,7 @@ async function selectProject(path, { newSession = false } = {}) {
       projectOfChat(chat) === selection.selected_project));
     if (existing) {
       const full = await hydrateChat(existing.id);
+      if (existing.id !== state.activeId) delete state.workModelSelections[state.windowProvider];
       state.activeId = existing.id;
       try { sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, existing.id); } catch (_error) {}
       $("#prompt").value = cachedDraft(full);
@@ -1846,6 +1888,7 @@ function applyServerState(initial) {
   chats.forEach((chat) => { chat.draft = cachedDraft(chat); });
   state.activeId = chats.some((chat) => chat.id === activeId)
     ? activeId : latestUsedChat(chats)?.id || null;
+  if (state.activeId !== activeId) delete state.workModelSelections[state.windowProvider];
   try {
     if (state.activeId) sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, state.activeId);
   } catch (_error) {}
@@ -2631,10 +2674,16 @@ $("#providerConnectionList").addEventListener("change", async (event) => {
   if (!select) return;
   select.disabled = true;
   try {
-    state.acpSetup = await api(`/api/acp/providers/${encodeURIComponent(select.dataset.acpEngine)}/engine`, {
+    const provider = select.dataset.acpEngine;
+    state.acpSetup = await api(`/api/acp/providers/${encodeURIComponent(provider)}/engine`, {
       method: "POST", body: JSON.stringify({ engine: select.value }),
     });
+    state.provider_engines = { ...state.provider_engines, [provider]: select.value };
     state.acpSetupMessage = "Transport saved. The next turn starts a new provider session.";
+    if (provider === state.windowProvider) {
+      await pollProviderModels(provider);
+      render();
+    }
   } catch (error) { state.acpSetupMessage = error.message; }
   renderProviderConnections();
 });
@@ -2698,16 +2747,29 @@ async function saveWorkSelection(modelChanged = false) {
   if (selectionSavePending || activeRunning()) return;
   const chat = activeChat();
   const model = $("#modelSelect").value;
-  const selected = $("#reasoningSelect").value || null;
-  const effort = reasoningOptions(state.windowProvider, model).includes(selected) ? selected : null;
+  let selected = $("#reasoningSelect").value || null;
+  let effort = reasoningOptions(state.windowProvider, model).includes(selected) ? selected : null;
   const previousModel = chat?.requested_model;
   selectionSavePending = true;
+  if (modelChanged) state.workModelSelections[state.windowProvider] = model;
   $("#modelSelect").disabled = true;
   $("#reasoningSelect").disabled = true;
   $("#sendButton").disabled = true;
   $("#newWorkSession").disabled = true;
   stateAppliedSequence = ++stateRequestSequence;
   try {
+    if (modelChanged && isACPProvider(state.windowProvider) && model) {
+      const catalog = await pollProviderModels(state.windowProvider, null, model);
+      if (!catalog || catalog.acp_options?.current_model !== model
+          || state.model_catalog[state.windowProvider]?.acp_options?.current_model !== model
+          || !catalog.options?.some((item) => item.value === model)) {
+        throw new Error(`“${model}” is not an available model for this ACP agent. Your selection is kept for review.`);
+      }
+      renderReasoningSelect(state.windowProvider, model, selected,
+        !state.initialized || activeRunning() || selectionSavePending);
+      selected = $("#reasoningSelect").value || null;
+      effort = reasoningOptions(state.windowProvider, model).includes(selected) ? selected : null;
+    }
     if (modelChanged && model) {
       state.preferences = await api("/api/preferences/provider", {
         method: "POST", body: JSON.stringify({ provider: state.windowProvider, model }),
@@ -2721,10 +2783,16 @@ async function saveWorkSelection(modelChanged = false) {
     } else {
       draftReasoningEffort = effort;
     }
+    if (modelChanged) delete state.workModelSelections[state.windowProvider];
     if (modelChanged && selected && !effort) toast("Reasoning reset to default for this model.");
   } catch (error) {
-    if (chat) chat.requested_model = previousModel;
-    toast(error.message);
+    if (isACPProvider(state.windowProvider) && modelChanged) {
+      toast(error.message, "error");
+    } else {
+      delete state.workModelSelections[state.windowProvider];
+      if (chat) chat.requested_model = previousModel;
+      toast(error.message);
+    }
   } finally {
     stateAppliedSequence = ++stateRequestSequence;
     selectionSavePending = false;

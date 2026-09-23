@@ -61,7 +61,11 @@ class ServerApp(Protocol):
     def work_event_closed(self) -> bool: ...
     def current_chat_state(self) -> Any: ...
     def budgets(self) -> dict[str, Any]: ...
-    def poll_provider_models(self, provider: str) -> Any: ...
+    def poll_provider_models(
+        self, provider: str, *, model: str | None = None,
+        window_id: str = "main", window_provider: str | None = None,
+        scope: str = "dashboard",
+    ) -> Any: ...
     def provider_update(self, provider: str) -> Any: ...
     def acp_setup(self, *, provider: str | None = None) -> Any: ...
     def install_acp_adapters(self, *, provider: str | None = None) -> Any: ...
@@ -696,13 +700,38 @@ def make_handler(
                                 if context["scope"] == "dashboard" or name == context.get("provider")})
             elif re.fullmatch(r"/api/providers/[^/]+/models", path):
                 provider = path.split("/")[3]
-                scope = self._request_capability_scope()
-                context = self._request_capability_context() if scope == "chat" else None
-                if scope not in {"dashboard", "chat"} or scope == "chat" \
-                        and (context is None or context.get("provider") != provider):
-                    self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
+                engine = app.config.get(provider, {}).get("engine")
+                if provider in {"codex", "claude"} and engine == "acp":
+                    context = self._request_capability_context()
+                    scope = context.get("scope") if context else None
+                    own_chat = scope == "chat" and context.get("provider") == provider
+                    own_dashboard = scope == "dashboard" and (
+                        context.get("window_id") == "main"
+                        or context.get("provider") == provider
+                    )
+                    if not own_chat and not own_dashboard:
+                        self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
+                    elif own_chat:
+                        self._json(app.poll_provider_models(provider, scope="chat"))
+                    else:
+                        query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+                        selected = query.get("model")
+                        if selected is not None and len(selected) != 1:
+                            raise ValueError("model must be specified once")
+                        self._json(app.poll_provider_models(
+                            provider, model=selected[0] if selected else None,
+                            window_id=context.get("history_id") or context.get("window_id") or "main",
+                            window_provider=context.get("provider"),
+                            scope=context["scope"],
+                        ))
                 else:
-                    self._json(app.poll_provider_models(provider))
+                    scope = self._request_capability_scope()
+                    context = self._request_capability_context() if scope == "chat" else None
+                    if scope not in {"dashboard", "chat"} or scope == "chat" \
+                            and (context is None or context.get("provider") != provider):
+                        self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
+                    else:
+                        self._json(app.poll_provider_models(provider))
             elif re.fullmatch(r"/api/providers/[^/]+/update", path):
                 provider = path.split("/")[3]
                 context = self._request_capability_context()
