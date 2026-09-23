@@ -7,6 +7,8 @@ blobs stay in the private checkpoint directory and are never served.
 from __future__ import annotations
 
 import os
+import ntpath
+import re
 import stat
 import threading
 from pathlib import Path
@@ -20,10 +22,121 @@ RESERVED_TURN_BYTES = 210 * 1024 * 1024
 MAX_CHECKPOINTS = 512
 MAX_VISIBLE_CHANGES = 100
 MAX_VISIBLE_COVERAGE = 30
+OBSERVATION_LABEL = "Changes observed during this turn; authorship unknown"
+_OMITTED_PATH = "[path omitted]"
+_CHECKPOINT_ID = re.compile(r"[0-9a-f]{32}\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class ObservationUnavailable(RuntimeError):
     pass
+
+
+def _public_count(value: Any, maximum: int = 1_000_000) -> int | None:
+    return value if type(value) is int and 0 <= value <= maximum else None
+
+
+def _public_path(value: Any, *, allow_root: bool = False) -> str | None:
+    if not isinstance(value, str):
+        return None
+    if value == ".":
+        return value if allow_root else None
+    try:
+        size = len(value.encode("utf-8", "surrogateescape"))
+    except UnicodeError:
+        return None
+    if not 0 < size <= 512 or os.path.isabs(value) or ntpath.isabs(value) \
+            or any(part in {"", ".", ".."} for part in value.split("/")) \
+            or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        return None
+    return value
+
+
+def _public_entry(value: Any) -> dict[str, Any] | None | bool:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        return False
+    if value.get("type") == "directory":
+        return {"type": "directory"}
+    size = _public_count(value.get("size"), 100 * 1024 * 1024)
+    digest = value.get("sha256")
+    if value.get("type") != "file" or size is None \
+            or not isinstance(digest, str) or _SHA256.fullmatch(digest) is None:
+        return False
+    return {"type": "file", "size": size, "sha256": digest}
+
+
+def _public_coverage(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict) or not isinstance(value.get("incomplete_paths"), list) \
+            or type(value.get("truncated")) is not bool:
+        return None
+    count = _public_count(value.get("incomplete_count"))
+    if count is None or count < len(value["incomplete_paths"]):
+        return None
+    original_paths = value["incomplete_paths"][:MAX_VISIBLE_COVERAGE]
+    if any(not isinstance(path, str) for path in original_paths):
+        return None
+    paths = [_public_path(path, allow_root=True) or _OMITTED_PATH
+             for path in original_paths]
+    return {"incomplete_count": count, "incomplete_paths": paths,
+            "truncated": value["truncated"] or len(value["incomplete_paths"]) > MAX_VISIBLE_COVERAGE}
+
+
+def public_observation_summary(value: Any) -> dict[str, Any] | None:
+    """Validate and bound a persisted summary before any browser response.
+
+    This is also used for imported JSON/SQLite trees: persisted dictionaries
+    are untrusted, even when PPI normally generated them.
+    """
+    if not isinstance(value, dict) or value.get("label") != OBSERVATION_LABEL \
+            or not isinstance(value.get("status"), str) \
+            or value["status"] not in {"complete", "incomplete"} \
+            or not isinstance(value.get("coverage"), dict) \
+            or not isinstance(value.get("changes"), list) \
+            or type(value.get("changes_truncated")) is not bool:
+        return None
+    before_id = value.get("before_checkpoint_id")
+    after_id = value.get("after_checkpoint_id")
+    if not isinstance(before_id, str) or _CHECKPOINT_ID.fullmatch(before_id) is None \
+            or after_id is not None and (
+                not isinstance(after_id, str) or _CHECKPOINT_ID.fullmatch(after_id) is None
+            ):
+        return None
+    count = _public_count(value.get("change_count"))
+    unverified = _public_count(value.get("unverified_count"))
+    if count is None or unverified is None or count < len(value["changes"]):
+        return None
+    before = _public_coverage(value["coverage"].get("before"))
+    after = _public_coverage(value["coverage"].get("after"))
+    if before is None or after is None:
+        return None
+    changes = []
+    for item in value["changes"][:MAX_VISIBLE_CHANGES]:
+        if not isinstance(item, dict) or not isinstance(item.get("kind"), str) \
+                or item["kind"] not in {"created", "deleted", "modified"} \
+                or not isinstance(item.get("path"), str):
+            return None
+        path = _public_path(item["path"]) or _OMITTED_PATH
+        prior = _public_entry(item.get("before"))
+        later = _public_entry(item.get("after"))
+        if prior is False or later is False:
+            return None
+        changes.append({"path": path, "kind": item["kind"],
+                        "before": prior, "after": later})
+    public = {
+        "label": OBSERVATION_LABEL,
+        "status": value["status"],
+        "before_checkpoint_id": before_id,
+        "coverage": {"before": before, "after": after},
+        "change_count": count,
+        "changes_truncated": value["changes_truncated"] or len(value["changes"]) > MAX_VISIBLE_CHANGES,
+        "changes": changes,
+        "unverified_count": unverified,
+    }
+    if after_id is not None:
+        public["after_checkpoint_id"] = after_id
+    return public
 
 
 def _storage_bytes(folder: Path) -> int:

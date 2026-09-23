@@ -1055,12 +1055,15 @@ dialog::backdrop { background: rgba(0, 0, 0, .62); }
 .composer-setting > span { padding-left: 8px; color: var(--muted); font-size: 16px; }
 .observe-files-option { display: inline-flex; align-items: center; gap: 7px; margin: 2px 8px 5px; color: var(--muted); font-size: 16px; cursor: pointer; }
 .observe-files-option[hidden] { display: none; }
-.observed-files { margin-top: 14px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 9px; font-size: 16px; }
+.observed-files { margin-top: 14px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 9px; font-size: 16px; overflow-wrap: anywhere; }
+.observed-files code { white-space: normal; overflow-wrap: anywhere; }
 .observed-files summary { cursor: pointer; font-weight: 600; }
 .observed-files p { margin: 7px 0 0; }
 .observed-files ul { margin: 7px 0 0; padding-left: 19px; }
 .observed-files li { margin: 5px 0; }
 .observed-files li small { display: block; color: var(--muted); }
+.observed-evidence { margin: 2px 0 8px; color: var(--muted); font-size: 16px; }
+.observed-evidence summary { font-weight: 400; }
 .composer .composer-setting select,
 .chat-composer .composer-setting select { width: 100%; min-width: 0; max-width: 260px; padding: 7px 24px 7px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); color: var(--text); font-size: 16px; cursor: pointer; }
 .composer-setting select:disabled { opacity: .6; cursor: default; }

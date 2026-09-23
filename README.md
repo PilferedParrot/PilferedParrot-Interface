@@ -99,6 +99,10 @@ The source branch includes changes beyond the published 0.7.1 assets:
   adapters on demand, choose transport per provider, and show a requested GPU snapshot.
   The Work picker reads live ACP model, effort and mode choices without sending a prompt.
   Streamed text updates the pending answer without rebuilding earlier messages.
+- On POSIX systems, **Observe files for this turn** adds a bounded before/after
+  [file change summary](docs/observed-files.md) to a Work response. It reports
+  observed paths and scan gaps without attributing edits to the agent. Private
+  captured bytes stay outside the project; this version offers no rewind.
 - New Codex Chat sessions default to GPT-6 Luna with low reasoning when no Chat selection is
   saved. An explicit saved model and reasoning selection takes precedence.
 - When work remains unfinished, providers receive continuation guidance to leave a copyable

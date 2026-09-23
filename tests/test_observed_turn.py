@@ -194,8 +194,98 @@ class ObservedTurnTests(unittest.TestCase):
         self.assertEqual(projected["messages"][-1]["observed_files"]["status"], "complete")
         self.assertNotIn("SECRET-BLOB", json.dumps(projected))
 
+    def test_json_and_endpoint_share_bounded_public_summary(self):
+        message = self.run_turn(self.succeeded, observe=True)
+        with self.app.store.lock:
+            persisted = self.app.store.get(self.chat["id"])["messages"][-1]["observed_files"]
+            persisted["private_blob"] = "RAW-PRIVATE-BYTES-9482"
+            persisted["storage"] = "/private/checkpoints/secret-path"
+            self.app.store.save()
+        public = self.app.chat_state(self.chat["id"], window_id="main")
+        summary = self.app.observed_files_summary(
+            self.chat["id"], message["id"], window_id="main",
+        )
+        self.assertEqual(public["messages"][-1]["observed_files"], summary)
+        self.assertNotIn("RAW-PRIVATE-BYTES-9482", json.dumps(public))
+        self.assertNotIn("/private/checkpoints/secret-path", json.dumps(summary))
+
+        self.app.config["web"]["port"] = 0
+        capability = self.app.issue_capability("dashboard", window_id="main", provider="codex")
+        server = BrowserHTTPServer(("127.0.0.1", 0), make_handler(self.app))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        url = (f"http://127.0.0.1:{server.server_address[1]}/api/chats/"
+               f"{self.chat['id']}/observed-files/{message['id']}")
+        request = Request(url, headers={"X-PilferedParrot-Capability": capability})
+        with urlopen(request) as response:
+            self.assertEqual(json.load(response), summary)
+
+    def test_imported_absolute_observation_path_is_redacted(self):
+        message = self.run_turn(self.succeeded, observe=True)
+        with self.app.store.lock:
+            observed = self.app.store.get(self.chat["id"])["messages"][-1]["observed_files"]
+            observed["changes"] = [{"path": "/private/secret-path", "kind": "created",
+                                    "before": None, "after": {"type": "directory"}}]
+            observed["change_count"] = 1
+            self.app.store.save()
+        public = self.app.chat_state(self.chat["id"], window_id="main")
+        summary = public["messages"][-1]["observed_files"]
+        self.assertEqual(summary["changes"][0]["path"], "[path omitted]")
+        self.assertNotIn("/private/secret-path", json.dumps(summary))
+        self.assertEqual(summary, self.app.observed_files_summary(
+            self.chat["id"], message["id"], window_id="main",
+        ))
+
+    def test_malformed_imported_status_and_kind_are_omitted(self):
+        message = self.run_turn(self.succeeded, observe=True)
+        with self.app.store.lock:
+            observed = self.app.store.get(self.chat["id"])["messages"][-1]["observed_files"]
+            observed["status"] = []
+            self.app.store.save()
+        self.assertNotIn("observed_files", self.app.chat_state(
+            self.chat["id"], window_id="main",
+        )["messages"][-1])
+        with self.assertRaises(KeyError):
+            self.app.observed_files_summary(self.chat["id"], message["id"], window_id="main")
+
+        with self.app.store.lock:
+            observed = self.app.store.get(self.chat["id"])["messages"][-1]["observed_files"]
+            observed["status"] = "complete"
+            observed["changes"] = [{"path": "safe.txt", "kind": {},
+                                    "before": None, "after": {"type": "directory"}}]
+            observed["change_count"] = 1
+            self.app.store.save()
+        self.assertNotIn("observed_files", self.app.chat_state(
+            self.chat["id"], window_id="main",
+        )["messages"][-1])
+
+    def test_long_coverage_path_remains_visible_as_incomplete(self):
+        nested = self.workspace
+        for _ in range(3):
+            nested = nested / ("x" * 180)
+            nested.mkdir()
+        message = self.run_turn(self.succeeded, observe=True)
+        summary = message["observed_files"]
+        self.assertEqual(summary["status"], "incomplete")
+        self.assertGreater(summary["coverage"]["before"]["incomplete_count"], 0)
+        self.assertIn("[path omitted]", summary["coverage"]["before"]["incomplete_paths"])
+
+    def test_control_character_filename_keeps_count_without_exposing_control(self):
+        def dispatch(_provider, _prompt, cwd, *_rest):
+            (cwd / "line\nbreak.txt").write_text("private bytes")
+            return RunResult("done", 0)
+
+        message = self.run_turn(dispatch, observe=True)
+        summary = message["observed_files"]
+        self.assertEqual(summary["change_count"], 1)
+        self.assertEqual(summary["changes"][0]["path"], "[path omitted]")
+        self.assertNotIn("line\nbreak.txt", json.dumps(summary))
+
     def test_wrong_window_summary_is_forbidden(self):
         message = self.run_turn(self.succeeded, observe=True)
+        self.app.config["web"]["port"] = 0
         other = self.app.issue_capability("dashboard", window_id="other", provider="codex")
         server = BrowserHTTPServer(("127.0.0.1", 0), make_handler(self.app))
         thread = threading.Thread(target=server.serve_forever, daemon=True)

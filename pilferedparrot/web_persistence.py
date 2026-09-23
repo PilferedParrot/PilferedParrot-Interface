@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .config import expanded_path
+from .observed_turn import public_observation_summary
 from .sqlite_state import SQLiteStateStore, StateStoreError
 from .sqlite_transform_report import build_transform_report
 
@@ -79,23 +80,6 @@ _PUBLIC_MESSAGE_FIELDS = frozenset({
     "whiteboard_discovered",
     "observed_files",
 })
-
-_OBSERVED_FILE_SHAPE = {"type": None, "size": None, "sha256": None}
-_OBSERVED_COVERAGE_SHAPE = {
-    "incomplete_count": None, "incomplete_paths": [None], "truncated": None,
-}
-_OBSERVED_SUMMARY_SHAPE = {
-    "label": None, "status": None,
-    "before_checkpoint_id": None, "after_checkpoint_id": None,
-    "coverage": {"before": _OBSERVED_COVERAGE_SHAPE,
-                 "after": _OBSERVED_COVERAGE_SHAPE},
-    "change_count": None, "changes_truncated": None,
-    "changes": [{"path": None, "kind": None,
-                 "before": _OBSERVED_FILE_SHAPE,
-                 "after": _OBSERVED_FILE_SHAPE}],
-    "unverified_count": None,
-}
-
 
 def _public_fields(value: Any, allowed: frozenset[str]) -> dict[str, Any]:
     return {key: item for key, item in value.items() if key in allowed} \
@@ -230,6 +214,20 @@ def _public_acp_update(entry: Any) -> dict[str, Any] | None:
         if isinstance(entry.get("id"), str) else None
 
 
+def _public_observed_messages(result: dict[str, Any]) -> dict[str, Any]:
+    messages = result.get("messages")
+    if isinstance(messages, list):
+        for message in messages:
+            if not isinstance(message, dict) or "observed_files" not in message:
+                continue
+            summary = public_observation_summary(message["observed_files"])
+            if summary is None:
+                message.pop("observed_files", None)
+            else:
+                message["observed_files"] = summary
+    return result
+
+
 def _sqlite_public_projection(result: dict[str, Any]) -> dict[str, Any]:
     """Keep opaque future fields out of SQLite-backed browser responses."""
     projected = {key: value for key, value in result.items()
@@ -291,14 +289,9 @@ def _sqlite_public_projection(result: dict[str, Any]) -> dict[str, Any]:
                     ]
             else:
                 message.pop("response_identity", None)
-            observed = message.get("observed_files")
-            if isinstance(observed, dict):
-                message["observed_files"] = _public_shape(observed, _OBSERVED_SUMMARY_SHAPE)
-            else:
-                message.pop("observed_files", None)
             public_messages.append(message)
         projected["messages"] = public_messages
-    return projected
+    return _public_observed_messages(projected)
 
 
 def _retired_on_load(path: tuple[str, ...], key: str) -> bool:
@@ -1260,6 +1253,7 @@ class PersistentChatStore:
         })
         if self._sqlite_state is not None:
             result = _sqlite_public_projection(result)
+        result = _public_observed_messages(result)
         result["project_cwd"] = _canonical_project_cwd(chat.get("cwd"))
         result.update(self.context_public(chat))
         return result
@@ -1314,6 +1308,7 @@ class PersistentChatStore:
         })
         if self._sqlite_state is not None:
             result = _sqlite_public_projection(result)
+        result = _public_observed_messages(result)
         usage = self._context_usage(
             int(chat_thread.get("context_chars", 0)), self.chat_warning_chars,
             limit_tokens=chat_thread.get("context_limit_tokens"),

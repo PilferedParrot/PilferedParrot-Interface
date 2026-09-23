@@ -46,7 +46,9 @@ from .processes import provider_argv
 from .ledger import append_run
 from .feedback import FeedbackStore
 from .web_events import EventHub
-from .observed_turn import ObservationUnavailable, TurnObservations
+from .observed_turn import (
+    ObservationUnavailable, TurnObservations, public_observation_summary,
+)
 from .harness import metric, outcome_summary, render_handoff
 from .web_harness import HarnessWorkflow
 from .model import (
@@ -1673,10 +1675,10 @@ class PilferedParrotApp(HarnessWorkflow):
             if chat.get("window_id", "main") != window_id:
                 raise PermissionError("work session belongs to another window")
             message = self._message(chat, message_id)
-            summary = message.get("observed_files")
-            if not isinstance(summary, dict):
+            summary = public_observation_summary(message.get("observed_files"))
+            if summary is None:
                 raise KeyError(message_id)
-            return deepcopy(summary)
+            return summary
 
     def work_permissions(self, chat_id: str, *, window_id: str) -> dict[str, Any]:
         with self.store.lock:

@@ -1363,9 +1363,9 @@ function renderObservedFiles(observed) {
   const incomplete = Number(coverage.before?.incomplete_count || 0) + Number(coverage.after?.incomplete_count || 0);
   const status = observed.status === "complete" ? "Coverage complete under scan policy" : `Incomplete coverage (${incomplete} scan issue${incomplete === 1 ? "" : "s"})`;
   const item = (entry) => entry ? `${escapeHtml(entry.type || "unknown")}${entry.type === "file" ? ` · ${Number(entry.size) || 0} bytes · SHA-256 ${escapeHtml(entry.sha256 || "")}` : ""}` : "absent";
-  return `<details class="observed-files"><summary>Changes observed during this turn; authorship unknown · ${count} change${count === 1 ? "" : "s"}</summary>
+  return `<details class="observed-files"><summary>${count} observed file change${count === 1 ? "" : "s"} · authorship unknown</summary>
     <p>${escapeHtml(status)}${observed.changes_truncated ? " · Change list limited to 100" : ""}${observed.unverified_count ? ` · ${Number(observed.unverified_count)} unverified path(s)` : ""}</p>
-    ${changes.length ? `<ul>${changes.map((change) => `<li><strong>${escapeHtml(change.kind)}</strong> <code>${escapeHtml(change.path)}</code><small>Before: ${item(change.before)}; after: ${item(change.after)}</small></li>`).join("")}</ul>` : "<p>No verified changes in the visible summary.</p>"}
+    ${changes.length ? `<ul>${changes.map((change) => `<li><strong>${escapeHtml(change.kind)}</strong> <code>${escapeHtml(change.path)}</code><details class="observed-evidence"><summary>Sizes and SHA-256</summary><small>Before: ${item(change.before)}; after: ${item(change.after)}</small></details></li>`).join("")}</ul>` : "<p>No verified changes in the visible summary.</p>"}
     ${incomplete ? `<p>Incomplete paths: ${[...(coverage.before?.incomplete_paths || []), ...(coverage.after?.incomplete_paths || [])].slice(0, 30).map(escapeHtml).join(", ")}</p>` : ""}
   </details>`;
 }
