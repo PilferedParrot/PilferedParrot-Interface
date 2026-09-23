@@ -17,6 +17,8 @@ class WindowsPackageSourceTests(unittest.TestCase):
             "packaging/windows/README-WINDOWS.txt",
             "packaging/windows/build.ps1",
             "packaging/windows/entrypoint.py",
+            "packaging/acp-adapters/package.json",
+            "packaging/acp-adapters/package-lock.json",
             "PilferedParrot.cmd",
             "pilferedparrot/feedback-baseline.json",
             "pilferedparrot/web_assets/feedback.js",
@@ -81,6 +83,9 @@ class WindowsPackageSourceTests(unittest.TestCase):
         self.assertEqual(hook_call, {"package": "pilferedparrot", "kwargs": {"include_py_files": True}})
         self.assertTrue(any(path == str(ROOT / "config.example.json") for path, _ in analysis_kwargs["datas"]))
         self.assertTrue(any(path == str(ROOT / "packaging/windows/README-WINDOWS.txt") for path, _ in analysis_kwargs["datas"]))
+        for name in ("package.json", "package-lock.json"):
+            self.assertIn((str(ROOT / "packaging/acp-adapters" / name),
+                           "packaging/acp-adapters"), analysis_kwargs["datas"])
         self.assertTrue(calls["exe"][1]["exclude_binaries"])
         self.assertEqual(calls["collect"][1]["name"], "PilferedParrot")
 
