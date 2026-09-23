@@ -3,6 +3,8 @@
   const escapeHtml = globalThis.PilferedParrotMarkdown.escapeHtml;
   const STALE_AFTER_SECONDS = 5 * 60;
   const validNumber = (value) => typeof value === "number" && Number.isFinite(value);
+  // Local display preference; keep the provider's allowance data intact.
+  const HIDDEN_CODEX_BUCKETS = new Set(["gpt reserve", "gpt 5.3 codex spark", "codex spark"]);
 
   function windows(budget) {
     const values = Array.isArray(budget?.windows) && budget.windows.length
@@ -22,7 +24,10 @@
 
   function supportedWindows(provider, budget) {
     if (provider !== "codex" || budget?.usage_status !== "available") return [];
-    return windows(budget);
+    return windows(budget).filter((item) => {
+      const bucket = String(item.label || "").split("·")[0].trim().toLowerCase().replace(/[-_]+/g, " ");
+      return !HIDDEN_CODEX_BUCKETS.has(bucket);
+    });
   }
 
   function resetTime(timestamp) {
@@ -66,6 +71,7 @@
     const state = freshness(budget);
     const status = budget?.usage_status;
     const items = supportedWindows(provider, budget);
+    if (provider === "codex" && status === "available" && windows(budget).length && !items.length) return "";
     const unavailable = status !== "available" || !items.length;
     const note = budget?.usage_note || "Allowance unavailable";
     const freshnessLabel = state.label;

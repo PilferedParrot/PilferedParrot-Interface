@@ -17,6 +17,7 @@ from typing import Any, Callable
 from .config import (
     codex_additional_write_dirs, expanded_path, model_context_window, resolve_command,
 )
+from .context_telemetry import CodexUsageReader, codex_live_usage as _live_usage_from_event
 from .desktop_auth import provider_environment
 from .model import Conversation
 from .processes import provider_argv
@@ -48,6 +49,14 @@ class RunCancelled(RuntimeError):
 
 
 ProgressCallback = Callable[[str, str], None]
+
+
+def _provider_process_environment() -> dict[str, str]:
+    """Do not let an enclosing Codex agent impersonate the launched provider."""
+    environment = provider_environment()
+    environment.pop("CODEX_THREAD_ID", None)
+    environment.pop("CODEX_SESSION_ID", None)
+    return environment
 
 
 def _check_cancelled(cancel_event: threading.Event | None) -> None:
@@ -117,7 +126,7 @@ def _capture_process(
         text=True, encoding="utf-8", errors="replace",
         cwd=cwd,
         start_new_session=True,
-        env=provider_environment(),
+        env=_provider_process_environment(),
     )
     deadline = time.monotonic() + timeout_seconds
     first_communicate = True
@@ -164,7 +173,7 @@ def _stream_process(
         cwd=cwd,
         bufsize=1,
         start_new_session=True,
-        env=provider_environment(),
+        env=_provider_process_environment(),
     )
     assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
     lines: Queue[tuple[str, str | None]] = Queue()
@@ -329,26 +338,6 @@ def _claude_runtime_metadata(event: dict[str, Any]) -> tuple[str | None, str | N
     return None, None
 
 
-def _live_usage_from_event(
-    event: dict[str, Any],
-) -> tuple[int, int, int | None] | None:
-    """Extract the most recent model request from a Codex token-count event."""
-    payload = event.get("payload") if event.get("type") == "event_msg" else event
-    if not isinstance(payload, dict) or payload.get("type") != "token_count":
-        return None
-    info = payload.get("info")
-    if not isinstance(info, dict):
-        return None
-    usage = info.get("last_token_usage")
-    if not isinstance(usage, dict):
-        return None
-    input_tokens = _token_count(usage.get("input_tokens"))
-    output_tokens = _token_count(usage.get("output_tokens"))
-    if input_tokens is None or output_tokens is None:
-        return None
-    return input_tokens, output_tokens, _token_count(info.get("model_context_window"))
-
-
 def _codex_session_live_usage(
     session_id: str | None, config: dict[str, Any],
 ) -> tuple[int, int, int | None] | None:
@@ -398,7 +387,7 @@ def dispatch_codex(prompt: str, cwd: Path, conversation: Conversation, config: d
     proc = subprocess.Popen(
         provider_argv(command), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None,
         text=True, encoding="utf-8", errors="replace", cwd=cwd, bufsize=1,
-        env=provider_environment(),
+        env=_provider_process_environment(),
     )
     assert proc.stdin is not None and proc.stdout is not None
     proc.stdin.write(prompt)
@@ -442,7 +431,12 @@ def _codex_command(conversation: Conversation, config: dict[str, Any], cwd: Path
     approval_policy = codex.get("approval_policy")
     if approval_policy is not None:
         approval_policy = str(approval_policy).strip().lower()
-        if approval_policy not in {"untrusted", "on-failure", "on-request", "never"}:
+        if approval_policy == "untrusted":
+            raise ValueError(
+                "Codex approval policy 'untrusted' is no longer supported; "
+                "choose on-request, on-failure, or never"
+            )
+        if approval_policy not in {"on-failure", "on-request", "never"}:
             raise ValueError(f"unsupported Codex approval policy: {approval_policy}")
         command += ["--config", f'approval_policy="{approval_policy}"']
     context_limit = codex.get("context_window_limit_tokens")
@@ -461,14 +455,17 @@ def _codex_command(conversation: Conversation, config: dict[str, Any], cwd: Path
         # native multi-agent tools. A thread limit excludes the primary and
         # would still allow a child. Older CLIs must support agents.enabled.
         command += ["--config", "agents.enabled=false"]
-    for path in codex_additional_write_dirs(config):
+    additional_write_dirs = (
+        codex_additional_write_dirs(config) if sandbox == "workspace-write" else ()
+    )
+    for path in additional_write_dirs:
         if path != cwd:
             command += ["--add-dir", str(path)]
-    if sandbox != "read-only":
+    if sandbox == "workspace-write":
         from .whiteboard import whiteboard_directory
         board = whiteboard_directory(config)
         board.mkdir(parents=True, exist_ok=True)
-        if board != cwd and board not in codex_additional_write_dirs(config):
+        if board != cwd and board not in additional_write_dirs:
             command += ["--add-dir", str(board)]
     if codex.get("model"):
         command += ["--model", codex["model"]]
@@ -503,7 +500,6 @@ def capture_codex(
     reported_reasoning_effort: str | None = None
     usage_callback = getattr(cancel_event, "_pilferedparrot_usage", None)
     last_observed = 0
-    from .context_telemetry import CodexUsageReader
     configured_home = os.environ.get("CODEX_HOME")
     usage_reader = CodexUsageReader(
         Path(configured_home).expanduser() if configured_home else
@@ -762,12 +758,21 @@ def capture_dispatch(
     conversation.provider = provider
     from .whiteboard import whiteboard_discovery
     prompt = prompt + whiteboard_discovery(conversation, config)
-    from .adapters import adapter_for
-    adapter = adapter_for(provider, config)
-    operation = adapter.resume if conversation.provider_session_id \
-        and adapter.capabilities.resume else adapter.run
-    return operation(prompt, cwd, conversation, cancel_event, (
-        (lambda event: on_progress(event.kind, event.text)) if on_progress else None))
+    from .whiteboard_native import (
+        cleanup_native_whiteboard_discovery, native_whiteboard_discovery,
+    )
+    prompt = prompt + native_whiteboard_discovery(conversation, config)
+    try:
+        from .continuation import continuation_rule
+        prompt = prompt + continuation_rule(provider, config)
+        from .adapters import adapter_for
+        adapter = adapter_for(provider, config)
+        operation = adapter.resume if conversation.provider_session_id \
+            and adapter.capabilities.resume else adapter.run
+        return operation(prompt, cwd, conversation, cancel_event, (
+            (lambda event: on_progress(event.kind, event.text)) if on_progress else None))
+    finally:
+        cleanup_native_whiteboard_discovery(conversation)
 
 
 def dispatch(
@@ -780,8 +785,17 @@ def dispatch(
     conversation.provider = provider
     from .whiteboard import whiteboard_discovery
     prompt = prompt + whiteboard_discovery(conversation, config)
-    from .adapters import adapter_for
-    result = adapter_for(provider, config).run(prompt, cwd, conversation)
+    from .whiteboard_native import (
+        cleanup_native_whiteboard_discovery, native_whiteboard_discovery,
+    )
+    prompt = prompt + native_whiteboard_discovery(conversation, config)
+    try:
+        from .continuation import continuation_rule
+        prompt = prompt + continuation_rule(provider, config)
+        from .adapters import adapter_for
+        result = adapter_for(provider, config).run(prompt, cwd, conversation)
+    finally:
+        cleanup_native_whiteboard_discovery(conversation)
     if result.text and provider != "qwen" \
             and config.get(provider, {}).get("adapter") != "openai_compatible":
         print(result.text)

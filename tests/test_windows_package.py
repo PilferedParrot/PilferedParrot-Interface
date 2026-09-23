@@ -18,6 +18,9 @@ class WindowsPackageSourceTests(unittest.TestCase):
             "packaging/windows/build.ps1",
             "packaging/windows/entrypoint.py",
             "PilferedParrot.cmd",
+            "pilferedparrot/feedback-baseline.json",
+            "pilferedparrot/web_assets/feedback.js",
+            "docs/feedback.md",
         ):
             self.assertTrue((ROOT / relative).is_file(), relative)
 

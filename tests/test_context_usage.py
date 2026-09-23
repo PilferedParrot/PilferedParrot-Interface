@@ -178,6 +178,7 @@ class ContextDataTests(unittest.TestCase):
             config["web"]["chat_store"] = str(Path(directory) / "chats.json")
             config["codex"]["models_cache"] = str(Path(directory) / "models.json")
             config["codex"]["model"] = "gpt-5.6-terra"
+            config["web"]["chat_model"] = "gpt-5.6-terra"
             config["codex"]["context_window_tokens"] = None
             Path(config["codex"]["models_cache"]).write_text(json.dumps({"models": [
                 {"slug": "gpt-5.6-terra", "display_name": "Terra",
@@ -423,7 +424,7 @@ class ContextPersistenceTests(unittest.TestCase):
             reset = app.reset_chat({"model": "gpt-5.6-luna"})
 
             self.assertEqual(reset["chat"]["model"], "gpt-5.6-luna")
-            self.assertEqual(reset["chat_history"][0]["model"], "gpt-5.6-terra")
+            self.assertEqual(reset["chat_history"][0]["model"], "gpt-6-luna")
 
     def test_completed_technical_message_uses_live_request_not_aggregate_usage(self):
         with tempfile.TemporaryDirectory() as directory:

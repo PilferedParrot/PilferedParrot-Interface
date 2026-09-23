@@ -81,3 +81,15 @@ listed in that diagnostic using your distribution’s package manager, then reru
   policy wrappers without an explicit, evaluated product decision.
 
 By contributing, you agree that your contribution is licensed under the Apache License 2.0.
+
+## Feedback and local fixes
+
+A report is an invitation to understand a problem, not a vote to expand scope.
+Use the [feedback review workflow](docs/feedback.md#turning-feedback-into-improvements)
+to distinguish defects, accessibility needs, and personal choices. Ask why a local
+fix helped, review its implementation, and link the response back to the issue.
+Never request conversation histories or unreviewed source dumps.
+
+When changing shipped Python/web sources or the app version, regenerate the
+voluntary comparison baseline with `python bin/update-feedback-baseline`.
+`python bin/update-feedback-baseline --check` must pass before packaging.

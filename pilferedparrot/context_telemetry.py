@@ -9,6 +9,34 @@ from pathlib import Path
 from typing import Any
 
 
+def codex_live_usage(event: dict[str, Any]) -> tuple[int, int, int | None] | None:
+    """Read context occupancy from the latest request, never cumulative usage."""
+    payload = event.get("payload") if event.get("type") == "event_msg" else event
+    if not isinstance(payload, dict) or payload.get("type") != "token_count":
+        return None
+    info = payload.get("info")
+    if not isinstance(info, dict):
+        return None
+    usage = info.get("last_token_usage")
+    if not isinstance(usage, dict):
+        return None
+    input_tokens = usage.get("input_tokens")
+    output_tokens = usage.get("output_tokens")
+    if any(type(value) is not int or value < 0 for value in (input_tokens, output_tokens)):
+        return None
+    if input_tokens == 0 and output_tokens == 0:
+        # After compaction Codex can report retained context only in the last
+        # request's total_tokens, with both component counters set to zero.
+        total = usage.get("total_tokens")
+        if type(total) is not int or total <= 0:
+            # An empty counter is not evidence that an existing conversation
+            # disappeared. Keep the previous sample and its observation time.
+            return None
+        input_tokens = total
+    window = info.get("model_context_window")
+    return input_tokens, output_tokens, window if type(window) is int and window > 0 else None
+
+
 class CodexUsageReader:
     """Follow only token-count records, without reading a growing log repeatedly."""
 
@@ -66,15 +94,7 @@ class CodexUsageReader:
                     continue
                 if not isinstance(event, dict):
                     continue
-                payload = event.get("payload") if event.get("type") == "event_msg" else event
-                if not isinstance(payload, dict) or payload.get("type") != "token_count":
-                    continue
-                info = payload.get("info")
-                usage = info.get("last_token_usage") if isinstance(info, dict) else None
-                if isinstance(usage, dict) and all(
-                    type(usage.get(key)) is int and usage[key] >= 0
-                    for key in ("input_tokens", "output_tokens")
-                ):
+                if codex_live_usage(event) is not None:
                     latest = event
             return latest
         except (OSError, ValueError):

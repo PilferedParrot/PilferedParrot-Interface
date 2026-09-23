@@ -139,7 +139,7 @@ DEFAULTS: dict[str, Any] = {
         "default_provider": "codex",
         "chat_store": "~/.local/state/pilferedparrot/chats.json",
         "model_catalog_store": None,
-        "chat_model": "gpt-5.6-terra",
+        "chat_model": "gpt-6-luna",
         "chat_reasoning_effort": "low",
         "chat_context_warning_chars": 80_000,
         "technical_context_warning_chars": 120_000,

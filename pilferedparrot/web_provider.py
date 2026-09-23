@@ -16,13 +16,14 @@ from typing import Any, Callable
 
 from .budgets import collect_budgets
 from .config import (
-    codex_additional_write_dirs, context_window_percent, effective_model,
+    context_window_percent, effective_model,
     model_context_window, model_max_context_window,
 )
 from .dispatch import RunCancelled, RunResult, capture_dispatch
 from .ledger import append_run
 from .model import PROVIDERS, Conversation, ProviderBudget
 from .qwen import ensure_qwen
+from .web_persistence import DEFAULT_CHAT_MODEL_OPTIONS
 
 
 @dataclass
@@ -68,8 +69,8 @@ class ProviderRunOrchestrator:
         store: Any | None = None,
         default_cwd: Path | None = None,
         default_provider: str = "codex",
-        chat_model: str = "gpt-5.6-terra",
-        chat_model_options: tuple[str, ...] = ("gpt-5.6-terra", "gpt-5.6-luna"),
+        chat_model: str = "gpt-6-luna",
+        chat_model_options: tuple[str, ...] = DEFAULT_CHAT_MODEL_OPTIONS,
         chat_reasoning_effort: str = "low",
         chat_context_warning_chars: int = 80_000,
         dispatch: Dispatch | None = None,
@@ -112,7 +113,8 @@ class ProviderRunOrchestrator:
         self.project_directory = project_directory
         self.migrate_project_path = migrate_project_path
         self.validate_workspace = validate_workspace
-        self.outside_write_target = outside_write_target
+        # Retain the constructor argument for compatibility, but prose-based
+        # guesses must not decide filesystem permissions or block a request.
         self.runs_lock = threading.RLock()
         self.runs: dict[str, ActiveRun] = {}
         self.chat_run: ActiveRun | None = None
@@ -359,19 +361,8 @@ class ProviderRunOrchestrator:
                     )
                     if self.validate_workspace is not None:
                         self.validate_workspace(provider, requested_cwd, self.config)
-                    writable_roots = (requested_cwd,)
-                    if provider == "codex":
-                        writable_roots += codex_additional_write_dirs(self.config)
-                    outside_target = (
-                        self.outside_write_target(prompt, writable_roots)
-                        if self.outside_write_target is not None else None
-                    )
-                    if outside_target is not None:
-                        raise ValueError(
-                            f"project mismatch: this task appears to modify {outside_target}, "
-                            f"but the writable project is {requested_cwd}; choose that Project "
-                            "folder or add it to codex.additional_write_dirs"
-                        )
+                    # Validate actual workspace/permissions at execution; an
+                    # external path in the prompt does not identify a write.
                     chat["cwd"] = str(requested_cwd)
                 now = int(time.time())
                 if not chat["messages"]:

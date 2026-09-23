@@ -1,42 +1,3 @@
-## PilferedParrot Interface 0.7.0
-
-0.7.0 makes the current Work and Chat experience the stable Linux/source release,
-bringing together the improvements tested throughout the 0.7.0 previews. The
-Windows 10/11 x64 portable package includes the same application and remains an
-unsigned platform preview.
-
-### Highlights
-
-- Work and Chat share a blue-tinted interface, consistent spacing and controls,
-  and live theme artwork. Appearance settings synchronize across separate windows.
-  Fresh installations use **Darker / Minimal / Standard**; saved choices survive upgrades.
-- Copy preserves whitespace in fenced code and text, including expanded views.
-  Wide tables and charts can expand to full screen. Work's **Run with AI** sends
-  a reviewed shell block through the current provider and preserves unsent drafts.
-- Codex allowance displays show each reported window's used and remaining
-  percentages, reset time, and freshness. Context estimates update during responses
-  from local usage records without extra model requests.
-- Drafts and shared whiteboard notes persist locally. New conversations ask leads
-  to give workers relevant excerpts and share board access only when needed.
-- Linux desktop integration includes provider sudo password dialogs when supported,
-  and repairs Chromium's restored window decorations to retain the custom title bar.
-
-Work continues through the selected provider. The manual Harness controls have
-been retired; existing task records and backend APIs remain available.
-
-### Install or upgrade
-
-Download the source archive or Windows x64 ZIP and verify it against `SHA256SUMS`.
-Finish active jobs before closing the old app. On Linux, run
-`bin/install-pilferedparrot-desktop` from the new extracted directory to update the
-launcher. On Windows, extract the complete ZIP and update shortcuts to its
-`PilferedParrot.exe`. Keep existing configuration, browser profiles, conversations,
-and local state. Reopening an older installation does not install this release.
-
-Provider CLIs, accounts, and local model servers are installed separately. Windows
-provider accounts and CLIs have not been live-certified; its Bubblewrap shell is
-disabled. See the [README](README.md) and [validation record](docs/release-readiness.md).
-
 ## PilferedParrot Interface 0.7.0-rc.18 preview
 
 Work and Chat show every included-usage window reported by OpenAI, including
@@ -58,28 +19,27 @@ The changes are shared by Linux/source and Windows x64 packages. Finish active
 jobs, close the old app, then reopen the updated app. This remains a preview
 alongside stable Linux 0.6.1.
 
-## PilferedParrot Interface 0.7.0-rc.17 preview
+## Unreleased
 
-The current interface is now the release baseline for Linux/source and Windows.
-Fresh installations default to **Darker / Minimal / Standard**, matching the
-maintainer's saved appearance. Existing saved choices remain authoritative across
-upgrades and separate Work and Chat windows. Imported artwork receives adaptive
-shading so bright details do not obscure text; its scale and placement stay intact.
-Background themes remain user-selected.
+Codex context meters retain the last reading when usage counters are temporarily
+empty. After compaction, a reported retained-context total is used even when the
+input/output counters are zero, preventing a false 0% reading in Work and Chat.
 
-Every fenced code or text block has a Copy button, including expanded views.
-Copying preserves indentation and blank lines. Work's Run with AI action sends the
-reviewed shell block through the current session's normal provider, keeps the
-unsent draft, and prevents duplicate execution when a request is retried.
-On Linux desktops with Zenity, a private provider-only sudo askpass helper supports
-desktop password entry without passing passwords through PPI. Existing helpers,
-terminal behavior, and provider sandbox restrictions continue to apply.
+Fenced text and code now have Copy controls in Work, Chat, and expanded views,
+with clipboard failure feedback and preserved whitespace. Work's Play action
+reviews the command and hands it to the current AI session, keeping results in
+the conversation and preserving unsent drafts. Retrying the same request does
+not launch the command twice.
 
-Linux/X11 keeps the custom title bar intact when Chromium restores native window
-decorations. The repair follows the bound window identity and stops when released.
+Linux provider processes receive a private desktop sudo password helper when
+Zenity and a graphical session are available. Passwords pass directly from the
+native dialog to sudo. Existing askpass settings and provider sandboxes remain
+in effect; terminal-allocating providers and explicit noninteractive/stdin sudo
+options retain their existing behavior.
 
-Finish active jobs, close the old app, then reopen the updated app. This remains
-a preview alongside stable Linux 0.6.1.
+Fresh appearance defaults are Darker / Minimal / Stronger. Existing saved choices
+remain intact, and theme artwork gains an adaptive shade to preserve text contrast
+over bright stars without changing the image's placement or scale.
 
 ## PilferedParrot Interface 0.7.0-rc.16 preview
 
@@ -160,95 +120,6 @@ Linux/source and Windows x64 packages include the same spacing update. Reopen
 the updated app after current jobs finish to load the new stylesheet. This remains
 a preview alongside stable Linux 0.6.1.
 
-## PilferedParrot Interface 0.7.0-rc.10 preview
-
-Work session headers and Chat headers now have four rounded corners, matching the
-other interface panels. Window controls and dialog notices also have rounded corners.
-The Linux/X11 custom window title bar is transparent: it shares the page background color and
-lets theme pictures continue behind the logo, app name, and window controls without
-an extra image, tint, or divider.
-
-The README screenshot has been refreshed. Linux/source and Windows x64 preview
-packages include the updated interface and documentation. Windows receives the rounded
-interface headers, but its outer title bar remains controlled by Chrome or Edge;
-continuous page artwork there requires a different Windows window integration.
-
-## PilferedParrot Interface 0.7.0-rc.9 preview
-
-The README, project website and Windows readme now explain what the app does in
-plain language, with clearer download and upgrade instructions for Linux and
-Windows. This release includes the same application features and theme fixes as
-rc.8; it does not change how providers or conversations work.
-
-Linux/source and Windows x64 packages include the updated documentation. This
-remains a preview alongside stable 0.6.1.
-
-## PilferedParrot Interface 0.7.0-rc.8 preview
-
-The original theme frame and toolbar artwork fix is included for Linux and Windows. A new
-regression checks that a blue frame image remains visible over its black fallback color after
-reopening Work and Chat. Themes with bright page backgrounds and dark content panels now keep
-composer labels readable using the panel's foreground color.
-
-Download and install this package before reopening the interface. Reopening an older copy does
-not install a GitHub release. On Linux, run `bin/install-pilferedparrot-desktop` from the new source
-directory to update the menu entry; on Windows, point shortcuts at the new extracted executable.
-Keep existing configuration and conversation stores. See the README upgrade instructions.
-
-This remains a preview alongside stable 0.6.1.
-
-## PilferedParrot Interface 0.7.0-rc.7 preview
-
-Work and Chat top bars now display the selected Chrome theme's original toolbar image. The
-Linux custom title bar uses its original frame image and overlay. Artwork retains its natural
-size and horizontal tiling, with the author's colors underneath; the full-bar translucent tint
-is removed. Theme backgrounds retain their original size, alignment and repeat settings.
-
-Text and controls remain readable with localized contrast support. Color-only themes retain
-their authored surfaces and readable foregrounds. Switching or removing themes replaces the
-images together without reloading Work or Chat or losing drafts.
-
-Linux/source and Windows x64 packages contain the same interface update. Reopen the updated
-application after current jobs finish to load this version. This remains a preview alongside
-stable 0.6.1.
-
-## PilferedParrot Interface 0.7.0-rc.6 preview
-
-The selected theme artwork now continues through the Work and Chat top bars and the Linux
-custom window title bar. Header text and window controls remain readable over the artwork.
-The white divider strip and idle grab tab between sections are removed; pointer and keyboard
-sidebar resizing still work, with a visible handle on hover or keyboard focus.
-
-Linux/source and Windows x64 packages contain the same interface update. Reopen the updated
-application after current jobs finish to load this version. This remains a preview alongside
-stable 0.6.1.
-
-## PilferedParrot Interface 0.7.0-rc.5 preview
-
-Work and Chat share one theme background across session history and the conversation. Drag the
-sidebar divider to change its width and the portion of the artwork inside it; keyboard resizing
-and saved widths are supported. Text and controls retain readable surfaces over vivid artwork.
-
-Theme selections and removal update automatically in visible windows after Chrome saves them.
-Unchanged themes reuse their images, failed image loads retry, and theme updates preserve drafts
-and session state. No page refresh is needed for subsequent theme changes.
-
-Linux/source and Windows x64 packages contain the same interface update. Reopen the updated
-application after current jobs finish to load this version. This remains a preview alongside
-stable 0.6.1.
-
-## PilferedParrot Interface 0.7.0-rc.4 preview
-
-Work and Chat now center the parrot branding in the top bar and remove the duplicate
-sidebar logo. Desktop windows with custom controls center the branding in the window title
-bar; browser tabs and Windows use the application header. Narrow layouts keep session
-information and actions accessible. Sidebar spacing and control styling are refined while
-preserving selected theme colors and artwork.
-
-Linux/source and Windows x64 downloads contain the same interface update. Close the previous
-app after current jobs finish and reopen the updated application. This remains a preview
-alongside stable 0.6.1.
-
 ## PilferedParrot Interface 0.7.0-rc.3 preview
 
 Theme changes now replace colors and artwork together in Work and Chat. Background requests
@@ -282,7 +153,9 @@ provider continuations, running jobs and Harness activity are retained, as are l
 The new **Whiteboard** button opens persistent notes shared across models and jobs. Every new
 provider conversation gets a compact discovery note, with no board history injected and no
 background model calls. Native Work CLIs receive the dedicated board directory; compatible
-models receive bounded read/post tools. Read-only Chat cannot post. See [whiteboard usage](docs/whiteboard.md).
+models receive bounded read/post tools. The discovery note now asks leads to give workers relevant
+excerpts and share board access only when their task requires it, replacing routine pointer forwarding.
+Read-only Chat cannot post. See [whiteboard usage](docs/whiteboard.md).
 
 The Windows x64 preview includes the same fixes. This remains a preview alongside the existing
 stable 0.6.1 release; Windows provider accounts are still installed and authenticated separately.

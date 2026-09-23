@@ -9,6 +9,22 @@ ESTIMATES = {"unit": "effort_points", "direct": 10, "briefing": 1, "execution": 
 
 
 class HarnessTests(unittest.TestCase):
+    def test_builtin_sol_luna_roles_and_explicit_overrides(self):
+        policy = resolve_policy({"harness": {"preset": "sol-luna"}})
+        self.assertEqual(policy["lead"], {"provider": "codex", "model": "gpt-6-sol", "reasoning_effort": "high"})
+        self.assertEqual(policy["worker"], {"provider": "codex", "model": "gpt-6-luna", "reasoning_effort": "medium"})
+        self.assertEqual(policy["escalation"], [
+            {"provider": "codex", "model": "gpt-6-sol", "reasoning_effort": "high"},
+            {"provider": "codex", "model": "gpt-6-astra", "reasoning_effort": "high"},
+        ])
+        custom = resolve_policy({"harness": {"preset": "sol-luna", "presets": {
+            "sol-luna": {"lead": {"model": "my-lead"}, "worker": {"model": "my-worker"},
+                         "escalation": [{"provider": "codex", "model": "my-escalation", "reasoning_effort": "low"}]}
+        }}})
+        self.assertEqual(custom["lead"]["model"], "my-lead")
+        self.assertEqual(custom["worker"]["model"], "my-worker")
+        self.assertEqual(custom["escalation"], [{"provider": "codex", "model": "my-escalation", "reasoning_effort": "low"}])
+
     def test_manual_requires_explicit_settings_and_custom_models_are_allowed(self):
         self.assertEqual(PRESETS["sol-luna"]["provider"], "codex")
         with self.assertRaisesRegex(ValueError, "explicit"):
@@ -46,7 +62,7 @@ class HarnessTests(unittest.TestCase):
             with self.assertRaises(ValueError): validate_contract(dict(CONTRACT, **{field: value}))
         checked = validate_contract(dict(CONTRACT, hypothesis="A focused change should work"))
         text = render_handoff(checked, {"mode": "direct", "requested": resolve_policy({"harness": {"preset": "sol-luna"}})["lead"]})
-        self.assertIn("gpt-5.6-sol / high", text)
+        self.assertIn("gpt-6-sol / high", text)
         self.assertIn("artifact review", text)
         self.assertIn("hypothesis:", text)
 

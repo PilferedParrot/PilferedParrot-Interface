@@ -110,6 +110,9 @@ def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if stream is not None and hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
+    if args and args[0] == "--whiteboard-post":
+        from .whiteboard_native import main as whiteboard_main
+        return whiteboard_main(args[1:])
     if args == ["--self-test"]:
         return self_test()
     if any(arg in {"--help", "-h", "--version"} for arg in args):

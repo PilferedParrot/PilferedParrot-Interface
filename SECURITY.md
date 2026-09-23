@@ -7,8 +7,8 @@ release lines are not supported.
 
 | Version | Supported |
 | --- | --- |
-| 0.7.x (Linux/source stable; Windows unsigned preview) and the current default branch | Yes |
-| 0.6.x and older releases | No; upgrade to the latest release |
+| 0.6.0 (Linux and Windows preview) and the current default branch | Yes |
+| 0.5.x and older releases | No; upgrade to the latest release |
 
 ## Reporting a vulnerability
 
@@ -43,9 +43,14 @@ Qwen endpoint receives the prompt and any tool output needed for the task. Users
 for the data-handling terms and configuration of those providers.
 
 Local and OpenAI-compatible provider file tools resolve paths inside the selected workspace. Their shell tools require Bubblewrap;
-the workspace and ephemeral `/tmp` are writable, the operator's home outside the workspace is
-hidden, inherited environment variables are reduced to a small allowlist, and other mounted host
-paths are read-only. Network access is disabled unless `qwen.shell_network` is explicitly enabled.
+the workspace, configured additional roots and ephemeral `/tmp` are writable. System binaries and
+selected runtime configuration are mounted read-only; other host data is absent. Inherited
+environment variables are reduced to a small allowlist. Network access is disabled unless the
+provider's `shell_network` is explicitly enabled. Custom toolchains need an explicitly selected root.
+Git inspection always uses a separate read-only, network-disabled Bubblewrap sandbox: repository
+filters may run there but cannot modify persistent host files or read other host data. Fsmonitor,
+hooks, external diff and textconv are disabled. Without that sandbox or accessible Git metadata,
+only file-tool baseline diffs are available; there is no unsandboxed Git fallback.
 Selecting the operator's entire home directory for one of these providers is rejected unless its
 `allow_home_workspace` setting is explicitly enabled, because that selection exposes credentials
 and documents that the normal home mask protects. A parent of home is always rejected because it
@@ -63,7 +68,10 @@ Bubblewrap, compiler, or project inputs. Use a disposable VM or container for un
 Codex executes through its own CLI. Its sandbox, permissions, authentication, and network behavior
 remain an independent security boundary. The selected project is writable in `workspace-write`
 mode. Operators may configure narrowly scoped `codex.additional_write_dirs`; PilferedParrot validates
-them and passes them as Codex `--add-dir` roots on new and resumed turns. Every such root expands
+them and passes them as Codex `--add-dir` roots on new and resumed `workspace-write` turns.
+These extra roots are ignored in `read-only` and `danger-full-access` modes. A natural-language
+path mention does not change the selected workspace or permission configuration; actual operations
+are governed by the provider's sandbox and approval policy. Every configured writable root expands
 the model's write authority, so prefer project directories and do not grant the whole home folder
 without deliberately accepting that scope.
 
@@ -93,8 +101,20 @@ and Origin checks. Capabilities travel in URL fragments, are omitted from server
 revoked when isolated windows exit. Keep `web.host` on a loopback address; remote exposure is not
 supported.
 
-Completed assistant responses may offer **Run with AI** for a reviewed shell block. A click first
-shows the exact block and project folder for confirmation, then sends it through the current Work
-session provider with duplicate-request protection; provider permissions remain authoritative. The
-legacy terminal endpoint remains a separate action and is not covered by the Qwen Bubblewrap
-sandbox.
+Completed assistant responses may offer a terminal button for single-line fenced commands. A click
+first shows the exact command and project folder for confirmation, then launches the stored command
+in a graphical terminal rooted at the conversation's project folder; the browser cannot supply a
+replacement command or working directory. The command runs as
+the operator and may request elevation through `sudo`, so inspect it before clicking. This action is
+not covered by the Qwen Bubblewrap sandbox.
+
+## Optional product feedback
+
+[Feedback policy 1](docs/feedback.md) keeps four categories off by default. It
+stores bounded aggregate counters separately from chats and never uploads them.
+Work/Chat controls use the existing capability and same-origin protection;
+terminal commands require explicit opt-in. Local-change inspection reads only
+bounded listed shipped sources after separate consent and an explicit preview.
+Written notes are voluntary, included verbatim, and require review before export.
+Turning categories off purges their counts; consent revisions fence stale writes
+and previews. Downloaded or shared copies are controlled by their holders.

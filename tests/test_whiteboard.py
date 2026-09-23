@@ -1,13 +1,14 @@
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
+import json
 import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
 
 from pilferedparrot.config import DEFAULTS
 from pilferedparrot.model import Conversation
-from pilferedparrot.whiteboard import Whiteboard, MAX_OUTPUT, whiteboard_discovery
+from pilferedparrot.whiteboard import Whiteboard, MAX_OUTPUT, MAX_SERIALIZED_OUTPUT, whiteboard_discovery
 from pilferedparrot.qwen_tools import QwenToolbox
 from pilferedparrot.dispatch import _codex_command, _claude_command, capture_dispatch, RunResult
 from pilferedparrot.adapters import GeminiAdapter
@@ -49,6 +50,117 @@ class WhiteboardTests(unittest.TestCase):
         self.assertEqual({m['text'] for m in notes}, {'valid note', 'A native worker note'})
         with self.assertRaises(ValueError): self.board.post('x' * 2001, 'test')
         with self.assertRaises(ValueError): self.board.post(None, 'test')
+
+    def test_searches_old_notes_and_round_trips_structured_metadata(self):
+        older = self.board.post(
+            'The database answer is SQLite.', 'researcher', workspace='docs', kind='finding',
+            title='Storage choice', project='Parrot', topics=['Storage', 'Search'],
+            evidence='benchmark 17', applies_to='v2', basis='independent',
+        )
+        for index in range(25):
+            self.board.post(f'newer unrelated {index}', 'model', project='other')
+        result = self.board.read(query='BENCHMARK 17', project='parrot', topic='storage')
+        self.assertEqual([message['id'] for message in result['messages']], [older['id']])
+        note = result['messages'][0]
+        self.assertEqual(note['kind'], 'finding')
+        self.assertEqual(note['title'], 'Storage choice')
+        self.assertEqual(note['topics'], ['Storage', 'Search'])
+        self.assertEqual(note['workspace'], 'docs')
+        self.assertEqual(note['basis'], 'independent')
+        legacy = self.board.directory / 'legacy.txt'
+        legacy.write_text('Author: native\n---\nlegacy searchable text', encoding='utf-8')
+        self.assertEqual(self.board.read(query='legacy searchable')['messages'][0]['kind'], 'note')
+
+    def test_pagination_returns_whole_notes_in_chronological_order(self):
+        posted = [self.board.post(f'note {index}', 'model')['id'] for index in range(5)]
+        first = self.board.read(limit=2)
+        self.assertEqual([note['id'] for note in first['messages']], posted[-2:])
+        self.assertTrue(first['has_more'])
+        self.assertEqual(first['next_before'], posted[-2])
+        second = self.board.read(limit=2, before=first['next_before'])
+        self.assertEqual([note['id'] for note in second['messages']], posted[-4:-2])
+        third = self.board.read(limit=2, before=second['next_before'])
+        self.assertEqual([note['id'] for note in third['messages']], posted[:1])
+        self.assertFalse(third['has_more'])
+        self.assertIsNone(third['next_before'])
+
+    def test_replies_updates_expiry_and_validation(self):
+        request = self.board.post(
+            'please investigate', 'owner', kind='request', expires_at='2000-01-01T00:00:00Z',
+        )
+        reply = self.board.post('I will investigate', 'worker', reply_to=request['id'])
+        self.board.post('claimed', 'worker', kind='update', reply_to=request['id'], status='claimed')
+        expired = {note['id']: note for note in self.board.read(thread=request['id'])['messages']}
+        self.assertEqual(expired[request['id']]['effective_status'], 'expired')
+        self.assertTrue(expired[request['id']]['expired'])
+        self.assertEqual(expired[request['id']]['reply_count'], 2)
+        self.board.post('finished', 'worker', kind='update', reply_to=request['id'], status='resolved')
+        resolved = {note['id']: note for note in self.board.read(status='resolved')['messages']}
+        self.assertEqual(resolved[request['id']]['effective_status'], 'resolved')
+        with self.assertRaises(ValueError):
+            self.board.post('bad', 'worker', reply_to='../private')
+        with self.assertRaises(ValueError):
+            self.board.post('bad', 'worker', kind='update', reply_to=request['id'])
+        with self.assertRaises(ValueError):
+            self.board.post('bad', 'worker', topics=['x'] * 9)
+
+    def test_invalid_native_metadata_is_inert_and_output_is_serialized_bounded(self):
+        target = self.board.post('keep open', 'owner', kind='request')
+        (self.board.directory / 'bad.txt').write_text(
+            'Author: native\nMetadata: {"kind":"update","reply_to":"' + target['id'] +
+            '","status":"resolved","title":42}\n---\nmalformed update', encoding='utf-8')
+        notes = {note['id']: note for note in self.board.read()['messages']}
+        self.assertEqual(notes[target['id']]['effective_status'], 'open')
+        for index in range(20):
+            self.board.post('x' * 2000, 'model', evidence='e' * 1000, applies_to='a' * 500,
+                            topics=['t' * 40] * 8, title='h' * 160, project='p' * 200)
+        result = self.board.read()
+        self.assertLessEqual(sum(len(note['text']) for note in result['messages']), MAX_OUTPUT)
+        self.assertLessEqual(len(json.dumps(result, ensure_ascii=False)), MAX_SERIALIZED_OUTPUT)
+        self.assertTrue(result['has_more'])
+
+    def test_unicode_metadata_round_trips_within_native_file_limit(self):
+        posted = self.board.post(
+            '😀' * 2000, 'author', title='😀' * 160, project='😀' * 200,
+            topics=['😀' * 40] * 8, evidence='😀' * 1000, applies_to='😀' * 500,
+        )
+        path = self.board.directory / (posted['id'] + '.txt')
+        self.assertGreater(path.stat().st_size, 12_000)
+        found = {note['id']: note for note in self.board.read()['messages']}
+        self.assertEqual(found[posted['id']]['text'], '😀' * 2000)
+
+    def test_since_normalizes_timezones_and_plain_separator_stays_plain(self):
+        native = self.board.directory
+        native.mkdir(parents=True, exist_ok=True)
+        (native / 'dated.txt').write_text(
+            'Author: native\nCreated: 2020-01-01T00:00:00+00:00\n---\ndated', encoding='utf-8')
+        self.assertEqual(self.board.read(since='2019-12-31T18:00:00-05:00')['count'], 1)
+        self.assertEqual(self.board.read(since='2020-01-01T01:00:00+01:00')['count'], 0)
+        (native / 'plain.txt').write_text('ordinary text\n---\nnot a header', encoding='utf-8')
+        plain = next(note for note in self.board.read(query='ordinary text')['messages'] if note['id'] == 'plain')
+        self.assertEqual(plain['text'], 'ordinary text\n---\nnot a header')
+
+    def test_malformed_native_json_timestamps_and_surrogates_are_inert(self):
+        valid = self.board.post('adjacent valid note', 'author', kind='finding', title='safe')
+        native = self.board.directory
+        nested = '{"x":' + '[' * 1500 + '0' + ']' * 1500 + '}'
+        (native / 'nested.txt').write_text(
+            'Author: native\nMetadata: ' + nested + '\n---\nvery nested metadata', encoding='utf-8')
+        (native / 'overflow.txt').write_text(
+            'Author: native\nCreated: 0001-01-01T00:00:00+14:00\n'
+            'Metadata: {"expires_at":"0001-01-01T00:00:00+14:00"}\n---\noverflow timestamp',
+            encoding='utf-8')
+        (native / 'surrogate.txt').write_text(
+            r'Author: native\nMetadata: {"title":"\ud800"}\n---\nescaped surrogate'.replace(r'\n', '\n'),
+            encoding='utf-8')
+        notes = {note['id']: note for note in self.board.read()['messages']}
+        self.assertEqual(notes[valid['id']]['title'], 'safe')
+        self.assertEqual(notes['surrogate']['title'], '')
+        self.assertEqual(notes['nested']['kind'], 'note')
+        with self.assertRaises(ValueError):
+            self.board.post('bad\ud800', 'author')
+        with self.assertRaises(ValueError):
+            self.board.post('body', 'author', title='bad\ud800')
 
     def test_tool_access_includes_read_only_chat(self):
         tool_config = {'_whiteboard_directory': str(self.board.directory), 'read_only': True}
@@ -94,7 +206,10 @@ class WhiteboardTests(unittest.TestCase):
         self.assertIn('Shared model whiteboard', adapter.run.call_args_list[0].args[0])
         self.assertNotIn('Pass this pointer to delegated workers', adapter.run.call_args_list[0].args[0])
         self.assertIn('Give workers relevant excerpts', adapter.run.call_args_list[0].args[0])
-        self.assertEqual(adapter.run.call_args_list[1].args[0], 'next')
+        followup = adapter.run.call_args_list[1].args[0]
+        self.assertTrue(followup.startswith('next'))
+        self.assertNotIn('Shared model whiteboard', followup)
+        self.assertIn('Native whiteboard posting', followup)
 
     def test_web_discovery_survives_reload_and_model_change(self):
         import io, json
@@ -114,5 +229,11 @@ class WhiteboardTests(unittest.TestCase):
                 app = PilferedParrotApp(config, self.root)
         latest_users = [next(m['content'] for m in reversed(r['messages']) if m['role'] == 'user') for r in sent]
         self.assertIn('Shared model whiteboard', latest_users[0])
-        self.assertEqual(latest_users[1], 'task')
+        self.assertNotIn('Shared model whiteboard', latest_users[1])
         self.assertIn('Shared model whiteboard', latest_users[2])
+        for prompt in latest_users:
+            self.assertTrue(prompt.startswith('task\n\n'))
+            self.assertEqual(prompt.count('[Incomplete work handoff]'), 1)
+        stored_users = [m['content'] for m in app.store.get(work['id'])['messages']
+                        if m['role'] == 'user']
+        self.assertEqual(stored_users, ['task', 'task', 'task'])

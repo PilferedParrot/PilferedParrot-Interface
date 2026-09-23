@@ -18,6 +18,15 @@ from pilferedparrot.web import _terminal_argv
 
 
 class WindowsEntrypointTests(unittest.TestCase):
+    def test_frozen_whiteboard_helper_does_not_start_gui_or_create_default_state(self):
+        with patch('pilferedparrot.whiteboard_native.main', return_value=0) as helper, \
+                patch.object(windows, 'prepare_arguments') as prepare, \
+                patch('pilferedparrot.cli.main') as cli:
+            self.assertEqual(windows.main(['--whiteboard-post', 'C:/board/context.json']), 0)
+            helper.assert_called_once_with(['C:/board/context.json'])
+            prepare.assert_not_called()
+            cli.assert_not_called()
+
     def test_first_run_creates_user_state_and_preserves_existing_configuration(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -96,13 +105,23 @@ class WindowsEntrypointTests(unittest.TestCase):
                     toolbox._shell("echo unsafe")
                 run.assert_not_called()
 
-    def test_file_tool_diff_works_without_a_git_installation(self):
+    def test_file_tool_diff_works_without_a_git_sandbox(self):
         with tempfile.TemporaryDirectory() as directory:
             toolbox = QwenToolbox(Path(directory), DEFAULTS["qwen"])
-            with patch("pilferedparrot.qwen_tools.subprocess.run", side_effect=FileNotFoundError):
-                self.assertIn("Git is not installed", toolbox._diff())
+            with patch("pilferedparrot.qwen_tools.shutil.which", return_value=None), \
+                    patch("pilferedparrot.qwen_tools.subprocess.run") as run:
+                self.assertIn("Git review requires Linux and Bubblewrap", toolbox._diff())
                 toolbox._write_file("parrot.txt", "hello parrot\n")
                 self.assertIn("+hello parrot", toolbox._diff())
+                run.assert_not_called()
+
+    def test_windows_git_review_never_executes_host_git(self):
+        with tempfile.TemporaryDirectory() as directory:
+            toolbox = QwenToolbox(Path(directory), DEFAULTS["qwen"])
+            with patch("pilferedparrot.qwen_tools.sys.platform", "win32"), \
+                    patch("pilferedparrot.qwen_tools.subprocess.run") as run:
+                self.assertIn("Git review requires Linux and Bubblewrap", toolbox._diff())
+                run.assert_not_called()
 
 
 if __name__ == "__main__":

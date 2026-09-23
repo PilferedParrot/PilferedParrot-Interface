@@ -17,11 +17,11 @@ PRESETS: dict[str, dict[str, Any]] = {
                "lead": None, "worker": None, "escalation": [], "custom_routing_required": True},
     "sol-luna": {
         "name": "sol-luna", "label": "Sol / Luna", "mode": "delegate", "provider": "codex",
-        "lead": {"provider": "codex", "model": "gpt-5.6-sol", "reasoning_effort": "high"},
-        "worker": {"provider": "codex", "model": "gpt-5.6-luna", "reasoning_effort": "medium"},
+        "lead": {"provider": "codex", "model": "gpt-6-sol", "reasoning_effort": "high"},
+        "worker": {"provider": "codex", "model": "gpt-6-luna", "reasoning_effort": "medium"},
         "escalation": [
-            {"provider": "codex", "model": "gpt-5.6-terra", "reasoning_effort": "medium"},
-            {"provider": "codex", "model": "gpt-5.6-sol", "reasoning_effort": "high"},
+            {"provider": "codex", "model": "gpt-6-sol", "reasoning_effort": "high"},
+            {"provider": "codex", "model": "gpt-6-astra", "reasoning_effort": "high"},
         ], "custom_routing_required": False,
     },
 }

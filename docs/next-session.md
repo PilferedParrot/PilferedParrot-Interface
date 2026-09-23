@@ -1,12 +1,17 @@
 # Next session: native-provider evaluation
 
-Copy the following prompt into a focused implementation session:
 
-```text
+
+
 Evaluate a lean, native-provider Work harness for PilferedParrot. Do not restore
 the retired manual Harness form or add blanket prompt wrappers, hidden model or
 provider routing, automatic retries/backoff, automatic second-model review,
 recursive agents, queues, or a generic acceptance loop.
+
+Preserve the subsequently requested incomplete-work [continuation rule](continuation.md).
+It is the explicit exception to the wrapper guidance above: every dispatched turn must
+ask for a next-session prompt when intended work remains, using existing replies and
+permitted whiteboard posting, without treating the rule as proof of task completion.
 
 First inspect the ordinary Work and Chat lifecycle, provider adapters, session
 resume/context behavior, cancellation, persisted run state, and current tests.
