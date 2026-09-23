@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -284,6 +285,70 @@ class ACPClientTests(unittest.TestCase):
                              if message.get("id") == "permission-1")
                 self.assertEqual(reply["result"]["outcome"], {"outcome": "cancelled"})
 
+    def test_reused_agent_request_id_fails_before_a_second_permission_callback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entered, release = threading.Event(), threading.Event()
+            callbacks = []
+            def delayed_allow(params):
+                callbacks.append(params["toolCall"]["toolCallId"])
+                entered.set()
+                release.wait(2)
+                return "yes"
+            with client_for(root, on_permission=delayed_allow) as client:
+                client.initialize()
+                client.new_session(root)
+                def request(tool_id):
+                    return {"jsonrpc": "2.0", "id": "reused-permission-id",
+                            "method": "session/request_permission", "params": {
+                                "sessionId": "fake-session",
+                                "toolCall": {"toolCallId": tool_id},
+                                "options": [
+                                    {"optionId": "yes", "name": "Allow", "kind": "allow_once"},
+                                    {"optionId": "no", "name": "Reject", "kind": "reject_once"},
+                                ],
+                            }}
+                client._ingest(request("first-tool"))
+                self.assertTrue(entered.wait(1))
+                client._ingest(request("second-tool"))
+                release.set()
+                self.assertEqual(callbacks, ["first-tool"])
+                self.assertIsInstance(client._failure, ACPClosed)
+                self.assert_agent_stopped(client)
+
+    def test_ingress_denies_permission_if_review_action_would_be_redacted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            callbacks = []
+            with client_for(root, on_permission=lambda params: callbacks.append(params) or "yes") as client:
+                client.initialize()
+                client.new_session(root)
+                client._ingest({"jsonrpc": "2.0", "id": "email-action",
+                                "method": "session/request_permission", "params": {
+                                    "sessionId": "fake-session",
+                                    "toolCall": {
+                                        "toolCallId": "tool-email", "kind": "execute",
+                                        "rawInput": {"command": "printf private@example.test"},
+                                    },
+                                    "options": [
+                                        {"optionId": "yes", "name": "Allow", "kind": "allow_once"},
+                                        {"optionId": "no", "name": "Reject", "kind": "reject_once"},
+                                    ],
+                                }})
+                deadline = time.monotonic() + 1
+                reply = None
+                while time.monotonic() < deadline:
+                    path = root / "fake-agent-requests.jsonl"
+                    if path.exists():
+                        reply = next((item for item in transcript(root)
+                                      if item.get("id") == "email-action"), None)
+                    if reply is not None:
+                        break
+                    time.sleep(0.01)
+                self.assertIsNotNone(reply)
+                self.assertEqual(reply["result"]["outcome"], {"outcome": "cancelled"})
+                self.assertEqual(callbacks, [])
+
     def test_cancel_pending_permission_prevents_late_allow(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -314,6 +379,64 @@ class ACPClientTests(unittest.TestCase):
                 client.initialize()
             self.assertLessEqual(len(client.stderr_tail), 16)
             self.assertNotIn("example.test", client.stderr_tail)
+
+    def test_update_flush_orders_prior_callbacks_and_has_a_deadline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entered, release = threading.Event(), threading.Event()
+            observed = []
+            def slow_update(_session, update):
+                entered.set()
+                release.wait(2)
+                observed.append(update["content"]["text"])
+            with client_for(root, on_update=slow_update) as client:
+                client.initialize()
+                client.new_session(root)
+                client._ingest({"jsonrpc": "2.0", "method": "session/update", "params": {
+                    "sessionId": "fake-session", "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": "from load"},
+                    },
+                }})
+                self.assertTrue(entered.wait(1))
+                with self.assertRaises(TimeoutError):
+                    client.flush_updates(timeout=0.03)
+                release.set()
+                client.flush_updates(timeout=1)
+                self.assertEqual(observed, ["from load"])
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX process group ownership test")
+    def test_close_stops_descendant_after_adapter_parent_exits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / "orphan_adapter.py"
+            script.write_text(
+                "import json, os, subprocess, sys, time\n"
+                "request = json.loads(sys.stdin.readline())\n"
+                "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "
+                "stdin=subprocess.DEVNULL, stdout=sys.stdout, stderr=sys.stderr)\n"
+                "sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': request['id'], "
+                "'result': {'protocolVersion': 1, 'agentCapabilities': {}}}) + '\\n')\n"
+                "sys.stdout.flush()\n"
+                "os._exit(0)\n",
+                encoding="utf-8",
+            )
+            client = ACPClient([sys.executable, str(script)], cwd=root)
+            try:
+                self.assertEqual(client.initialize(timeout=2)["protocolVersion"], 1)
+                client._proc.wait(timeout=1)
+                closed = threading.Thread(target=client.close, daemon=True)
+                closed.start()
+                closed.join(timeout=4)
+                self.assertFalse(closed.is_alive(), "close blocked on inherited pipe")
+                self.assertFalse(client._reader.is_alive())
+            finally:
+                # If a regression leaves the inherited pipe open, stop only
+                # this client-owned process group so the test cannot leak it.
+                try:
+                    os.killpg(client.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
     def test_agent_error_does_not_expose_account_identity(self):
         with tempfile.TemporaryDirectory() as directory:

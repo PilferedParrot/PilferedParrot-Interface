@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future, InvalidStateError
 from concurrent.futures import TimeoutError as FutureTimeout
@@ -78,6 +79,22 @@ def _valid_permission_request(params: dict[str, Any]) -> bool:
     return True
 
 
+def _permission_review_material(params: dict[str, Any]) -> dict[str, Any]:
+    """Fields a user must see unchanged before an action can be approved."""
+    tool = params["toolCall"]
+    return {
+        "sessionId": params["sessionId"],
+        "toolCall": {
+            key: tool[key] for key in (
+                "toolCallId", "title", "name", "kind", "rawInput", "content", "locations",
+            ) if key in tool
+        },
+        "options": [{
+            key: option[key] for key in ("optionId", "name", "kind") if key in option
+        } for option in params["options"]],
+    }
+
+
 class ACPClient:
     """One agent process with concurrent requests and ordered update callbacks.
 
@@ -115,6 +132,7 @@ class ACPClient:
         self._pending: dict[int, Future[Any]] = {}
         self._pending_methods: dict[int, str] = {}
         self._permissions: dict[int | str, str] = {}
+        self._seen_inbound_ids: set[int | str] = set()
         self._next_id = 0
         self._failure: ACPClosed | None = None
         self._closed = False
@@ -306,8 +324,27 @@ class ACPClient:
                 if not isinstance(request_id, (int, str)) or isinstance(request_id, bool):
                     self._fail("ACP agent sent an invalid request id")
                     return
+                with self._state_lock:
+                    reused_id = request_id in self._seen_inbound_ids
+                    too_many_ids = len(self._seen_inbound_ids) >= 10_000
+                    if not reused_id and not too_many_ids:
+                        self._seen_inbound_ids.add(request_id)
+                if reused_id or too_many_ids:
+                    self._fail("ACP agent reused or exhausted client request ids")
+                    self._stop_process()
+                    return
                 if method == "session/request_permission":
                     if not _valid_permission_request(params):
+                        self._send({"jsonrpc": "2.0", "id": request_id,
+                                    "result": {"outcome": {"outcome": "cancelled"}}})
+                        return
+                    safe_params = _safe(params)
+                    if not _valid_permission_request(safe_params) or \
+                            _permission_review_material(params) != \
+                            _permission_review_material(safe_params):
+                        # Redacting a command, diff, target path or choice
+                        # changes what the user would approve. Deny at ingress
+                        # before a callback can present an incomplete action.
                         self._send({"jsonrpc": "2.0", "id": request_id,
                                     "result": {"outcome": {"outcome": "cancelled"}}})
                         return
@@ -316,7 +353,7 @@ class ACPClient:
                         self._permissions[request_id] = session_id
                     if self._permission_slots.acquire(blocking=False):
                         threading.Thread(target=self._answer_permission,
-                                         args=(request_id, _safe(params)), daemon=True,
+                                         args=(request_id, safe_params), daemon=True,
                                          name="ppi-acp-permission").start()
                     else:
                         with self._state_lock:
@@ -373,6 +410,8 @@ class ACPClient:
                     continue
                 if item[0] == "complete":
                     self._finish_future(item[1], item[2])
+                elif item[0] == "barrier":
+                    item[1].set()
                 elif item[0] == "update" and self._on_update is not None:
                     try:
                         self._on_update(item[1], item[2])
@@ -384,6 +423,31 @@ class ACPClient:
                 self._stop_process()
             finally:
                 self._updates.task_done()
+
+    def flush_updates(self, *, timeout: float = 5.0) -> None:
+        """Wait, with a deadline, until earlier update callbacks have finished.
+
+        A barrier is ordered after updates already queued by the reader. This
+        lets a caller finish replay from ``session/load`` before beginning a
+        new prompt without waiting indefinitely for later agent updates.
+        """
+        if timeout <= 0:
+            raise ValueError("ACP update flush timeout must be positive")
+        with self._state_lock:
+            if self._closed or self._failure is not None:
+                raise self._failure or ACPClosed("ACP client is closed")
+        deadline = time.monotonic() + timeout
+        barrier = threading.Event()
+        try:
+            self._updates.put(("barrier", barrier), timeout=timeout)
+        except queue.Full as error:
+            raise TimeoutError("ACP update queue did not accept a barrier") from error
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not barrier.wait(remaining):
+            raise TimeoutError("ACP update queue did not drain")
+        with self._state_lock:
+            if self._failure is not None:
+                raise self._failure
 
     def _answer_permission(self, request_id: int | str, params: dict[str, Any]) -> None:
         try:
@@ -545,21 +609,30 @@ class ACPClient:
         self._writer_stop.set()
         self._dispatch_stop.set()
         self._stop_process()
-        for stream in (self._proc.stdin, self._proc.stdout, self._proc.stderr):
-            if stream is not None:
-                try:
-                    stream.close()
-                except OSError:
-                    pass
         self._writer.join(timeout=2)
         self._reader.join(timeout=2)
         self._stderr_reader.join(timeout=2)
         self._dispatcher.join(timeout=2)
+        for stream, worker in (
+            (self._proc.stdin, self._writer),
+            (self._proc.stdout, self._reader),
+            (self._proc.stderr, self._stderr_reader),
+        ):
+            if stream is None:
+                continue
+            try:
+                if worker.is_alive():
+                    # TextIOWrapper.close() can wait on a blocked reader's
+                    # internal lock when a descendant inherited the pipe.
+                    # Release the descriptor without an unbounded lock wait.
+                    os.close(stream.fileno())
+                else:
+                    stream.close()
+            except (OSError, ValueError):
+                pass
 
     def _stop_process(self) -> None:
         with self._stop_lock:
-            if self._proc.poll() is not None:
-                return
             pid = self._proc.pid
             if not isinstance(pid, int) or pid <= 1 or pid == os.getpid():
                 return
@@ -571,23 +644,40 @@ class ACPClient:
                     if killed.returncode != 0 and self._proc.poll() is None:
                         self._proc.terminate()
                 except (OSError, subprocess.TimeoutExpired):
-                    self._proc.terminate()
+                    if self._proc.poll() is None:
+                        self._proc.terminate()
             else:
+                # Popen owns a new process group. Its leader may have exited
+                # while a child still holds our stdout/stderr pipes open; the
+                # group must be stopped before stream.close() can finish.
+                if pid == os.getpgrp():
+                    return
                 try:
                     os.killpg(pid, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
-            try:
-                self._proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                if sys.platform == "win32":
-                    self._proc.kill()
+                try:
+                    self._proc.wait(timeout=0.2)
+                except subprocess.TimeoutExpired:
+                    pass
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline:
+                    try:
+                        os.killpg(pid, 0)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(0.02)
                 else:
                     try:
                         os.killpg(pid, signal.SIGKILL)
                     except ProcessLookupError:
-                        self._proc.kill()
-                self._proc.wait(timeout=2)
+                        pass
+            if self._proc.poll() is None:
+                try:
+                    self._proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill()
+                    self._proc.wait(timeout=2)
 
     def __enter__(self) -> ACPClient:
         return self
