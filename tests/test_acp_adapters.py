@@ -6,6 +6,7 @@ import json
 import os
 import stat
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -170,6 +171,72 @@ class AdapterManagerTests(unittest.TestCase):
                     manager.install()
             self.assertEqual((manager.root / "active.json").read_bytes(), pointer)
             self.assertTrue(previous.exists())
+            installs = list((manager.root / "installs").iterdir())
+            self.assertEqual(installs, [previous])
+
+    def test_stale_lock_file_does_not_block_install_and_old_temps_are_cleaned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            node = executable(root, "fake-node", FAKE_NODE)
+            npm = executable(root, "fake-npm", FAKE_NPM)
+            manager = AdapterManager(config_for(root), node=node, npm=npm)
+            manager.root.mkdir(parents=True)
+            (manager.root / ".install.lock").write_text("dead owner pid")
+            stale = manager.root / ".stage-stale"
+            stale.mkdir()
+            old = time.time() - 2 * 24 * 60 * 60
+            os.utime(stale, (old, old))
+            result = manager.install()
+            self.assertTrue(result["installed"])
+            self.assertFalse(stale.exists())
+            self.assertTrue((manager.root / ".install.lock").exists())
+
+    def test_lockfile_pin_rejects_transitive_edit(self):
+        lock_path = acp_adapters.MANIFEST_DIR / "package-lock.json"
+        original = lock_path.read_bytes()
+        try:
+            lock = json.loads(original)
+            name = next(key for key in lock["packages"] if key.startswith("node_modules/")
+                        and key not in {f"node_modules/{spec.package}" for spec in acp_adapters.ADAPTERS.values()})
+            lock["packages"][name]["resolved"] = "https://example.invalid/package.tgz"
+            lock_path.write_text(json.dumps(lock), encoding="utf-8")
+            with self.assertRaisesRegex(AdapterInstallError, "reviewed lock"):
+                acp_adapters._locked_manifest()
+        finally:
+            lock_path.write_bytes(original)
+
+    def test_transitive_registry_and_integrity_are_validated(self):
+        lock_path = acp_adapters.MANIFEST_DIR / "package-lock.json"
+        original = lock_path.read_bytes()
+        lock = json.loads(original)
+        transitive = next(item for name, item in lock["packages"].items()
+                          if name.startswith("node_modules/")
+                          and name not in {f"node_modules/{spec.package}"
+                                           for spec in acp_adapters.ADAPTERS.values()})
+        try:
+            transitive["resolved"] = "https://evil.example/package.tgz"
+            lock_path.write_text(json.dumps(lock), encoding="utf-8")
+            digest = acp_adapters._sha256(lock_path)
+            with patch.object(acp_adapters, "_LOCK_SHA256", digest):
+                with self.assertRaisesRegex(AdapterInstallError, "registry is invalid"):
+                    acp_adapters._locked_manifest()
+            transitive["resolved"] = "https://registry.npmjs.org/package.tgz"
+            transitive["integrity"] = "sha512-invalid"
+            lock_path.write_text(json.dumps(lock), encoding="utf-8")
+            digest = acp_adapters._sha256(lock_path)
+            with patch.object(acp_adapters, "_LOCK_SHA256", digest):
+                with self.assertRaisesRegex(AdapterInstallError, "integrity is invalid"):
+                    acp_adapters._locked_manifest()
+        finally:
+            lock_path.write_bytes(original)
+
+    def test_reparse_root_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = AdapterManager(config_for(Path(directory)))
+            manager.root.mkdir(parents=True)
+            with patch.object(acp_adapters, "_is_link_or_reparse", return_value=True):
+                with self.assertRaisesRegex(AdapterInstallError, "reparse"):
+                    acp_adapters._validate_state_paths(manager.root)
 
     def test_symlinked_install_root_is_rejected_without_writing_target(self):
         if os.name == "nt":
