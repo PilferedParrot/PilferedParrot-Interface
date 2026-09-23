@@ -21,6 +21,15 @@ See the [Actions runs](https://github.com/PilferedParrot/PilferedParrot-Interfac
 release body for completed validation results.
 Windows provider accounts and CLIs are not live-certified by this package.
 
+## Unreleased
+
+- New Codex Chat sessions default to GPT-6 Luna with low reasoning when no Chat selection is
+  saved; an explicit saved model and reasoning selection takes precedence.
+- Optional product feedback remains off by default. Users can review and download local reports
+  for voluntary sharing; PPI does not upload them.
+- Unfinished work can include a copyable next-session prompt and, when writing is allowed, a
+  whiteboard handoff. Continuation guidance does not change provider permissions or retry work.
+
 ## PilferedParrot Interface 0.7.0
 
 0.7.0 makes the current Work and Chat experience the stable Linux/source release,

@@ -823,7 +823,10 @@ class WebStoreTests(unittest.TestCase):
         self.assertTrue(gemini["capabilities"]["models"])
         self.assertEqual(state["default_provider"], "codex")
         self.assertEqual(state["runtime_version"], RUNTIME_VERSION)
-        self.assertEqual(chat_state["chat_model"], "gpt-5.6-terra")
+        self.assertEqual(chat_state["chat_model"], "gpt-6-luna")
+        self.assertTrue({"gpt-6-luna", "gpt-6-sol", "gpt-6-astra"}.issubset(
+            chat_state["chat_model_choices"],
+        ))
         self.assertEqual(chat_state["chat"]["messages"], [])
         self.assertFalse(chat_state["chat"]["pending"])
         self.assertEqual(chat_state["chat_history"], [])
@@ -930,7 +933,7 @@ class WebStoreTests(unittest.TestCase):
             )
             self.assertEqual(app.store.get(work["id"])["messages"], [])
 
-    def test_chat_relays_raw_content_to_read_only_terra_and_persists_separate_session(self):
+    def test_chat_relays_raw_content_to_read_only_luna_and_persists_separate_session(self):
         with tempfile.TemporaryDirectory() as directory:
             app = PilferedParrotApp(_web_config(directory), Path(directory))
             chat = app.create_chat({"provider": "codex", "cwd": directory})
@@ -951,14 +954,14 @@ class WebStoreTests(unittest.TestCase):
             self.assertNotIn("TECHNICAL_STATE", seen[0][1])
             self.assertEqual(seen[0][2], Path(directory))
             self.assertIsNone(seen[0][3])
-            self.assertEqual(seen[0][4]["codex"]["model"], "gpt-5.6-terra")
+            self.assertEqual(seen[0][4]["codex"]["model"], "gpt-6-luna")
             self.assertEqual(seen[0][4]["codex"]["reasoning_effort"], "low")
             self.assertEqual(seen[0][4]["codex"]["sandbox"], "read-only")
             self.assertEqual(seen[0][4]["codex"]["additional_write_dirs"], [])
 
             reloaded = ChatStore(Path(directory) / "chats.json")
             self.assertNotIn("provider_session_id", reloaded.chat_public())
-            self.assertEqual(reloaded.chat_public()["messages"][-1]["model"], "gpt-5.6-terra")
+            self.assertEqual(reloaded.chat_public()["messages"][-1]["model"], "gpt-6-luna")
             self.assertEqual(reloaded.data["chat"]["provider_session_id"], "terra-thread")
             self.assertEqual(reloaded.get(chat["id"])["messages"], [])
 
@@ -1073,6 +1076,67 @@ class WebStoreTests(unittest.TestCase):
         self.assertEqual(
             restarted.store.preferences_public()["chat_model"], "gpt-5.6-luna",
         )
+
+    def test_new_chat_defaults_to_luna_independent_of_work_model(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = PilferedParrotApp(_web_config(directory), Path(directory))
+            with app.store.lock:
+                app.store.data["preferences"]["work_models"]["codex"] = "gpt-5.6-sol"
+                app.store.save()
+
+            self.assertEqual(app.reset_chat()["chat"]["model"], "gpt-6-luna")
+            self.assertEqual(app.store.preferences_public()["chat_model"], "gpt-6-luna")
+
+    def test_chat_actions_preserve_saved_codex_work_model(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = _web_config(directory)
+            app = PilferedParrotApp(config, Path(directory))
+            app.set_provider_preferences({"provider": "codex", "model": "gpt-6-sol"})
+
+            app.set_chat_model({"model": "gpt-6-astra"})
+            self.assertEqual(app.store.preferences_public()["work_models"]["codex"], "gpt-6-sol")
+            with patch("pilferedparrot.web.capture_dispatch", return_value=RunResult(
+                "Chat reply", 0, "astra-thread",
+            )):
+                app.send_chat_message({"content": "hello", "model": "gpt-6-astra"})
+                self._wait_for_chat_reply(app)
+            self.assertEqual(app.store.preferences_public()["work_models"]["codex"], "gpt-6-sol")
+
+            app.reset_chat({"model": "gpt-6-luna"})
+            preferences = app.store.preferences_public()
+            self.assertEqual(preferences["work_models"]["codex"], "gpt-6-sol")
+            self.assertEqual(preferences["chat_model"], "gpt-6-luna")
+
+            restarted = PilferedParrotApp(config, Path(directory))
+            work = restarted.create_chat({"provider": "codex", "cwd": directory})
+            self.assertEqual(work["requested_model"], "gpt-6-sol")
+            self.assertEqual(restarted.state("chat")["chat_model"], "gpt-6-luna")
+
+    def test_gpt6_chat_choices_and_legacy_preference_survive_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = _web_config(directory)
+            app = PilferedParrotApp(config, Path(directory))
+            self.assertEqual(app.set_chat_model({"model": "gpt-6-sol"})["model"], "gpt-6-sol")
+            restarted = PilferedParrotApp(config, Path(directory))
+            self.assertEqual(restarted.reset_chat()["chat"]["model"], "gpt-6-sol")
+            self.assertEqual(restarted.set_chat_model({"model": "gpt-6-astra"})["model"], "gpt-6-astra")
+            self.assertEqual(restarted.set_chat_model({"model": "gpt-5.6-sol"})["model"], "gpt-5.6-sol")
+            reloaded = PilferedParrotApp(config, Path(directory))
+            self.assertEqual(reloaded.store.preferences_public()["chat_model"], "gpt-5.6-sol")
+            self.assertEqual(reloaded.state("chat")["chat"]["model"], "gpt-5.6-sol")
+
+    def test_explicit_saved_chat_model_remains_selectable_after_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = _web_config(directory)
+            app = PilferedParrotApp(config, Path(directory))
+            app.set_chat_model({"model": "gpt-custom-chat"})
+
+            restarted = PilferedParrotApp(config, Path(directory))
+            state = restarted.state("chat")
+            self.assertEqual(state["chat_model"], "gpt-custom-chat")
+            self.assertIn("gpt-custom-chat", state["chat_model_choices"])
+            self.assertIn("gpt-custom-chat", state["model_context_windows"]["codex"])
+            self.assertEqual(restarted.reset_chat()["chat"]["model"], "gpt-custom-chat")
 
     def test_technical_conversations_expose_practical_context_status(self):
         with tempfile.TemporaryDirectory() as directory:

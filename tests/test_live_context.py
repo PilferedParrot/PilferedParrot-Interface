@@ -12,7 +12,9 @@ from unittest.mock import patch
 
 from pilferedparrot.config import load_config
 from pilferedparrot.context_telemetry import CodexUsageReader
-from pilferedparrot.dispatch import RunCancelled, RunResult, capture_codex
+from pilferedparrot.dispatch import (
+    RunCancelled, RunResult, _codex_session_live_usage, capture_codex,
+)
 from pilferedparrot.model import Conversation, ProviderBudget
 from tests.test_context_usage import _app, _wait_for_idle
 
@@ -30,6 +32,97 @@ def record(used, timestamp="2026-09-14T20:00:00Z"):
 
 
 class LiveContextTests(unittest.TestCase):
+    def test_resumed_capture_keeps_previous_reading_until_valid_usage_arrives(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "sessions").mkdir()
+            path = root / "sessions" / f"rollout-{SESSION}.jsonl"
+            previous = record(100292)
+            empty = record(0, "2026-09-14T20:00:01Z")
+            empty["payload"]["info"]["last_token_usage"] = {
+                "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+            }
+            compacted = record(0, "2026-09-14T20:00:02Z")
+            compacted["payload"]["info"]["last_token_usage"] = {
+                "input_tokens": 0, "output_tokens": 0, "total_tokens": 16453,
+            }
+            path.write_text(json.dumps(previous) + "\n", encoding="utf-8")
+            updates = []
+            cancel = threading.Event()
+            cancel._pilferedparrot_usage = updates.append
+
+            def stream(command, prompt, cwd, *, stdout_line, on_tick, **kwargs):
+                # Resuming a quiet provider should immediately retain the last
+                # request's occupancy, even before this turn reports usage.
+                on_tick()
+                self.assertEqual(updates[-1]["input_tokens"], 100292)
+                stdout_line(json.dumps(empty))
+                self.assertEqual(len(updates), 1)
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(empty) + "\n")
+                on_tick()
+                self.assertEqual(len(updates), 1)
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(compacted) + "\n")
+                on_tick()
+                self.assertEqual(updates[-1]["input_tokens"], 16453)
+                self.assertEqual(updates[-1]["output_tokens"], 0)
+                stdout_line(json.dumps({"type": "turn.completed", "usage": {
+                    "input_tokens": 900000, "output_tokens": 12000,
+                }}))
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with patch.dict("os.environ", {"CODEX_HOME": directory}), \
+                    patch("pilferedparrot.dispatch._codex_command", return_value=["codex"]), \
+                    patch("pilferedparrot.dispatch._stream_process", side_effect=stream):
+                result = capture_codex(
+                    "follow-up", root, Conversation(provider_session_id=SESSION),
+                    load_config(root / "missing.json"), cancel,
+                )
+            self.assertEqual(result.live_input_tokens, 16453)
+            self.assertEqual(result.input_tokens, 900000)
+            self.assertEqual(len(updates), 2)
+
+    def test_compaction_total_is_used_by_live_and_final_log_readers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "sessions").mkdir()
+            path = root / "sessions" / f"rollout-{SESSION}.jsonl"
+            compacted = record(0)
+            compacted["payload"]["info"]["last_token_usage"] = {
+                "input_tokens": 0, "output_tokens": 0, "total_tokens": 16453,
+            }
+            path.write_text(json.dumps(compacted) + "\n", encoding="utf-8")
+            self.assertEqual(CodexUsageReader(root).read(SESSION), compacted)
+            with patch.dict("os.environ", {"CODEX_HOME": directory}):
+                self.assertEqual(
+                    _codex_session_live_usage(SESSION, load_config(root / "missing.json")),
+                    (16453, 0, 128000),
+                )
+
+    def test_empty_or_invalid_usage_does_not_hide_previous_log_sample(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "sessions").mkdir()
+            path = root / "sessions" / f"rollout-{SESSION}.jsonl"
+            previous = record(10000)
+            for total in (None, 0, -1, True, "16453", 1.5):
+                with self.subTest(total=total):
+                    empty = record(0)
+                    empty["payload"]["info"]["last_token_usage"] = {
+                        "input_tokens": 0, "output_tokens": 0, "total_tokens": total,
+                    }
+                    path.write_text(
+                        json.dumps(previous) + "\n" + json.dumps(empty) + "\n",
+                        encoding="utf-8",
+                    )
+                    self.assertEqual(CodexUsageReader(root).read(SESSION), previous)
+                    with patch.dict("os.environ", {"CODEX_HOME": directory}):
+                        self.assertEqual(
+                            _codex_session_live_usage(SESSION, load_config(root / "missing.json")),
+                            (10000, 20, 128000),
+                        )
+
     def test_usage_advances_while_provider_stdout_is_quiet(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

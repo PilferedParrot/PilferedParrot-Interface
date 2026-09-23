@@ -23,6 +23,7 @@ from .dispatch import RunCancelled, RunResult, capture_dispatch
 from .ledger import append_run
 from .model import PROVIDERS, Conversation, ProviderBudget
 from .qwen import ensure_qwen
+from .web_persistence import DEFAULT_CHAT_MODEL_OPTIONS
 
 
 @dataclass
@@ -68,8 +69,8 @@ class ProviderRunOrchestrator:
         store: Any | None = None,
         default_cwd: Path | None = None,
         default_provider: str = "codex",
-        chat_model: str = "gpt-5.6-terra",
-        chat_model_options: tuple[str, ...] = ("gpt-5.6-terra", "gpt-5.6-luna"),
+        chat_model: str = "gpt-6-luna",
+        chat_model_options: tuple[str, ...] = DEFAULT_CHAT_MODEL_OPTIONS,
         chat_reasoning_effort: str = "low",
         chat_context_warning_chars: int = 80_000,
         dispatch: Dispatch | None = None,

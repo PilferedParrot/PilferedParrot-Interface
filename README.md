@@ -81,6 +81,21 @@ Harness UI has been retired. The existing Harness backend and API remain availab
 records. See [the Harness review](docs/harness-review.md). Provider access, model availability,
 account limits, and usage charges belong to the provider you configure.
 
+## Unreleased source changes
+
+The source branch includes changes beyond the published 0.7.1 assets:
+
+- New Codex Chat sessions default to GPT-6 Luna with low reasoning when no Chat selection is
+  saved. An explicit saved model and reasoning selection takes precedence.
+- When work remains unfinished, providers receive continuation guidance to leave a copyable
+  next-session prompt and, when writing is allowed, a whiteboard handoff. See the
+  [continuation rule](docs/continuation.md) for its scope and limits.
+- Optional product feedback is off by default. Users can choose categories, review a local
+  report, and download it for voluntary sharing; PPI does not upload it. See the
+  [feedback policy](docs/feedback.md).
+
+These source changes are not included in the published 0.7.1 release archives.
+
 The source project requires Python 3.12 or newer. Chrome or Chromium is preferred on Linux; the
 Windows preview also detects Microsoft Edge. The Python application has no third-party package
 dependencies. Bubblewrap is used for Qwen's Linux shell tools and is disabled on Windows.

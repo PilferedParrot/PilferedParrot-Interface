@@ -6,11 +6,11 @@
         "label": "Sol lead, Luna first",
         "provider": "codex",
         "delegation_enabled": true,
-        "lead": {"provider": "codex", "model": "gpt-5.6-sol", "reasoning_effort": "high"},
-        "worker": {"provider": "codex", "model": "gpt-5.6-luna", "reasoning_effort": "medium"},
+        "lead": {"provider": "codex", "model": "gpt-6-sol", "reasoning_effort": "high"},
+        "worker": {"provider": "codex", "model": "gpt-6-luna", "reasoning_effort": "medium"},
         "escalation": [
-          {"provider": "codex", "model": "gpt-5.6-terra", "reasoning_effort": "medium"},
-          {"provider": "codex", "model": "gpt-5.6-sol", "reasoning_effort": "high"}
+          {"provider": "codex", "model": "gpt-6-sol", "reasoning_effort": "high"},
+          {"provider": "codex", "model": "gpt-6-astra", "reasoning_effort": "high"}
         ]
       }
     }

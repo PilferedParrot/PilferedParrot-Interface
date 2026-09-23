@@ -195,13 +195,18 @@ class ExpandedContentBrowserEndToEndTests(unittest.TestCase):
                     self.assertEqual(dialog.locator('.markdown-expand-button, .run-command').count(), 0)
                     self.assertTrue(dialog.locator('td').first.evaluate(
                         "node => getComputedStyle(node).borderTopStyle === 'solid'"))
+                    self.assertTrue(dialog.locator('th').first.evaluate("""node => {
+                        const range = document.createRange();
+                        range.selectNodeContents(node);
+                        return range.getClientRects().length > 1;
+                    }"""))
                     close_position = dialog.locator('.markdown-expansion-close').bounding_box()
                     offsets = dialog.locator('.markdown-expansion-content').evaluate("""node => {
                         node.scrollTop = 500; node.scrollLeft = 200;
                         return [node.scrollTop, node.scrollLeft];
                     }""")
                     self.assertGreater(offsets[0], 0)
-                    self.assertGreater(offsets[1], 0)
+                    self.assertEqual(offsets[1], 0)
                     self.assertEqual(dialog.locator('.markdown-expansion-close').bounding_box(), close_position)
                     dialog.locator('.markdown-expansion-close').click()
                     expect(dialog).to_be_hidden()

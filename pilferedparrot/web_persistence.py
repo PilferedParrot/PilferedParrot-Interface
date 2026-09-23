@@ -20,7 +20,10 @@ from typing import Any, Callable, Iterable
 from .config import expanded_path
 
 
-DEFAULT_CHAT_MODEL_OPTIONS = ("gpt-5.6-terra", "gpt-5.6-luna")
+DEFAULT_CHAT_MODEL_OPTIONS = (
+    "gpt-6-luna", "gpt-6-sol", "gpt-6-astra",
+    "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol",
+)
 _PROVIDER_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 NOTIFICATION_PERMISSION_STATES = frozenset({
     "unasked", "granted", "denied", "dismissed", "unavailable",
@@ -201,7 +204,7 @@ class PersistentChatStore:
     def __init__(
         self, path: Path, *, chat_warning_chars: int = 80_000,
         technical_warning_chars: int = 120_000, legacy_path: Path | None = None,
-        chat_model: str = "gpt-5.6-terra",
+        chat_model: str = "gpt-6-luna",
         context_usage: Callable[..., dict[str, Any]],
         chat_model_options: tuple[str, ...] = DEFAULT_CHAT_MODEL_OPTIONS,
     ):
@@ -351,8 +354,10 @@ class PersistentChatStore:
             } if isinstance(work_context, dict) else {},
         }
         chat_model = preferences.get("chat_model")
-        if isinstance(chat_model, str) and chat_model in self.chat_model_options:
-            self.data["preferences"]["chat_model"] = chat_model
+        if isinstance(chat_model, str) and chat_model.strip() \
+                and len(chat_model.strip()) <= 128 \
+                and not any(ord(char) < 32 for char in chat_model):
+            self.data["preferences"]["chat_model"] = chat_model.strip()
         chat_context = preferences.get("chat_context_window_percent")
         if isinstance(chat_context, int) and not isinstance(chat_context, bool) \
                 and 1 <= chat_context <= 100:
@@ -456,7 +461,7 @@ class PersistentChatStore:
 
     @staticmethod
     def _new_chat_thread(
-        model: str | None = "gpt-5.6-terra", provider: str = "codex",
+        model: str | None = "gpt-6-luna", provider: str = "codex",
         cwd: str | None = None,
     ) -> dict[str, Any]:
         now = int(time.time())

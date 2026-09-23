@@ -31,3 +31,9 @@ Use PilferedParrot.exe --help for command-line options.
 New installations use Darker / Minimal / Standard appearance in Work and Chat.
 Saved choices survive upgrades. Copy buttons preserve code/text whitespace, and
 Run with AI sends a reviewed shell block to the current Work session provider.
+
+The unreleased source branch adds optional product feedback, off by default. Users
+can enable individual categories, inspect a local report, then download it for
+voluntary sharing. Nothing is uploaded. This feature is not included in the
+published 0.7.1 ZIP. See docs/feedback.md for policy 1, local-change detection,
+retention, and turning all feedback off.

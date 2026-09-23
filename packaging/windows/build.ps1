@@ -3,6 +3,8 @@ $ErrorActionPreference = "Stop"
 $Version = "0.7.1"
 $PyInstallerVersion = if ($env:PYINSTALLER_VERSION) { $env:PYINSTALLER_VERSION } else { "6.15.0" }
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
+python (Join-Path $Root "bin/update-feedback-baseline") --check
+if ($LASTEXITCODE -ne 0) { throw "The feedback source baseline must be refreshed before packaging" }
 $Dist = Join-Path $Root "dist"
 $Build = Join-Path $Root "build"
 $Package = Join-Path $Dist "PilferedParrot-$Version-windows-x64"
@@ -41,7 +43,8 @@ $RequiredAssets = @(
     (Join-Path $Root "packaging/windows/README-WINDOWS.txt"),
     (Join-Path $Root "config.example.json"),
     (Join-Path $Root "LICENSE"),
-    (Join-Path $Root "NOTICE")
+    (Join-Path $Root "NOTICE"),
+    (Join-Path $Root "docs/feedback.md")
 )
 foreach ($Asset in $RequiredAssets) {
     if (-not (Test-Path $Asset -PathType Leaf)) {
@@ -52,6 +55,8 @@ Copy-Item (Join-Path $Root "packaging/windows/README-WINDOWS.txt") (Join-Path $P
 Copy-Item (Join-Path $Root "config.example.json") $Package
 Copy-Item (Join-Path $Root "LICENSE") $Package
 Copy-Item (Join-Path $Root "NOTICE") $Package
+New-Item -ItemType Directory -Force (Join-Path $Package "docs") | Out-Null
+Copy-Item (Join-Path $Root "docs/feedback.md") (Join-Path $Package "docs/feedback.md")
 $PythonLicense = Join-Path (python -c "import sys; print(sys.base_prefix)") "LICENSE.txt"
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $PythonLicense -PathType Leaf)) {
     throw "The bundled Python license is missing"

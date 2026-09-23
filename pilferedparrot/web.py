@@ -37,6 +37,7 @@ from .config import (
 from .dispatch import RunCancelled, RunResult, capture_dispatch, _stop_process
 from .processes import provider_argv
 from .ledger import append_run
+from .feedback import FeedbackStore
 from .harness import metric, outcome_summary, render_handoff
 from .web_harness import HarnessWorkflow
 from .model import (
@@ -47,7 +48,7 @@ from .qwen import AGENT_SYSTEM_PROMPT, TOOL_DEFINITIONS, ensure_qwen
 from .response_identity import configured_identity
 from .terminal import launch_terminal, terminal_argv as _terminal_argv
 from .web_persistence import (
-    DashboardModelStore, PersistentChatStore, chat_store_path,
+    DEFAULT_CHAT_MODEL_OPTIONS, DashboardModelStore, PersistentChatStore, chat_store_path,
     dashboard_capability_path, legacy_chat_store_path, load_dashboard_models,
     model_catalog_path, read_dashboard_capability, remove_dashboard_capability,
     write_dashboard_capability,
@@ -72,7 +73,7 @@ CODE_BLOCK_LANGUAGES = frozenset({
     "bash", "console", "fish", "powershell", "shell", "sh", "terminal", "zsh",
 })
 API_GENERATION = 21
-CHAT_MODEL_OPTIONS = ("gpt-5.6-terra", "gpt-5.6-luna")
+CHAT_MODEL_OPTIONS = DEFAULT_CHAT_MODEL_OPTIONS
 MESSAGE_MAX_CHARS = 40_000
 PROVIDER_LABELS = {item["id"]: item["label"] for item in PROVIDER_CATALOG}
 PROVIDER_TEMPLATES: tuple[dict[str, str], ...] = (
@@ -511,7 +512,7 @@ class ChatStore(PersistentChatStore):
     def __init__(
         self, path: Path, *, chat_warning_chars: int = 80_000,
         technical_warning_chars: int = 120_000, legacy_path: Path | None = None,
-        chat_model: str = "gpt-5.6-terra",
+        chat_model: str = "gpt-6-luna",
     ):
         super().__init__(
             path, chat_warning_chars=chat_warning_chars,
@@ -528,6 +529,7 @@ _pilferedparrot_dashboard_capability = read_dashboard_capability
 class PilferedParrotApp(HarnessWorkflow):
     def __init__(self, config: dict[str, Any], default_cwd: Path):
         self.config = config
+        self.feedback = FeedbackStore.from_config(config)
         self.default_cwd = default_cwd
         self.renamed_repository_root = _renamed_repository_root(default_cwd)
         self.chat_context_warning_chars = max(
@@ -572,7 +574,7 @@ class PilferedParrotApp(HarnessWorkflow):
             store_path,
             chat_warning_chars=self.chat_context_warning_chars,
             technical_warning_chars=self.technical_context_warning_chars,
-            chat_model=str(config["web"].get("chat_model") or "gpt-5.6-terra").strip(),
+            chat_model=str(config["web"].get("chat_model") or CHAT_MODEL_OPTIONS[0]).strip(),
             legacy_path=legacy_chat_store_path(config),
         )
         self.capabilities_lock = threading.RLock()
@@ -592,7 +594,7 @@ class PilferedParrotApp(HarnessWorkflow):
         self.runs: dict[str, ActiveRun] = {}
         self.chat_run: ActiveRun | None = None
         self.chat_model = str(
-            config["web"].get("chat_model") or "gpt-5.6-terra"
+            config["web"].get("chat_model") or CHAT_MODEL_OPTIONS[0]
         ).strip()
         if self.chat_model not in CHAT_MODEL_OPTIONS:
             self.chat_model = CHAT_MODEL_OPTIONS[0]
@@ -852,9 +854,15 @@ class PilferedParrotApp(HarnessWorkflow):
         options = list(model_catalog(self.config).get(provider, {}).get("options", []))
         if provider == "codex":
             seen = {str(option.get("value")) for option in options}
-            for value in (*CHAT_MODEL_OPTIONS, "gpt-5.6-sol"):
+            stored = self.store.data["preferences"].get("chat_model")
+            current = self.store.data["chat"]
+            thread_model = current.get("model") if current.get("provider") == "codex" else None
+            for value in (*CHAT_MODEL_OPTIONS, stored, thread_model):
+                if not value:
+                    continue
                 if value not in seen:
                     options.append({"value": value, "label": value})
+                    seen.add(value)
         return options
 
     def _preferred_chat_model(self, provider: str) -> str | None:
@@ -862,6 +870,7 @@ class PilferedParrotApp(HarnessWorkflow):
             stored = self.store.data["preferences"].get("chat_model")
             if isinstance(stored, str) and stored.strip():
                 return self._normalize_model(stored)
+            return self.chat_model
         work_model = self.store.data["preferences"]["work_models"].get(provider)
         return self._normalize_model(work_model) or effective_model(self.config, provider) \
             or next((
@@ -890,6 +899,29 @@ class PilferedParrotApp(HarnessWorkflow):
             self.store.data["preferences"]["work_models"][provider] = model
             self.store.save()
             return self.store.preferences_public()
+
+    def feedback_status(self) -> dict[str, Any]:
+        return self.feedback.status()
+
+    def feedback_action(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if action == "consent":
+            return self.feedback.set_consent(payload)
+        if action in {"clear", "reset"}:
+            if payload:
+                raise ValueError("this feedback action takes an empty object")
+            return self.feedback.clear(reset=action == "reset")
+        if action == "report":
+            if set(payload) - {"feedback"}:
+                raise ValueError("unknown report field")
+            return self.feedback.report(payload.get("feedback"), _preview=True)
+        raise ValueError("unknown feedback action")
+
+    def feedback_snapshot(self) -> dict[str, str]:
+        return self.feedback.snapshot()
+
+    def record_feedback(self, category: str, event: str, surface: str,
+                        consent: dict[str, str] | None = None) -> None:
+        self.feedback.record(category, event, surface, consent)
 
     def set_notification_preferences(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Save the browser notification decision without changing provider settings."""
@@ -1173,7 +1205,10 @@ class PilferedParrotApp(HarnessWorkflow):
             for option in catalog.get("codex", {}).get("options", [])
             if option.get("value")
         }
-        codex_models.update((*CHAT_MODEL_OPTIONS, "gpt-5.6-sol"))
+        codex_models.update(
+            str(option["value"]) for option in self._chat_model_options("codex")
+            if option.get("value")
+        )
         def catalog_maximum(provider: str, option: dict[str, Any]) -> int | None:
             raw = option.get("max_context_window") or option.get("context_window")
             try:
@@ -1423,9 +1458,10 @@ class PilferedParrotApp(HarnessWorkflow):
                     chat_thread, self.config, selected_provider, model,
                     Path(chat_thread.get("cwd") or self.default_cwd), limit,
                 )
-                self.store.data["preferences"]["work_models"][selected_provider] = model
                 if selected_provider == "codex":
                     self.store.data["preferences"]["chat_model"] = model
+                else:
+                    self.store.data["preferences"]["work_models"][selected_provider] = model
                 self.store.save()
                 return self.store.chat_public()
 
@@ -1806,6 +1842,7 @@ class PilferedParrotApp(HarnessWorkflow):
             if result.exit_code and result.error and result.text:
                 content += f"\n\n{result.error}"
             if result.exit_code:
+                self.feedback.record("problems", "provider_failed", "work")
                 content = redact_configured_secrets(self.config, content)
             with self.store.lock:
                 chat = self.store.get(chat_id)
@@ -1846,11 +1883,13 @@ class PilferedParrotApp(HarnessWorkflow):
             except OSError as error:
                 print(f"[web] could not append run ledger: {error}")
         except RunCancelled:
+            self.feedback.record("problems", "cancelled", "work")
             with self.store.lock:
                 chat = self.store.get(chat_id)
                 pending = self._message(chat, pending_id)
                 pending.update({"content": "Cancelled.", "cancelled": True, "exit_code": 130})
         except Exception as exc:
+            self.feedback.record("problems", "provider_failed", "work")
             with self.store.lock:
                 chat = self.store.get(chat_id)
                 pending = self._message(chat, pending_id)
@@ -1975,9 +2014,10 @@ class PilferedParrotApp(HarnessWorkflow):
                     chat_thread.pop("live_context_usage", None)
                     chat_thread.pop("last_turn_usage", None)
                 chat_thread["reasoning_effort"] = reasoning_effort
-                self.store.data["preferences"]["work_models"][selected_provider] = requested_model
                 if selected_provider == "codex":
                     self.store.data["preferences"]["chat_model"] = requested_model
+                else:
+                    self.store.data["preferences"]["work_models"][selected_provider] = requested_model
                 percent = _context_percent(chat_thread.get(
                     "context_window_percent", context_window_percent(
                         self.config, selected_provider,
@@ -2136,8 +2176,10 @@ class PilferedParrotApp(HarnessWorkflow):
                         "context_window_tokens": result.live_context_window_tokens,
                     })
         except RunCancelled:
+            self.feedback.record("problems", "cancelled", "chat")
             reply = "Stopped."
         except Exception as error:
+            self.feedback.record("problems", "provider_failed", "chat")
             reply = f"Chat error: {redact_configured_secrets(self.config, error)}"
         finally:
             with self.runs_lock:
@@ -2265,9 +2307,10 @@ class PilferedParrotApp(HarnessWorkflow):
                 self.config, selected_provider, model, percent,
             )
             with self.store.lock:
-                self.store.data["preferences"]["work_models"][selected_provider] = model
                 if selected_provider == "codex":
                     self.store.data["preferences"]["chat_model"] = model
+                else:
+                    self.store.data["preferences"]["work_models"][selected_provider] = model
             if context_limit is not None:
                 with self.store.lock:
                     self.store.data["chat"]["context_limit_tokens"] = context_limit
@@ -2586,13 +2629,23 @@ class PilferedParrotApp(HarnessWorkflow):
             image_key, theme_version=theme_version,
         )
 
-    def whiteboard_read(self) -> dict[str, Any]:
+    def whiteboard_read(self, filters: dict[str, Any] | None = None) -> dict[str, Any]:
         from .whiteboard import Whiteboard
-        return Whiteboard(self.config).read()
+        filters = filters or {}
+        allowed = {"limit", "since", "query", "project", "topic", "kind", "status", "thread", "before"}
+        if not isinstance(filters, dict) or set(filters) - allowed:
+            raise ValueError("unsupported whiteboard filter")
+        return Whiteboard(self.config).read(**filters)
 
     def whiteboard_post(self, payload: dict[str, Any]) -> dict[str, Any]:
         from .whiteboard import Whiteboard
-        return Whiteboard(self.config).post(payload.get("text"), author="User")
+        allowed = {"text", "workspace", "kind", "title", "project", "topics", "evidence",
+                   "applies_to", "status", "reply_to", "expires_at", "basis"}
+        if not isinstance(payload, dict) or set(payload) - allowed:
+            raise ValueError("unsupported whiteboard field")
+        fields = {key: value for key, value in payload.items() if key != "text"}
+        return Whiteboard(self.config).post(payload.get("text"), author="User",
+                                            identity={"source": "user"}, **fields)
 
     def open_chat_window(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Open Chat in a normal native window, isolated from the maximized main profile."""
@@ -2656,6 +2709,7 @@ class PilferedParrotApp(HarnessWorkflow):
             if process.poll() is None:
                 _stop_process(process)
         self.native.shutdown(deadline=deadline)
+        self.feedback.close()
 
 
 def make_handler(app: PilferedParrotApp) -> type[Any]:

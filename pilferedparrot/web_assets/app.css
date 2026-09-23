@@ -942,14 +942,42 @@ dialog::backdrop { background: rgba(0, 0, 0, .62); }
 .provider-update[data-status="update_available"] { color: #c98521; }
 .pending-line { overflow-wrap: anywhere; }
 
-/* The shared board is fetched on demand and keeps long notes inside the dialog. */
-#whiteboardDialog { width: min(640px, calc(100% - 30px)); max-height: calc(100dvh - 32px); }
-.whiteboard-messages { max-height: 42dvh; overflow-y: auto; }
-.whiteboard-messages { display: grid; gap: 12px; margin-bottom: 16px; }
-.whiteboard-messages article { padding: 12px; border-radius: var(--radius-control); background: var(--panel-2); }
-.whiteboard-messages article p { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); margin: 7px 0; }
+/* The shared board only reads after a deliberate Browse action. */
+#whiteboardDialog { width: min(800px, calc(100% - 30px)); max-height: calc(100dvh - 32px); }
+.whiteboard-entry-choice, .whiteboard-template-actions, .whiteboard-note-actions, .whiteboard-filter-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.whiteboard-entry-choice { margin: 16px 0 8px; }
+.whiteboard-mode-note, .whiteboard-decision-note { font-size: 1rem; }
+.whiteboard-feed { min-width: 0; }
+.whiteboard-filters { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; margin: 12px 0; }
+.whiteboard-compose-grid, .whiteboard-filter-more { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
+.whiteboard-filters label, .whiteboard-compose-grid label, .whiteboard-filter-more label { display: grid; gap: 5px; min-width: 0; color: var(--text); }
+.whiteboard-filters input, .whiteboard-filters select, .whiteboard-compose-grid input, .whiteboard-compose-grid select, .whiteboard-filter-more input, .whiteboard-filter-more select { min-width: 0; width: 100%; }
+.whiteboard-filter-actions { align-items: end; }
+.whiteboard-more-filters { grid-column: 1 / -1; }
+.whiteboard-more-filters summary { cursor: pointer; color: var(--text); }
+.whiteboard-filter-more { margin-top: 8px; }
+.whiteboard-messages { display: grid; gap: 12px; max-height: 42dvh; overflow-y: auto; margin: 16px 0; }
+.whiteboard-messages article { min-width: 0; padding: 12px; border-radius: var(--radius-control); background: var(--panel-2); }
+.whiteboard-note-heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
+.whiteboard-note-meta, .whiteboard-topics { color: var(--muted); font-size: 1rem; }
+.whiteboard-topics { margin: 7px 0 0; }
+.whiteboard-messages article .whiteboard-note-text { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); margin: 7px 0; }
+.whiteboard-note-details { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 10px; margin: 10px 0; font-size: 1rem; }
+.whiteboard-note-details dt { color: var(--muted); }
+.whiteboard-note-details dd { margin: 0; overflow-wrap: anywhere; }
+.whiteboard-note-actions { margin-top: 10px; }
+.whiteboard-template-actions { margin: 8px 0 0; }
+.whiteboard-details { margin-top: 12px; }
+.whiteboard-details summary { cursor: pointer; color: var(--text); }
+#whiteboardOlder { margin: 0 0 16px; }
 #whiteboardText { display: block; width: 100%; margin-top: 8px; padding: 10px; resize: vertical; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; font: inherit; }
 #whiteboardText:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+@media (max-width: 600px) {
+  #whiteboardDialog { width: calc(100% - 16px); }
+  .whiteboard-filters, .whiteboard-compose-grid, .whiteboard-filter-more { grid-template-columns: minmax(0, 1fr); }
+  .whiteboard-entry-choice > button, .whiteboard-note-actions > button, .whiteboard-template-actions > button { flex: 1 1 132px; }
+  .whiteboard-messages { max-height: 34dvh; }
+}
 
 /* Equal outer columns keep branding centered even with unequal title/actions. */
 .topbar, .chat-window-conversation .chat-header {
@@ -1404,6 +1432,26 @@ body.chrome-theme :is(.sidebar, .chat-window-sidebar) .history-group .chat-item:
 }
 .appearance-options input { accent-color: var(--blue); width: 16px; height: 16px; padding: 0; margin: 0; flex: none; }
 .appearance-title { margin: 8px 0 0; font-size: 1.05rem; }
+.feedback-details { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px; }
+.feedback-details summary { cursor: pointer; font-weight: 650; }
+.feedback-content { display: grid; gap: 8px; margin-top: 10px; }
+.feedback-content .appearance-help { font-size: 1rem; }
+.feedback-consents { display: grid; gap: 7px; }
+.feedback-consents label, .feedback-written label { display: flex; gap: 7px; align-items: flex-start; color: var(--muted); }
+.feedback-consents input, .feedback-written input { width: 16px; height: 16px; flex: none; margin: 3px 0 0; accent-color: var(--blue); }
+.feedback-written { display: grid; gap: 6px; }
+.feedback-written :is(select, textarea) { width: 100%; padding: 8px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); }
+.feedback-written textarea { resize: vertical; }
+.feedback-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.feedback-actions label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.feedback-actions input { accent-color: var(--blue); }
+.feedback-preview { max-height: 220px; overflow: auto; margin: 0; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 1rem; }
+.feedback-status { min-height: 1.4em; margin: 0; color: var(--muted); font-size: 1rem; }
+.feedback-status[data-state="error"] { color: var(--red); }
+.feedback-details a { color: var(--blue); }
+.feedback-content, .feedback-content fieldset { min-width: 0; }
+.feedback-details summary, .feedback-consents label, .feedback-actions button { min-height: 44px; }
+.feedback-content button { max-width: 100%; white-space: normal; }
 @media (max-width: 600px) {
   .sidebar-group :is(.sidebar-actions button, .chat-new-chat, .sidebar-whiteboard-button),
   .sidebar-preferences-button { min-height: 44px; }

@@ -18,6 +18,15 @@ from pilferedparrot.web import _terminal_argv
 
 
 class WindowsEntrypointTests(unittest.TestCase):
+    def test_frozen_whiteboard_helper_does_not_start_gui_or_create_default_state(self):
+        with patch('pilferedparrot.whiteboard_native.main', return_value=0) as helper, \
+                patch.object(windows, 'prepare_arguments') as prepare, \
+                patch('pilferedparrot.cli.main') as cli:
+            self.assertEqual(windows.main(['--whiteboard-post', 'C:/board/context.json']), 0)
+            helper.assert_called_once_with(['C:/board/context.json'])
+            prepare.assert_not_called()
+            cli.assert_not_called()
+
     def test_first_run_creates_user_state_and_preserves_existing_configuration(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

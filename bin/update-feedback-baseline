@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""Refresh/check the advisory list of shipped sources used by opt-in feedback."""
+import argparse
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from pilferedparrot import __version__
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--check", action="store_true", help="fail if the baseline needs updating")
+args = parser.parse_args()
+package = ROOT / "pilferedparrot"
+paths = list(package.glob("*.py")) + [
+    p for p in (package / "web_assets").iterdir() if p.suffix in {".js", ".css", ".html"}
+]
+payload = {"version": __version__, "files": {
+    p.relative_to(package).as_posix(): hashlib.sha256(p.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+    for p in sorted(paths)
+}}
+text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+destination = package / "feedback-baseline.json"
+if args.check:
+    if not destination.exists() or destination.read_text(encoding="utf-8") != text:
+        parser.exit(1, "Feedback baseline is stale. Run python bin/update-feedback-baseline before release.\n")
+else:
+    destination.write_text(text, encoding="utf-8")

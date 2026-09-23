@@ -80,7 +80,8 @@ def _chat_completion(
     tools = TOOL_DEFINITIONS
     if sys.platform == "win32":
         tools = [tool for tool in tools if tool.get("function", {}).get("name") != "shell"]
-    if provider_config.get("read_only"):
+    from .whiteboard import whiteboard_read_only
+    if whiteboard_read_only(provider_config):
         tools = [
             tool for tool in tools
             if tool.get("function", {}).get("name") in {"read_file", "diff", "whiteboard_read"}
@@ -118,6 +119,12 @@ def _chat_completion(
             if not isinstance(choice, dict) or not isinstance(choice.get("message"), dict):
                 raise _malformed_response(provider, "first choice has no message object")
             message = dict(choice["message"])
+            from .whiteboard_identity import runtime_identity
+            message["_pilferedparrot_whiteboard_identity"] = runtime_identity(
+                config, provider,
+                reported_model=choice.get("model") or result.get("model"),
+                reported_reasoning_effort=choice.get("reasoning_effort") or result.get("reasoning_effort"),
+            )
             usage = result.get("usage")
             if isinstance(usage, dict):
                 message["_pilferedparrot_usage"] = usage
@@ -226,9 +233,12 @@ def run_compatible_agent(
         response_identity.update(configured_identity(config, provider))
     additional_dirs = provider_additional_dirs(config, provider)
     toolbox_config = dict(provider_config)
-    from .whiteboard import whiteboard_directory
+    from .whiteboard import whiteboard_directory, whiteboard_read_only
     toolbox_config["_whiteboard_directory"] = str(whiteboard_directory(config))
-    toolbox = QwenToolbox(cwd, toolbox_config, additional_dirs)
+    toolbox_config["read_only"] = whiteboard_read_only(provider_config)
+    from .whiteboard_identity import runtime_identity
+    toolbox = QwenToolbox(cwd, toolbox_config, additional_dirs,
+                          identity=runtime_identity(config, provider))
     messages.append({"role": "user", "content": prompt})
     # Appended rather than interpolated: the context estimator formats this
     # template with an empty workspace, so the template keeps one field.
@@ -243,19 +253,19 @@ def run_compatible_agent(
         "inference runs, and any model ID reported by the server is self-reported evidence, "
         "not proof of the underlying model weights.\n"
     )
-    if provider_config.get("read_only"):
+    if toolbox_config["read_only"]:
         system_prompt += (
             "\nThis is a read-only Chat instance. Inspect and explain, but do not modify "
             "files or run commands.\n"
         )
     if additional_dirs:
         listed = "\n".join(f"- {root}" for root in additional_dirs)
-        access = "readable" if bool(provider_config.get("read_only")) else "readable and writable"
+        access = "readable" if toolbox_config["read_only"] else "readable and writable"
         system_prompt += (
             f"\nThese additional roots are also {access}. Reach them with absolute paths. "
             f"File tools are limited to the workspace and these roots.\n{listed}\n"
         )
-    if not bool(provider_config.get("read_only")):
+    if not toolbox_config["read_only"]:
         system_prompt += (
             "\nShell tools can also read installed system binaries and selected runtime "
             "configuration, and use disposable temporary storage. Other host data is hidden. "
@@ -272,6 +282,10 @@ def run_compatible_agent(
             [system, *messages], config, provider, cancel_event=cancel_event,
             response_identity=response_identity,
         )
+        # Snapshot the exact response that requested this turn's tools. Do not
+        # reuse a previous response's model if routing changes or omits it.
+        toolbox.identity = message.pop("_pilferedparrot_whiteboard_identity",
+                                       runtime_identity(config, provider))
         raw_usage = message.pop("_pilferedparrot_usage", None)
         if isinstance(raw_usage, dict):
             normalized: dict[str, int] = {}

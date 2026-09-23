@@ -1684,6 +1684,7 @@ async function confirmTerminalCommand() {
 }
 
 async function init() {
+  globalThis.PilferedParrotFeedback?.connect(api);
   try {
     restorePaneWidths();
     const initial = await api("/api/state");

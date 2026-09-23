@@ -1,8 +1,8 @@
 const $ = (selector) => document.querySelector(selector);
 const { escapeHtml, render: renderMarkdown } = globalThis.PilferedParrotMarkdown;
 const state = {
-  chat: { messages: [], pending: false, model: "gpt-5.6-terra" },
-  chat_history: [], chatViewId: null, chat_model: "gpt-5.6-terra",
+  chat: { messages: [], pending: false, model: "gpt-6-luna" },
+  chat_history: [], chatViewId: null, chat_model: "gpt-6-luna",
   chat_model_choices: [], capability: "", windowProvider: "codex",
   budgets: {}, budgetsLoaded: false,
   model_catalog: {}, providers: [], modelPolls: {},
@@ -1086,6 +1086,7 @@ async function refreshBrowserTheme() {
 }
 
 async function init() {
+  globalThis.PilferedParrotFeedback?.connect(api);
   try {
     const initial = await api("/api/state");
     applyServerState(initial);

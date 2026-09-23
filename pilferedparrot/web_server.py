@@ -30,7 +30,7 @@ ASSET_ROOT = Path(__file__).resolve().parent / "web_assets"
 RUNTIME_ROOT = Path(__file__).resolve().parent
 ASSET_NAMES = (
     "index.html", "chat.html", "app.css", "expanded-content.css", "code-actions.css", "markdown.js", "usage.js", "code-actions.js", "expanded-content.js", "identity.js", "provider-updates.js", "app.js", "chat.js", "icon.svg",
-    "pilferedparrot-icon.png", "company-logo.png", "company-logo-dark.png", "whiteboard-ui.js", "appearance.js", "appearance-sync.js",
+    "pilferedparrot-icon.png", "company-logo.png", "company-logo-dark.png", "whiteboard-ui.js", "appearance.js", "appearance-sync.js", "feedback.js",
 )
 API_GENERATION = 23
 
@@ -52,7 +52,7 @@ class ServerApp(Protocol):
     def browser_theme(self) -> Any: ...
     def chrome_theme_background(self, *, theme_version: str | None = None) -> tuple[bytes, str] | None: ...
     def chrome_theme_image(self, image_key: str, *, theme_version: str | None = None) -> tuple[bytes, str] | None: ...
-    def whiteboard_read(self) -> Any: ...
+    def whiteboard_read(self, filters: dict[str, Any] | None = None) -> Any: ...
     def whiteboard_post(self, payload: dict[str, Any]) -> Any: ...
     def set_draft(self, chat_id: str, payload: dict[str, Any], *, window_id: str) -> Any: ...
     def create_chat(self, payload: dict[str, Any], *, window_id: str, window_provider: str | None) -> Any: ...
@@ -60,6 +60,10 @@ class ServerApp(Protocol):
     def remove_provider(self, payload: dict[str, Any]) -> None: ...
     def set_provider_preferences(self, payload: dict[str, Any], *, window_provider: str | None) -> Any: ...
     def set_notification_preferences(self, payload: dict[str, Any]) -> Any: ...
+    def feedback_status(self) -> Any: ...
+    def feedback_action(self, action: str, payload: dict[str, Any]) -> Any: ...
+    def feedback_snapshot(self) -> dict[str, str]: ...
+    def record_feedback(self, category: str, event: str, surface: str, consent: dict[str, str] | None = None) -> None: ...
     def appearance_preferences(self) -> Any: ...
     def set_appearance_preferences(self, payload: dict[str, Any]) -> Any: ...
     def choose_project_directory(self, payload: dict[str, Any], provider: str) -> Any: ...
@@ -219,6 +223,44 @@ def make_handler(
     thread_factory: Callable[..., Any] = threading.Thread,
 ) -> type[BaseHTTPRequestHandler]:
     """Adapt the application protocol to HTTP without application imports."""
+    def snapshot() -> dict[str, str]:
+        try:
+            return app.feedback_snapshot()
+        except Exception:
+            return {}
+
+    def record(category: str, event: str, scope: str, consent: dict[str, str]) -> None:
+        # Only fixed vocabulary crosses the telemetry boundary. Optional feedback
+        # must never change HTTP responses, provider behavior or request timing.
+        try:
+            app.record_feedback(category, event, "chat" if scope == "chat" else "work", consent)
+        except Exception:
+            pass
+
+    def record_action(path: str, payload: dict[str, Any], scope: str, consent: dict[str, str]) -> None:
+        event = {
+            "/api/chats": "new_session", "/api/chat/reset": "new_session",
+            "/api/chat/messages": "message_sent", "/api/chat/model": "model_changed",
+            "/api/chat/reasoning": "reasoning_changed", "/api/chat/context": "context_changed",
+            "/api/preferences/provider": "model_changed",
+        }.get(path)
+        if re.fullmatch(r"/api/chats/[^/]+/(messages|context|reasoning|commands)", path):
+            event = {"messages": "message_sent", "context": "context_changed",
+                     "reasoning": "reasoning_changed", "commands": "command_run"}[path.rsplit("/", 1)[1]]
+        if event:
+            record("usage", event, scope, consent)
+        if path == "/api/preferences/appearance":
+            for key, options in {"tone": {"original", "darker"},
+                                 "surface": {"minimal", "balanced", "maximal"},
+                                 "readability": {"standard", "stronger"}}.items():
+                value = payload.get(key)
+                if isinstance(value, str) and value in options:
+                    record("preferences", key + "_" + value, scope, consent)
+        elif path == "/api/preferences/notifications":
+            value = payload.get("decision")
+            if isinstance(value, str) and value in {"granted", "denied", "dismissed", "unavailable", "unasked"}:
+                record("preferences", "notifications_" + value, scope, consent)
+
     # Keep the frontend and API on the same generation. During development or
     # an in-place update, rereading assets from disk would let an old process
     # serve new JavaScript that calls routes the process does not have yet.
@@ -426,6 +468,8 @@ def make_handler(
                 self._asset("app.js", "text/javascript; charset=utf-8")
             elif path == "/usage.js":
                 self._asset("usage.js", "text/javascript; charset=utf-8")
+            elif path == "/feedback.js":
+                self._asset("feedback.js", "text/javascript; charset=utf-8")
             elif path == "/appearance-sync.js":
                 self._asset("appearance-sync.js", "text/javascript; charset=utf-8")
             elif path == "/appearance.js":
@@ -487,6 +531,11 @@ def make_handler(
                     self._json({"error": "Chat authorization failed"}, HTTPStatus.FORBIDDEN)
                 else:
                     self._json(app.current_chat_state())
+            elif path == "/api/feedback":
+                if self._request_capability_scope() not in {"dashboard", "chat"}:
+                    self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
+                else:
+                    self._json(app.feedback_status())
             elif path == "/api/preferences/appearance":
                 if self._request_capability_scope() not in {"dashboard", "chat"}:
                     self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
@@ -520,7 +569,14 @@ def make_handler(
                 if self._request_capability_scope() != "dashboard":
                     self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
                 else:
-                    self._json(app.whiteboard_read())
+                    values = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+                    allowed = {"limit", "since", "query", "project", "topic", "kind", "status", "thread", "before"}
+                    if set(values) - allowed or any(len(items) != 1 for items in values.values()):
+                        raise ValueError("unsupported or repeated whiteboard filter")
+                    filters = {key: items[0] for key, items in values.items() if items[0]}
+                    consent = snapshot()
+                    self._json(app.whiteboard_read(filters) if filters else app.whiteboard_read())
+                    record("usage", "whiteboard_opened", "dashboard", consent)
             elif path.startswith("/api/browser/theme/image/"):
                 if self._request_capability_scope() not in {"dashboard", "chat"}:
                     self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
@@ -575,7 +631,9 @@ def make_handler(
                 chat_control = path.startswith("/api/chat/") and path != "/api/chat/window"
                 native_control = path == "/api/window/native"
                 appearance_control = path == "/api/preferences/appearance"
-                if native_control or appearance_control:
+                feedback_control = path in {"/api/feedback/consent", "/api/feedback/clear",
+                                            "/api/feedback/reset", "/api/feedback/report"}
+                if native_control or appearance_control or feedback_control:
                     context = self._request_capability_context(require_origin=True)
                     authorized = context is not None \
                         and context.get("scope") in {"dashboard", "chat"}
@@ -592,7 +650,12 @@ def make_handler(
                 window_provider = context.get("provider") or None
                 parts = path.strip("/").split("/")
                 payload = self._read_json()
-                if path == "/api/chats":
+                # Capture the permission in force before executing the action.
+                # Post-response recording must not backfill pre-consent actions.
+                feedback_consent = snapshot() if not feedback_control else {}
+                if feedback_control:
+                    self._json(app.feedback_action(parts[-1], payload))
+                elif path == "/api/chats":
                     self._json(app.create_chat(
                         payload, window_id=window_id, window_provider=window_provider,
                     ), HTTPStatus.CREATED)
@@ -719,11 +782,14 @@ def make_handler(
                     ), HTTPStatus.ACCEPTED)
                 else:
                     self.send_error(HTTPStatus.NOT_FOUND)
+                record_action(path, payload, context["scope"], feedback_consent)
             except KeyError:
                 self._json({"error": "work session not found"}, HTTPStatus.NOT_FOUND)
             except (ValueError, json.JSONDecodeError) as exc:
                 self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except Exception as exc:
+                if locals().get("authorized") and not locals().get("feedback_control"):
+                    record("problems", "request_failed", context["scope"], locals().get("feedback_consent", {}))
                 print(f"[web] request failed: {type(exc).__name__}: {exc}")
                 self._json({"error": f"PilferedParrot error: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
