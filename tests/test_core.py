@@ -878,11 +878,16 @@ class WebStoreTests(unittest.TestCase):
                 "id", "title", "cwd", "project_cwd", "requested_provider",
                 "requested_model", "provider", "model", "window_id",
                 "updated_at", "last_used_order", "pending", "message_count",
+                "context_status",
             }
             first_summary = next(chat for chat in compact["chats"] if chat["id"] == first["id"])
             self.assertEqual(set(first_summary), allowed)
             self.assertTrue(first_summary["pending"])
             self.assertEqual(first_summary["message_count"], 2)
+            self.assertEqual(
+                first_summary["context_status"],
+                next(chat for chat in full_before["chats"] if chat["id"] == first["id"])["context_status"],
+            )
             self.assertEqual(first_summary["provider"], "codex")
             self.assertNotIn("messages", first_summary)
             self.assertNotIn("draft", first_summary)

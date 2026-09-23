@@ -38,6 +38,7 @@ from .dispatch import RunCancelled, RunResult, capture_dispatch, _stop_process
 from .processes import provider_argv
 from .ledger import append_run
 from .feedback import FeedbackStore
+from .web_events import EventHub
 from .harness import metric, outcome_summary, render_handoff
 from .web_harness import HarnessWorkflow
 from .model import (
@@ -577,6 +578,7 @@ class PilferedParrotApp(HarnessWorkflow):
             chat_model=str(config["web"].get("chat_model") or CHAT_MODEL_OPTIONS[0]).strip(),
             legacy_path=legacy_chat_store_path(config),
         )
+        self.events = EventHub()
         self.capabilities_lock = threading.RLock()
         self.capabilities: dict[str, dict[str, str]] = {}
         self.dashboard_capability = self.issue_capability(
@@ -1389,6 +1391,22 @@ class PilferedParrotApp(HarnessWorkflow):
         with self.store.lock:
             return self.store.public(self._owned_chat(chat_id, window_id))
 
+    def work_event_batch(
+        self, chat_id: str, after: int, *, epoch: str | None,
+        window_id: str, timeout: float = 10,
+    ) -> list[dict[str, Any]]:
+        with self.store.lock:
+            self._owned_chat(chat_id, window_id)
+        if epoch and epoch != self.events.epoch:
+            return [{"seq": self.events.latest(chat_id), "kind": "reset", "payload": {}}]
+        return self.events.wait_after(chat_id, after, timeout=timeout)
+
+    def work_event_epoch(self) -> str:
+        return self.events.epoch
+
+    def work_event_closed(self) -> bool:
+        return self.events.closed
+
     def current_chat_state(self) -> dict[str, Any]:
         """Expose the persisted Chat view through the server-facing app boundary."""
         return self.store.chat_public()
@@ -1620,7 +1638,10 @@ class PilferedParrotApp(HarnessWorkflow):
     ) -> dict[str, Any]:
         with self.store.lock:
             chat = self._owned_chat(chat_id, window_id)
-            return self.store.set_draft(chat["id"], payload.get("draft"))
+            return self.store.set_draft(
+                chat["id"], payload.get("draft"),
+                ack_only=payload.get("ack_only") is True,
+            )
 
     def send_message(
         self, chat_id: str, payload: dict[str, Any], *,
@@ -1651,6 +1672,19 @@ class PilferedParrotApp(HarnessWorkflow):
                                or chat.get("requested_provider") or self.default_provider)
                 if provider not in self._provider_ids(include_hidden=bool(window_provider)):
                     raise ValueError(f"provider must be one of: {', '.join(self._provider_ids())}")
+                first_turn_cwd = None
+                if not chat["messages"]:
+                    first_turn_cwd = _project_directory(_migrate_renamed_project_path(
+                        chat["cwd"], self.renamed_repository_root,
+                    ))
+                    requested_cwd = _project_directory(_migrate_renamed_project_path(
+                        payload.get("cwd") or chat["cwd"], self.renamed_repository_root,
+                    ))
+                    if requested_cwd != first_turn_cwd:
+                        raise ValueError(
+                            "this session belongs to another project; start a new session there"
+                        )
+                    _validate_provider_workspace(provider, first_turn_cwd, self.config)
                 model_value = payload.get("model") if "model" in payload \
                     else chat.get("requested_model")
                 requested_model = self._normalize_model(model_value)
@@ -1682,14 +1716,10 @@ class PilferedParrotApp(HarnessWorkflow):
                     chat.pop("live_context_usage", None)
                     chat.pop("last_turn_usage", None)
                 if not chat["messages"]:
-                    requested_cwd = _project_directory(_migrate_renamed_project_path(
-                        payload.get("cwd") or chat["cwd"], self.renamed_repository_root,
-                    ))
-                    _validate_provider_workspace(provider, requested_cwd, self.config)
                     # A path mentioned in prose can be an input, example, or
                     # explicit exclusion. Keep the selected workspace and let
                     # provider/tool permissions enforce actual file operations.
-                    chat["cwd"] = str(requested_cwd)
+                    chat["cwd"] = str(first_turn_cwd)
                 percent = _context_percent(chat.get(
                     "context_window_percent", context_window_percent(self.config, provider),
                 ))
@@ -1848,24 +1878,35 @@ class PilferedParrotApp(HarnessWorkflow):
                 self.store.save()
 
             def report_progress(kind: str, text: str) -> None:
+                if kind.startswith("_auth/"):
+                    return
                 rendered = str(text).strip()
                 if not rendered:
                     return
-                rendered = rendered[:4_000]
+                rendered = redact_configured_secrets(self.config, rendered)[:4_000]
                 with self.store.lock:
                     pending = self._message(self.store.get(chat_id), pending_id)
                     activity = pending.setdefault("activity", [])
-                    activity.append({
+                    update = {
+                        "id": uuid.uuid4().hex,
                         "kind": kind,
                         "content": rendered,
                         "created_at": int(time.time()),
-                    })
+                    }
+                    activity.append(update)
                     if len(activity) > 100:
                         del activity[:-100]
                     now = time.monotonic()
                     if now - active.last_checkpoint >= 0.5:
                         self.store.save()
                         active.last_checkpoint = now
+                    try:
+                        self.events.publish(chat_id, "progress", {
+                            "message_id": pending_id, "activity": update,
+                        })
+                    except RuntimeError:
+                        # Shutdown may close the stream before a slow provider exits.
+                        pass
 
             setattr(active.cancel_event, "_pilferedparrot_progress", report_progress)
             def report_usage(usage: dict[str, Any]) -> None:
@@ -1873,6 +1914,13 @@ class PilferedParrotApp(HarnessWorkflow):
                     current = self.store.get(chat_id)
                     if self._message(current, pending_id).get("pending"):
                         _record_context_usage(current, usage)
+                        context = self.store.context_public(current)
+                        try:
+                            self.events.publish(chat_id, "usage", {
+                                "message_id": pending_id, **context,
+                            })
+                        except RuntimeError:
+                            pass
 
             setattr(active.cancel_event, "_pilferedparrot_usage", report_usage)
             result = capture_dispatch(
@@ -1954,6 +2002,10 @@ class PilferedParrotApp(HarnessWorkflow):
                     pending.pop("cancel_requested", None)
                     chat["updated_at"] = int(time.time())
                     self.store.save()
+                    try:
+                        self.events.publish(chat_id, "completed", {"message_id": pending_id})
+                    except RuntimeError:
+                        pass
                     if self.runs.get(chat_id) is active:
                         self.runs.pop(chat_id, None)
             with self.budget_condition:
@@ -2752,6 +2804,7 @@ class PilferedParrotApp(HarnessWorkflow):
                 _stop_process(process)
         self.native.shutdown(deadline=deadline)
         self.feedback.close()
+        self.events.close()
 
 
 def make_handler(app: PilferedParrotApp) -> type[Any]:

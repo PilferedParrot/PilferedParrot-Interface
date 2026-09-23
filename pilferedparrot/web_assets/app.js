@@ -43,6 +43,9 @@ try { nativeWindowRequested ||= sessionStorage.getItem(NATIVE_WINDOW_SESSION_KEY
 let nativeWindowInitializing = null;
 if (fragmentCapability) history.replaceState(null, "", location.pathname + location.search);
 let pollTimer = null;
+const workEventFollowers = new Map();
+let workAccessRevoked = false;
+const notifiedWorkCompletions = new Set();
 let budgetPollTimer = null;
 let budgetRefresh = null;
 let themeBackgroundObjectUrl = null;
@@ -132,7 +135,7 @@ async function flushDraft(chatId) {
     while (pendingDrafts.has(chatId)) {
       const { draft, revision } = pending;
       await api(`/api/chats/${encodeURIComponent(chatId)}/draft`, {
-        method: "POST", body: JSON.stringify({ draft }), keepalive: true,
+        method: "POST", body: JSON.stringify({ draft, ack_only: true }), keepalive: true,
       });
       if (pending.revision === revision) {
         pendingDrafts.delete(chatId);
@@ -182,6 +185,14 @@ function pendingMessage(chat = activeChat()) {
 }
 function activeRunning() { return Boolean(pendingMessage()); }
 function anyRunning() { return state.chats.some((chat) => pendingMessage(chat)); }
+function pollableRunningChats() {
+  if (workAccessRevoked) return [];
+  return state.chats.filter((chat) => {
+    if (!pendingMessage(chat)) return false;
+    const follower = workEventFollowers.get(chat.id);
+    return !follower || follower.fallback;
+  });
+}
 function harnessRunning(chat = activeChat()) {
   return Boolean(chat?.harness_tasks?.some((task) => task.status === "running"));
 }
@@ -688,7 +699,8 @@ function renderProjects() {
   }
   if (document.activeElement !== select || !select.value) select.value = selected;
   select.title = selected;
-  select.disabled = !state.initialized || projectSwitchPending || projects.length === 0;
+  select.disabled = !state.initialized || projectSwitchPending || createChatPending
+    || messageSubmissionPending || projects.length === 0;
   const project = projects.find((item) => item.cwd === selected);
   const pin = $("#pinProject");
   const pinned = Boolean(project?.pinned);
@@ -697,7 +709,8 @@ function renderProjects() {
   pin.setAttribute("aria-label", pinned ? "Unpin project" : "Pin project");
   pin.title = pinned ? "Unpin project" : "Pin project";
   pin.disabled = !state.initialized || !selected || projectPinPending;
-  $("#addProject").disabled = !state.initialized || projectSwitchPending;
+  $("#addProject").disabled = !state.initialized || projectSwitchPending
+    || createChatPending || messageSubmissionPending;
   const count = Number(project?.session_count) || visibleChats().length;
   const summary = $("#projectSummary");
   summary.textContent = `${count} ${count === 1 ? "session" : "sessions"} · ${selected || "Choose a folder"}`;
@@ -1167,7 +1180,8 @@ function render() {
     : harnessParentRunning
       ? "A saved task is running; you can continue here when it finishes"
       : DEFAULT_PROMPT_PLACEHOLDER;
-  $("#newWorkSession").disabled = !ready || createChatPending || selectionSavePending || projectSwitchPending;
+  $("#newWorkSession").disabled = !ready || createChatPending || selectionSavePending
+    || projectSwitchPending || messageSubmissionPending;
   const chatSupported = providerInfo(state.windowProvider).capabilities?.chat !== false;
   $("#openChat").disabled = !ready || !chatSupported;
   $("#openChat").title = chatSupported ? "Open Chat" : "This provider supports Work only; read-only Chat is not yet supported.";
@@ -1176,7 +1190,7 @@ function render() {
   $("#chromeTheme").disabled = !ready;
   $("#notificationPreferences").disabled = !ready || notificationPermissionPending;
   $("#notificationPreferencesLabel").textContent = notificationPermissionLabel();
-  $("#projectButton").disabled = !ready;
+  $("#projectButton").disabled = !ready || createChatPending || messageSubmissionPending;
   $("#sendButton").classList.toggle("hidden", running);
   $("#sendButton").disabled = !ready || running || harnessChild || harnessParentRunning || selectionSavePending || !$("#prompt").value.trim();
   $("#cancelButton").classList.toggle("hidden", !running);
@@ -1467,10 +1481,11 @@ async function refreshBrowserTheme(notify = false) {
 }
 
 async function createChat(requestedModel = "") {
-  if (createChatPending || selectionSavePending) return null;
+  if (createChatPending || selectionSavePending || messageSubmissionPending) return null;
   saveActiveDraft();
   createChatPending = true;
   $("#newWorkSession").disabled = true;
+  renderProjects();
   const provider = state.windowProvider;
   try {
     const chat = await api("/api/chats", {
@@ -1498,11 +1513,12 @@ async function createChat(requestedModel = "") {
   } finally {
     createChatPending = false;
     if (state.initialized) $("#newWorkSession").disabled = false;
+    renderProjects();
   }
 }
 
 async function selectProject(path, { newSession = false } = {}) {
-  if (projectSwitchPending || !path) return;
+  if (projectSwitchPending || createChatPending || messageSubmissionPending || !path) return;
   const previous = {
     root: state.selected_project,
     draftCwd: state.draftCwd,
@@ -1580,7 +1596,9 @@ async function sendMessage(event) {
     }
   }
   const chat = activeChat();
+  const submittedCwd = projectOfChat(chat);
   messageSubmissionPending = true;
+  render();
   // Finish older saves before submission can clear the sent draft.
   try { await flushDraft(chat.id); } catch (_error) {}
   const requestId = globalThis.crypto?.randomUUID?.()
@@ -1607,12 +1625,13 @@ async function sendMessage(event) {
     const updated = await api(`/api/chats/${chat.id}/messages`, {
       method: "POST",
       body: JSON.stringify({
-        content, provider: selectedProvider, model: selectedModel, cwd: state.draftCwd,
+        content, provider: selectedProvider, model: selectedModel, cwd: submittedCwd,
         reasoning_effort: reasoningEffort,
         request_id: requestId, draft: originalDraft,
       }),
     });
     state.chats = state.chats.map((item) => item.id === updated.id ? updated : item);
+    if (pendingMessage(updated)) startWorkEventFollower(updated.id);
     const newerDraft = state.activeId === chat.id
       ? $("#prompt").value : (draftValues.get(chat.id) || "");
     queueDraft(chat.id, newerDraft);
@@ -1633,6 +1652,7 @@ async function sendMessage(event) {
       toast(pendingMessage(activeChat())
         ? "Connection recovered; the response is still running."
         : "Connection recovered; the response completed.");
+      startPendingWorkEventFollowers();
       schedulePoll();
     } catch (_refreshError) {
       const current = state.chats.find((item) => item.id === chat.id) || chat;
@@ -1716,30 +1736,297 @@ async function refreshState() {
   conversation.scrollTop = followOutput ? conversation.scrollHeight : previousScrollTop;
 }
 
+function supportsWorkEventStreams() {
+  return typeof ReadableStream !== "undefined"
+    && typeof TextDecoder !== "undefined"
+    && typeof AbortController !== "undefined";
+}
+
+function replaceWorkChat(chat) {
+  state.chats = state.chats.map((item) => item.id === chat.id ? chat : item)
+    .sort((a, b) => b.updated_at - a.updated_at);
+  if (state.activeId === chat.id) render();
+  else renderChats();
+}
+
+function notifyWorkCompletion(chat, messageId = "") {
+  if (!chat) return;
+  const message = messageId || [...(chat.messages || [])].reverse()
+    .find((item) => item.role === "assistant" && !item.pending)?.id || chat.updated_at || "done";
+  const key = `${chat.id}:${message}`;
+  if (notifiedWorkCompletions.has(key)) return;
+  notifiedWorkCompletions.add(key);
+  if (notifiedWorkCompletions.size > 256) {
+    notifiedWorkCompletions.delete(notifiedWorkCompletions.values().next().value);
+  }
+  notifyCompletion(
+    `${providerLabel(chat.requested_provider || chat.provider || state.windowProvider)} finished ${chat.title || "a work session"}.`,
+    `pilferedparrot-work-${chat.id}-${message}`,
+  );
+}
+
+function stopWorkEventFollower(chatId, { keepPollingFallback = false } = {}) {
+  const follower = workEventFollowers.get(chatId);
+  if (!follower) return;
+  follower.stopped = true;
+  follower.fallback = true;
+  if (follower.retryTimer !== null) clearTimeout(follower.retryTimer);
+  follower.retryResolve?.();
+  follower.controller?.abort();
+  if (!keepPollingFallback) workEventFollowers.delete(chatId);
+}
+
+function stopAllWorkEventFollowers() {
+  for (const chatId of workEventFollowers.keys()) stopWorkEventFollower(chatId);
+}
+
+function revokeWorkAccess() {
+  if (workAccessRevoked) return;
+  workAccessRevoked = true;
+  stopAllWorkEventFollowers();
+  if (pollTimer !== null) clearTimeout(pollTimer);
+  pollTimer = null;
+  toast("This window's access expired. Reopen PilferedParrot to continue.");
+}
+
+function waitForWorkEventRetry(follower, delay) {
+  return new Promise((resolve) => {
+    follower.retryResolve = resolve;
+    follower.retryTimer = setTimeout(() => {
+      follower.retryTimer = null;
+      follower.retryResolve = null;
+      resolve();
+    }, delay);
+  });
+}
+
+async function refreshChatFromWorkEvent(follower, messageId = "") {
+  const before = state.chats.find((chat) => chat.id === follower.chatId);
+  const wasPending = Boolean(pendingMessage(before));
+  const pendingId = messageId || follower.messageId || pendingMessage(before)?.id || "";
+  const full = await api(`/api/chats/${encodeURIComponent(follower.chatId)}`);
+  if (follower.stopped) return null;
+  replaceWorkChat(full);
+  if (pendingMessage(full)) {
+    follower.messageId = pendingMessage(full)?.id || follower.messageId;
+    return full;
+  }
+  stopWorkEventFollower(follower.chatId);
+  if (wasPending) notifyWorkCompletion(full, pendingId);
+  refreshBudgets(false).catch(() => {});
+  scheduleBudgetPoll();
+  if (full.harness_parent) refreshState().catch(() => {});
+  return full;
+}
+
+function applyWorkProgress(follower, payload) {
+  const chat = state.chats.find((item) => item.id === follower.chatId);
+  const messageId = payload?.message_id;
+  const activity = payload?.activity;
+  if (!chat || typeof messageId !== "string" || !activity
+      || typeof activity.id !== "string" || typeof activity.content !== "string") return;
+  const message = chat.messages?.find((item) => item.id === messageId);
+  if (!message || !message.pending) return;
+  if (!Array.isArray(message.activity)) message.activity = [];
+  if (message.activity.some((item) => item.id === activity.id)) return;
+  message.activity.push(activity);
+  if (message.activity.length > 100) message.activity.splice(0, message.activity.length - 100);
+  if (follower.messageId === messageId || !follower.messageId) follower.messageId = messageId;
+  if (state.activeId === chat.id) render();
+  else renderChats();
+}
+
+function applyWorkUsage(follower, payload) {
+  const chat = state.chats.find((item) => item.id === follower.chatId);
+  if (!chat || typeof payload?.message_id !== "string"
+      || !chat.messages?.some((item) => item.id === payload.message_id && item.pending)
+      || !payload.context_usage || typeof payload.context_usage !== "object") return;
+  chat.context_chars = payload.context_chars;
+  chat.context_usage = payload.context_usage;
+  chat.context_percent = payload.context_percent;
+  chat.context_status = payload.context_status;
+  if (state.activeId === chat.id) renderHeader();
+  else renderChats();
+}
+
+async function handleWorkEventFrame(follower, frame) {
+  const eventName = frame.event || "message";
+  if (!frame.data) return;
+  const value = JSON.parse(frame.data);
+  if (eventName === "hello") {
+    if (typeof value.epoch !== "string") return;
+    const epochChanged = Boolean(follower.epoch && follower.epoch !== value.epoch);
+    follower.epoch = value.epoch;
+    if (epochChanged) {
+      follower.after = 0;
+      await refreshChatFromWorkEvent(follower);
+    }
+    return;
+  }
+  const event = value;
+  if (!Number.isSafeInteger(event.seq) || typeof event.kind !== "string") return;
+  if (event.kind === "reset") {
+    follower.after = event.seq;
+    await refreshChatFromWorkEvent(follower);
+    return;
+  }
+  if (event.seq <= follower.after) return;
+  follower.after = event.seq;
+  if (event.kind === "progress") {
+    applyWorkProgress(follower, event.payload);
+  } else if (event.kind === "usage") {
+    applyWorkUsage(follower, event.payload);
+  } else if (event.kind === "completed") {
+    await refreshChatFromWorkEvent(follower, event.payload?.message_id || "");
+  }
+}
+
+async function consumeWorkEventStream(response, follower) {
+  if (!response.body?.getReader) throw new Error("Live event stream is unavailable.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  try {
+    while (!follower.stopped) {
+      const { value, done } = await reader.read();
+      buffered += decoder.decode(value || new Uint8Array(), { stream: !done });
+      let boundary;
+      while ((boundary = buffered.search(/\r?\n\r?\n/)) >= 0) {
+        const separator = buffered.slice(boundary).match(/^\r?\n\r?\n/)[0];
+        const rawFrame = buffered.slice(0, boundary);
+        buffered = buffered.slice(boundary + separator.length);
+        const frame = { event: "", data: [] };
+        for (const line of rawFrame.split(/\r?\n/)) {
+          if (line.startsWith(":")) continue;
+          if (line.startsWith("event:")) frame.event = line.slice(6).trim();
+          else if (line.startsWith("data:")) frame.data.push(line.slice(5).replace(/^ /, ""));
+        }
+        frame.data = frame.data.join("\n");
+        await handleWorkEventFrame(follower, frame);
+        if (follower.stopped) return;
+      }
+      if (done) return;
+    }
+  } finally {
+    try { await reader.cancel(); } catch (_error) {}
+    reader.releaseLock();
+  }
+}
+
+async function runWorkEventFollower(follower) {
+  let retryDelay = 500;
+  while (!follower.stopped) {
+    try {
+      let chat = state.chats.find((item) => item.id === follower.chatId);
+      if (!chat) {
+        stopWorkEventFollower(follower.chatId);
+        return;
+      }
+      const hadPending = Boolean(pendingMessage(chat));
+      follower.messageId ||= pendingMessage(chat)?.id || "";
+      if (!Array.isArray(chat.messages) || !pendingMessage(chat)?.id) {
+        const full = await api(`/api/chats/${encodeURIComponent(follower.chatId)}`);
+        if (follower.stopped) return;
+        replaceWorkChat(full);
+        chat = full;
+      }
+      if (!pendingMessage(chat)) {
+        if (hadPending) notifyWorkCompletion(chat, follower.messageId);
+        stopWorkEventFollower(follower.chatId);
+        if (hadPending) {
+          refreshBudgets(false).catch(() => {});
+          scheduleBudgetPoll();
+          if (chat.harness_parent) refreshState().catch(() => {});
+        }
+        return;
+      }
+      follower.messageId = pendingMessage(chat)?.id || follower.messageId || "";
+      if (!follower.epoch && follower.after > 0) follower.after = 0;
+      const query = new URLSearchParams({ after: String(follower.after) });
+      if (follower.epoch) query.set("epoch", follower.epoch);
+      follower.controller = new AbortController();
+      const headers = { Accept: "text/event-stream" };
+      if (state.capability) headers["X-PilferedParrot-Capability"] = state.capability;
+      const response = await fetch(
+        `/api/chats/${encodeURIComponent(follower.chatId)}/events?${query}`,
+        { headers, signal: follower.controller.signal },
+      );
+      if (response.status === 404) {
+        stopWorkEventFollower(follower.chatId, { keepPollingFallback: true });
+        schedulePoll();
+        return;
+      }
+      if (response.status === 403) {
+        revokeWorkAccess();
+        return;
+      }
+      if (!response.ok || !response.headers.get("content-type")?.startsWith("text/event-stream")) {
+        throw new Error("Live event stream request failed.");
+      }
+      follower.fallback = false;
+      retryDelay = 500;
+      await consumeWorkEventStream(response, follower);
+      if (follower.stopped) return;
+      follower.fallback = true;
+      schedulePoll();
+    } catch (_error) {
+      if (follower.stopped) return;
+      follower.fallback = true;
+      schedulePoll();
+    } finally {
+      follower.controller = null;
+    }
+    await waitForWorkEventRetry(follower, retryDelay);
+    retryDelay = Math.min(5_000, retryDelay * 2);
+  }
+}
+
+function startWorkEventFollower(chatId) {
+  if (workAccessRevoked || !supportsWorkEventStreams() || workEventFollowers.has(chatId)) return;
+  const follower = {
+    chatId, after: 0, epoch: null, messageId: "", fallback: true,
+    stopped: false, controller: null, retryTimer: null, retryResolve: null,
+  };
+  workEventFollowers.set(chatId, follower);
+  runWorkEventFollower(follower).catch(() => {
+    if (!follower.stopped) {
+      follower.fallback = true;
+      schedulePoll();
+    }
+  });
+}
+
+function startPendingWorkEventFollowers() {
+  for (const chat of state.chats) {
+    if (pendingMessage(chat)) startWorkEventFollower(chat.id);
+  }
+}
+
 function schedulePoll() {
-  if (!anyRunning() || pollTimer !== null) return;
+  if (!pollableRunningChats().length || pollTimer !== null) return;
   pollTimer = setTimeout(async () => {
     pollTimer = null;
-    const wasRunning = anyRunning();
+    const running = pollableRunningChats();
+    const pendingIds = new Map(running.map((chat) => [chat.id, pendingMessage(chat)?.id || ""]));
     try {
-      const runningIds = state.chats.filter((chat) => pendingMessage(chat)).map((chat) => chat.id);
-      const updates = await Promise.all(runningIds.map((chatId) =>
-        api(`/api/chats/${encodeURIComponent(chatId)}`)));
+      const updates = await Promise.all(running.map((chat) =>
+        api(`/api/chats/${encodeURIComponent(chat.id)}`)));
       const completed = updates.filter((chat) => !pendingMessage(chat));
       const changedActive = updates.some((chat) => chat.id === state.activeId);
       const byId = new Map(updates.map((chat) => [chat.id, chat]));
       state.chats = state.chats.map((chat) => byId.get(chat.id) || chat)
         .sort((a, b) => b.updated_at - a.updated_at);
+      startPendingWorkEventFollowers();
       if (changedActive) render();
       else renderChats();
       // Refresh the provider card on the pending -> completed edge. This is
       // especially important for Qwen, whose auto-started endpoint may stop
       // again immediately after a turn completes.
-      if (wasRunning && completed.length) {
-        completed.forEach((chat) => notifyCompletion(
-          `${providerLabel(chat.requested_provider || chat.provider || state.windowProvider)} finished ${chat.title || "a work session"}.`,
-          `pilferedparrot-work-${chat.id}`,
-        ));
+      if (completed.length) {
+        completed.forEach((chat) => {
+          notifyWorkCompletion(chat, pendingIds.get(chat.id));
+          stopWorkEventFollower(chat.id);
+        });
         await refreshBudgets(false);
         // A worker completion updates its parent package, while the worker is
         // the selected session. Refresh full state so that review is available
@@ -1748,7 +2035,7 @@ function schedulePoll() {
       }
     }
     catch (error) { toast(error.message); }
-    finally { if (anyRunning()) schedulePoll(); }
+    finally { if (pollableRunningChats().length) schedulePoll(); }
   }, 750);
 }
 
@@ -1858,6 +2145,7 @@ async function init() {
     state.initialized = true;
     reportActiveSession();
     render();
+    startPendingWorkEventFollowers();
     schedulePoll();
     await refreshBudgets(true);
     scheduleBudgetPoll();
@@ -2433,6 +2721,7 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 window.addEventListener("pagehide", () => {
+  stopAllWorkEventFollowers();
   saveActiveDraft();
   for (const chatId of pendingDrafts.keys()) flushDraft(chatId).catch(() => {});
   if (!state.capability) return;

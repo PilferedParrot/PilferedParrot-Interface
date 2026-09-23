@@ -174,10 +174,12 @@ class FrontendInvariantTests(unittest.TestCase):
 
     def test_budget_refresh_runs_after_message_completion(self):
         poll = _function_body(self.app_js, "schedulePoll")
+        streamed = _function_body(self.app_js, "refreshChatFromWorkEvent")
         send = _function_body(self.app_js, "sendMessage")
-        self.assertIn("wasRunning", poll)
-        self.assertIn("!anyRunning()", poll)
+        self.assertIn("completed.length", poll)
+        self.assertIn("pollableRunningChats()", poll)
         self.assertIn("await refreshBudgets(false)", poll)
+        self.assertIn("refreshBudgets(false)", streamed)
         self.assertIn("refreshBudgets(false)", send)
 
     def test_each_window_keeps_its_fragment_capability_across_reload(self):
@@ -760,10 +762,17 @@ class FrontendInvariantTests(unittest.TestCase):
             any(name in self.chat_js for name in helper_names),
             "Chat UI needs a shared desktop notification helper",
         )
-        for source, function_name in ((self.app_js, "schedulePoll"), (self.chat_js, "schedulePoll")):
-            body = _function_body(source, function_name)
-            self.assertRegex(body, r"(?:wasRunning|previouslyRunning|wasPending)")
-            self.assertRegex(body, r"(?:notifyCompletion|notifyFinished|showDesktopNotification)")
+        work_poll = _function_body(self.app_js, "schedulePoll")
+        work_stream = _function_body(self.app_js, "refreshChatFromWorkEvent")
+        work_notify = _function_body(self.app_js, "notifyWorkCompletion")
+        self.assertIn("completed.length", work_poll)
+        self.assertIn("notifyWorkCompletion", work_poll)
+        self.assertIn("wasPending", work_stream)
+        self.assertIn("notifyWorkCompletion", work_stream)
+        self.assertIn("notifyCompletion", work_notify)
+        chat_poll = _function_body(self.chat_js, "schedulePoll")
+        self.assertRegex(chat_poll, r"(?:wasRunning|previouslyRunning|wasPending)")
+        self.assertRegex(chat_poll, r"(?:notifyCompletion|notifyFinished|showDesktopNotification)")
         self.assertIn(
             '$("#chromeTheme").addEventListener("click", openChromeThemeGallery)',
             self.app_js,

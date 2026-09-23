@@ -2,25 +2,84 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
+import threading
 import unittest
 from http import HTTPStatus
 from pathlib import Path
+from urllib.request import Request, urlopen
 from unittest.mock import MagicMock
 
 from pilferedparrot.config import load_config
 from pilferedparrot.web import PilferedParrotApp
-from pilferedparrot.web_server import make_handler
+from pilferedparrot.web_server import BrowserHTTPServer, make_handler
 
 
 def app_for(root: Path) -> PilferedParrotApp:
     config = load_config(root / "missing-config.json")
+    config["web"]["port"] = 0
     config["web"]["chat_store"] = str(root / "chats.json")
     config["ledger"] = str(root / "runs.jsonl")
     return PilferedParrotApp(config, root)
 
 
 class ProjectWorkroomTests(unittest.TestCase):
+    def test_first_message_rejects_another_project_without_mutating_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first, second = root / "first", root / "second"
+            first.mkdir(); second.mkdir()
+            app = app_for(root)
+            chat = app.create_chat({"cwd": str(first)}, window_id="main",
+                                   window_provider="codex")
+            app.select_project({"cwd": str(second)}, window_id="main",
+                               window_provider="codex")
+            with self.assertRaisesRegex(ValueError, "belongs to another project"):
+                app.send_message(chat["id"], {
+                    "content": "Do work in the wrong folder", "cwd": str(second),
+                    "request_id": "wrong-project-request",
+                }, window_id="main", window_provider="codex")
+            stored = app.store.get(chat["id"])
+            self.assertEqual(stored["cwd"], str(first))
+            self.assertEqual(stored["messages"], [])
+            self.assertEqual(app.state(window_id="main", window_provider="codex")
+                             ["selected_project"], str(second))
+
+    def test_ack_only_draft_persists_without_returning_session_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = app_for(root)
+            chat = app.create_chat({"cwd": str(root)}, window_id="main",
+                                   window_provider="codex")
+            server = BrowserHTTPServer(("127.0.0.1", 0), make_handler(app))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                origin = f"http://127.0.0.1:{server.server_address[1]}"
+                request = Request(
+                    f"{origin}/api/chats/{chat['id']}/draft",
+                    data=json.dumps({"draft": "private unsent text", "ack_only": True}).encode(),
+                    headers={
+                        "Content-Type": "application/json",
+                        "Origin": origin,
+                        "X-PilferedParrot-Capability": app.dashboard_capability,
+                    }, method="POST",
+                )
+                with urlopen(request, timeout=2) as response:
+                    reply = json.load(response)
+            finally:
+                server.shutdown()
+                thread.join(timeout=2)
+                server.server_close()
+                app.shutdown()
+                self.assertFalse(thread.is_alive(), "draft API test server did not stop")
+            self.assertEqual(reply, {"id": chat["id"], "draft_saved": True})
+            self.assertNotIn("private unsent text", str(reply))
+            self.assertEqual(app.store.get(chat["id"])["draft"], "private unsent text")
+            self.assertEqual(app_for(root).store.get(chat["id"])["draft"],
+                             "private unsent text")
+
     def test_selection_pin_and_create_survive_restart_without_changing_draft(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

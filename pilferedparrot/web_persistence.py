@@ -686,8 +686,7 @@ class PersistentChatStore:
             )
             return [self.summary_public(chat) for chat in visible]
 
-    @staticmethod
-    def summary_public(chat: dict[str, Any]) -> dict[str, Any]:
+    def summary_public(self, chat: dict[str, Any]) -> dict[str, Any]:
         """Build the lightweight direct-work-session summary used by compact state."""
         messages = chat.get("messages", [])
         return {
@@ -707,6 +706,7 @@ class PersistentChatStore:
                 for message in messages
             ),
             "message_count": len(messages) if isinstance(messages, list) else 0,
+            "context_status": self.context_public(chat)["context_status"],
         }
 
     def public(self, chat: dict[str, Any]) -> dict[str, Any]:
@@ -720,6 +720,11 @@ class PersistentChatStore:
             }
         })
         result["project_cwd"] = _canonical_project_cwd(chat.get("cwd"))
+        result.update(self.context_public(chat))
+        return result
+
+    def context_public(self, chat: dict[str, Any]) -> dict[str, Any]:
+        """Expose current context telemetry without copying a transcript."""
         context_chars = sum(
             len(str(message.get("content") or "")) for message in chat.get("messages", [])
         )
@@ -727,7 +732,6 @@ class PersistentChatStore:
         # its meter at zero until the first request starts instead of making the
         # fresh session look partly consumed by estimated provider overhead.
         fresh_session = not chat.get("messages") and not chat.get("live_context_usage")
-        result["context_chars"] = context_chars
         usage = self._context_usage(
             context_chars, self.technical_warning_chars,
             limit_tokens=chat.get("context_limit_tokens"),
@@ -741,10 +745,12 @@ class PersistentChatStore:
                 0 if fresh_session else chat.get("output_reservation_tokens", 0)
             ),
         )
-        result["context_usage"] = usage
-        result["context_percent"] = usage["percent"]
-        result["context_status"] = self._context_status(usage["percent"])
-        return result
+        return {
+            "context_chars": context_chars,
+            "context_usage": usage,
+            "context_percent": usage["percent"],
+            "context_status": self._context_status(usage["percent"]),
+        }
 
     @staticmethod
     def _context_status(percent: int) -> str:
@@ -908,7 +914,9 @@ class PersistentChatStore:
             self.save()
         return self.public(chat)
 
-    def set_draft(self, chat_id: str, draft: Any) -> dict[str, Any]:
+    def set_draft(
+        self, chat_id: str, draft: Any, *, ack_only: bool = False,
+    ) -> dict[str, Any]:
         if not isinstance(draft, str):
             raise ValueError("draft must be text")
         if len(draft) > 40_000:
@@ -918,6 +926,8 @@ class PersistentChatStore:
             chat["draft"] = draft
             chat["updated_at"] = int(time.time())
             self.save()
+            if ack_only:
+                return {"id": chat_id, "draft_saved": True}
             return self.public(chat)
 
     def mark_used(self, chat: dict[str, Any]) -> None:

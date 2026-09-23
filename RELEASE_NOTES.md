@@ -25,6 +25,8 @@ Windows provider accounts and CLIs are not live-certified by this package.
 
 - Project workrooms add recent and pinned folders, a project-filtered session list, and
   selection that survives reopening. Existing sessions retain their original workspace.
+- Work history loads compact summaries before the selected transcript. Live progress uses
+  an authenticated event stream with polling fallback; a reconnect can reload a snapshot.
 - New Codex Chat sessions default to GPT-6 Luna with low reasoning when no Chat selection is
   saved; an explicit saved model and reasoning selection takes precedence.
 - Optional product feedback remains off by default. Users can review and download local reports

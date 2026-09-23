@@ -47,6 +47,12 @@ class ServerApp(Protocol):
     ) -> Any: ...
     def cleanup_stale_sessions(self, *, protected_window_ids: tuple[str, ...] = (), protected_chat_ids: tuple[str, ...] = ()) -> int: ...
     def chat_state(self, chat_id: str, *, window_id: str) -> Any: ...
+    def work_event_batch(
+        self, chat_id: str, after: int, *, epoch: str | None,
+        window_id: str, timeout: float = 10,
+    ) -> list[dict[str, Any]]: ...
+    def work_event_epoch(self) -> str: ...
+    def work_event_closed(self) -> bool: ...
     def current_chat_state(self) -> Any: ...
     def budgets(self) -> dict[str, Any]: ...
     def poll_provider_models(self, provider: str) -> Any: ...
@@ -454,6 +460,75 @@ def make_handler(
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
+        def _stream_work_events(
+            self, chat_id: str, *, window_id: str, after: int, epoch: str | None,
+        ) -> None:
+            def authorized() -> bool:
+                context = self._request_capability_context()
+                return context is not None and context.get("scope") == "dashboard" and (
+                    context.get("history_id") or context.get("window_id") or "main"
+                ) == window_id
+
+            try:
+                first = app.work_event_batch(
+                    chat_id, after, epoch=epoch, window_id=window_id, timeout=0,
+                )
+            except KeyError:
+                self._json({"error": "work session not found"}, HTTPStatus.NOT_FOUND)
+                return
+            if app.work_event_closed():
+                self._json({"error": "event stream is closed"}, HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            current_epoch = app.work_event_epoch()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+            self.close_connection = True
+            cursor = after
+            deadline = time.monotonic() + 30
+            try:
+                hello = json.dumps({"epoch": current_epoch}, separators=(",", ":"))
+                self.wfile.write(f"event: hello\ndata: {hello}\n\n".encode("utf-8"))
+                self.wfile.flush()
+                batch: list[dict[str, Any]] | None = first
+                while time.monotonic() < deadline:
+                    if not authorized():
+                        return
+                    if batch is None:
+                        try:
+                            batch = app.work_event_batch(
+                                chat_id, cursor, epoch=current_epoch, window_id=window_id,
+                                timeout=min(10, max(0, deadline - time.monotonic())),
+                            )
+                        except KeyError:
+                            return
+                    if not authorized():
+                        return
+                    if not batch:
+                        if app.work_event_closed():
+                            return
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                        batch = None
+                        continue
+                    for item in batch:
+                        cursor = item["seq"]
+                        data = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+                        self.wfile.write(
+                            f"id: {cursor}\nevent: {item['kind']}\ndata: {data}\n\n".encode("utf-8"),
+                        )
+                        self.wfile.flush()
+                        if item["kind"] == "completed":
+                            return
+                    batch = None
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+
         def _do_GET(self) -> None:
             path = urlparse(self.path).path
             if path.startswith("/api/") and not self._local_request_allowed():
@@ -527,6 +602,25 @@ def make_handler(
                     if compact:
                         state_kwargs["compact"] = True
                     self._json(app.state(context["scope"], **state_kwargs))
+            elif re.fullmatch(r"/api/chats/[^/]+/events", path):
+                context = self._request_capability_context()
+                if context is None or context.get("scope") != "dashboard":
+                    self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
+                else:
+                    query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+                    values = query.get("after", ["0"])
+                    if len(values) != 1 or not re.fullmatch(r"[0-9]{1,18}", values[0]):
+                        raise ValueError("invalid event cursor")
+                    epochs = query.get("epoch", [])
+                    if len(epochs) > 1 or (epochs and not re.fullmatch(r"[0-9a-f]{32}", epochs[0])):
+                        raise ValueError("invalid event epoch")
+                    if int(values[0]) > 0 and not epochs:
+                        raise ValueError("event epoch is required with a cursor")
+                    self._stream_work_events(
+                        path.split("/")[3],
+                        window_id=context.get("history_id") or context.get("window_id") or "main",
+                        after=int(values[0]), epoch=epochs[0] if epochs else None,
+                    )
             elif re.fullmatch(r"/api/chats/[^/]+", path):
                 context = self._request_capability_context()
                 if context is None or context.get("scope") != "dashboard":
