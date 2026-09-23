@@ -1342,7 +1342,7 @@ function renderMessages() {
       });
     return `<article class="message ${role} ${message.error ? "error" : ""}" data-message-id="${escapeHtml(message.id || "")}" data-provider="${assistant ? escapeHtml(provider) : ""}">
       <div class="message-body"><div class="message-head"><span class="message-name">${escapeHtml(name)}</span>${message.cancelled ? '<span class="message-state">Cancelled</span>' : ""}</div>
-      <div class="message-content">${work}${acpPermissions}${acpCards}${response}${assistant && !message.pending ? globalThis.PilferedParrotIdentity.render(message) : ""}</div></div>
+      <div class="message-content">${work}${acpPermissions}${acpCards}${response}${assistant && !message.pending ? renderObservedFiles(message.observed_files) : ""}${assistant && !message.pending ? globalThis.PilferedParrotIdentity.render(message) : ""}</div></div>
     </article>`;
   }).join("");
   if (focusedChoice) {
@@ -1353,6 +1353,21 @@ function renderMessages() {
   }
   restoreWorkScroll(workScroll);
   globalThis.PilferedParrotIdentity.restoreState($("#messages"), identityState);
+}
+
+function renderObservedFiles(observed) {
+  if (!observed || observed.label !== "Changes observed during this turn; authorship unknown") return "";
+  const changes = Array.isArray(observed.changes) ? observed.changes.slice(0, 100) : [];
+  const count = Number(observed.change_count) || 0;
+  const coverage = observed.coverage || {};
+  const incomplete = Number(coverage.before?.incomplete_count || 0) + Number(coverage.after?.incomplete_count || 0);
+  const status = observed.status === "complete" ? "Coverage complete under scan policy" : `Incomplete coverage (${incomplete} scan issue${incomplete === 1 ? "" : "s"})`;
+  const item = (entry) => entry ? `${escapeHtml(entry.type || "unknown")}${entry.type === "file" ? ` · ${Number(entry.size) || 0} bytes · SHA-256 ${escapeHtml(entry.sha256 || "")}` : ""}` : "absent";
+  return `<details class="observed-files"><summary>Changes observed during this turn; authorship unknown · ${count} change${count === 1 ? "" : "s"}</summary>
+    <p>${escapeHtml(status)}${observed.changes_truncated ? " · Change list limited to 100" : ""}${observed.unverified_count ? ` · ${Number(observed.unverified_count)} unverified path(s)` : ""}</p>
+    ${changes.length ? `<ul>${changes.map((change) => `<li><strong>${escapeHtml(change.kind)}</strong> <code>${escapeHtml(change.path)}</code><small>Before: ${item(change.before)}; after: ${item(change.after)}</small></li>`).join("")}</ul>` : "<p>No verified changes in the visible summary.</p>"}
+    ${incomplete ? `<p>Incomplete paths: ${[...(coverage.before?.incomplete_paths || []), ...(coverage.after?.incomplete_paths || [])].slice(0, 30).map(escapeHtml).join(", ")}</p>` : ""}
+  </details>`;
 }
 
 function clampPaneWidth(name, value) {
@@ -1945,6 +1960,7 @@ async function sendMessage(event) {
   const selectedModel = $("#modelSelect").value;
   const reasoningEffort = $("#reasoningSelect").value || null;
   const acpMode = $("#acpModeSelect").value || null;
+  const observeFiles = $("#observeFiles").checked;
   if (!activeChat()) {
     try {
       await createChat();
@@ -1989,10 +2005,12 @@ async function sendMessage(event) {
         content, provider: selectedProvider, model: selectedModel, cwd: submittedCwd,
         reasoning_effort: reasoningEffort,
         ...(acpMode ? { mode: acpMode } : {}),
+        observe_files: observeFiles,
         request_id: requestId, draft: originalDraft,
       }),
     });
     state.chats = state.chats.map((item) => item.id === updated.id ? updated : item);
+    $("#observeFiles").checked = false;
     if (pendingMessage(updated)) startWorkEventFollower(updated.id);
     const newerDraft = state.activeId === chat.id
       ? $("#prompt").value : (draftValues.get(chat.id) || "");
@@ -2042,6 +2060,7 @@ function resizePrompt() {
 }
 
 function applyServerState(initial) {
+  $("#observeFilesOption").hidden = !initial.observe_files_available;
   const activeId = state.activeId;
   const draftCwd = state.draftCwd;
   const selectedProject = state.selected_project;
@@ -2555,6 +2574,7 @@ async function init() {
     restorePaneWidths();
     const initial = await api("/api/state?compact=1");
     Object.assign(state, initial);
+    $("#observeFilesOption").hidden = !initial.observe_files_available;
     globalThis.PilferedParrotAppearanceSync.connect(api, initial.preferences?.appearance, message => toast(message, "error"));
     if (fragmentCwd) state.defaultCwd = fragmentCwd;
     state.windowId = initial.window_id || state.windowId;

@@ -77,7 +77,24 @@ _PUBLIC_MESSAGE_FIELDS = frozenset({
     "streamed_text_truncated", "activity", "error", "interrupted",
     "cancel_requested", "cancelled", "exit_code", "response_identity",
     "whiteboard_discovered",
+    "observed_files",
 })
+
+_OBSERVED_FILE_SHAPE = {"type": None, "size": None, "sha256": None}
+_OBSERVED_COVERAGE_SHAPE = {
+    "incomplete_count": None, "incomplete_paths": [None], "truncated": None,
+}
+_OBSERVED_SUMMARY_SHAPE = {
+    "label": None, "status": None,
+    "before_checkpoint_id": None, "after_checkpoint_id": None,
+    "coverage": {"before": _OBSERVED_COVERAGE_SHAPE,
+                 "after": _OBSERVED_COVERAGE_SHAPE},
+    "change_count": None, "changes_truncated": None,
+    "changes": [{"path": None, "kind": None,
+                 "before": _OBSERVED_FILE_SHAPE,
+                 "after": _OBSERVED_FILE_SHAPE}],
+    "unverified_count": None,
+}
 
 
 def _public_fields(value: Any, allowed: frozenset[str]) -> dict[str, Any]:
@@ -238,7 +255,7 @@ def _sqlite_public_projection(result: dict[str, Any]) -> dict[str, Any]:
         for item in messages:
             message = {
                 key: value for key, value in _public_fields(item, _PUBLIC_MESSAGE_FIELDS).items()
-                if key in {"activity", "acp_updates", "response_identity"}
+                if key in {"activity", "acp_updates", "response_identity", "observed_files"}
                 or not isinstance(value, (dict, list))
             }
             if not isinstance(message.get("content"), str):
@@ -274,6 +291,11 @@ def _sqlite_public_projection(result: dict[str, Any]) -> dict[str, Any]:
                     ]
             else:
                 message.pop("response_identity", None)
+            observed = message.get("observed_files")
+            if isinstance(observed, dict):
+                message["observed_files"] = _public_shape(observed, _OBSERVED_SUMMARY_SHAPE)
+            else:
+                message.pop("observed_files", None)
             public_messages.append(message)
         projected["messages"] = public_messages
     return projected

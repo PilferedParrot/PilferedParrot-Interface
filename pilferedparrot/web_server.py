@@ -51,6 +51,7 @@ class ServerApp(Protocol):
     ) -> Any: ...
     def cleanup_stale_sessions(self, *, protected_window_ids: tuple[str, ...] = (), protected_chat_ids: tuple[str, ...] = ()) -> int: ...
     def chat_state(self, chat_id: str, *, window_id: str) -> Any: ...
+    def observed_files_summary(self, chat_id: str, message_id: str, *, window_id: str) -> Any: ...
     def work_permissions(self, chat_id: str, *, window_id: str) -> Any: ...
     def decide_work_permission(self, chat_id: str, payload: dict[str, Any], *, window_id: str) -> Any: ...
     def work_event_batch(
@@ -663,6 +664,21 @@ def make_handler(
                         ))
                     except KeyError:
                         self._json({"error": "work session not found"}, HTTPStatus.NOT_FOUND)
+            elif re.fullmatch(r"/api/chats/[^/]+/observed-files/[^/]+", path):
+                context = self._request_capability_context()
+                if context is None or context.get("scope") != "dashboard":
+                    self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
+                else:
+                    parts = path.split("/")
+                    try:
+                        self._json(app.observed_files_summary(
+                            parts[3], parts[5],
+                            window_id=context.get("history_id") or context.get("window_id") or "main",
+                        ))
+                    except PermissionError:
+                        self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
+                    except KeyError:
+                        self._json({"error": "observation not found"}, HTTPStatus.NOT_FOUND)
             elif re.fullmatch(r"/api/chats/[^/]+", path):
                 context = self._request_capability_context()
                 if context is None or context.get("scope") != "dashboard":

@@ -46,6 +46,7 @@ from .processes import provider_argv
 from .ledger import append_run
 from .feedback import FeedbackStore
 from .web_events import EventHub
+from .observed_turn import ObservationUnavailable, TurnObservations
 from .harness import metric, outcome_summary, render_handoff
 from .web_harness import HarnessWorkflow
 from .model import (
@@ -605,6 +606,7 @@ class ActiveRun:
     cancel_event: threading.Event = field(default_factory=threading.Event)
     thread: threading.Thread | None = None
     last_checkpoint: float = 0.0
+    observe_files: bool = False
 
 
 @dataclass
@@ -695,6 +697,7 @@ class PilferedParrotApp(HarnessWorkflow):
             legacy_path=legacy_chat_store_path(config),
             sqlite_state_path=sqlite_state_path,
         )
+        self.turn_observations = TurnObservations(store_path.parent / "observed-files")
         self.events = EventHub()
         self.acp_adapters = AdapterManager(config)
         self.acp_permissions = PermissionBroker(timeout_seconds=300.0)
@@ -1484,6 +1487,7 @@ class PilferedParrotApp(HarnessWorkflow):
             "asset_version": ASSET_VERSION,
             "runtime_version": RUNTIME_VERSION,
             "model_context_windows": model_context_windows,
+            "observe_files_available": os.name == "posix",
         }
         if scope == "chat":
             chat = self.store.chat_public()
@@ -1659,6 +1663,20 @@ class PilferedParrotApp(HarnessWorkflow):
     def chat_state(self, chat_id: str, *, window_id: str | None = None) -> dict[str, Any]:
         with self.store.lock:
             return self.store.public(self._owned_chat(chat_id, window_id))
+
+    def observed_files_summary(
+        self, chat_id: str, message_id: str, *, window_id: str,
+    ) -> dict[str, Any]:
+        """Return only the bounded public summary for an owned Work turn."""
+        with self.store.lock:
+            chat = self.store.get(chat_id)
+            if chat.get("window_id", "main") != window_id:
+                raise PermissionError("work session belongs to another window")
+            message = self._message(chat, message_id)
+            summary = message.get("observed_files")
+            if not isinstance(summary, dict):
+                raise KeyError(message_id)
+            return deepcopy(summary)
 
     def work_permissions(self, chat_id: str, *, window_id: str) -> dict[str, Any]:
         with self.store.lock:
@@ -2018,8 +2036,13 @@ class PilferedParrotApp(HarnessWorkflow):
             raise ValueError("message cannot be empty")
         if len(prompt) > MESSAGE_MAX_CHARS:
             raise ValueError(f"message cannot exceed {MESSAGE_MAX_CHARS:,} characters")
+        observe_files = payload.get("observe_files", False)
+        if not isinstance(observe_files, bool):
+            raise ValueError("observe_files must be a boolean")
+        if observe_files and os.name != "posix":
+            raise ValueError("file observation requires POSIX")
         request_id = _request_id(payload.get("request_id"))
-        active = ActiveRun()
+        active = ActiveRun(observe_files=observe_files)
         with self.runs_lock:
             if chat_id in self.runs:
                 raise ValueError("this work session is already running")
@@ -2375,6 +2398,7 @@ class PilferedParrotApp(HarnessWorkflow):
         conversation: Conversation | None = None
         result: RunResult | None = None
         started = time.monotonic()
+        observation = None
         try:
             with self.store.lock:
                 chat = self.store.get(chat_id)
@@ -2389,6 +2413,13 @@ class PilferedParrotApp(HarnessWorkflow):
                 session_id = chat.get("provider_session_id")
                 provider_messages = list(chat.get("provider_messages") or [])
                 cwd = Path(chat["cwd"])
+
+            # No provider or adapter process has started at this point.
+            if active.observe_files:
+                try:
+                    observation = self.turn_observations.begin(cwd)
+                except Exception as exc:
+                    raise ObservationUnavailable("File observation could not start; response was not run.") from exc
 
             if provider == "qwen":
                 ensure_qwen(self.config, cancel_event=active.cancel_event)
@@ -2555,6 +2586,12 @@ class PilferedParrotApp(HarnessWorkflow):
                 )
             except OSError as error:
                 print(f"[web] could not append run ledger: {error}")
+        except ObservationUnavailable:
+            with self.store.lock:
+                chat = self.store.get(chat_id)
+                pending = self._message(chat, pending_id)
+                pending.update({"content": "File observation could not start; response was not run.",
+                                "error": True, "exit_code": 1})
         except (RunCancelled, ACPCancelled):
             self.feedback.record("problems", "cancelled", "work")
             with self.store.lock:
@@ -2578,10 +2615,13 @@ class PilferedParrotApp(HarnessWorkflow):
                 })
         finally:
             try:
+                observation_summary = observation.finish() if observation is not None else None
                 with self.runs_lock:
                     with self.store.lock:
                         chat = self.store.get(chat_id)
                         pending = self._message(chat, pending_id)
+                        if observation_summary is not None:
+                            pending["observed_files"] = observation_summary
                         if conversation is not None:
                             pending["response_identity"] = deepcopy(conversation.response_identity)
                         self._harness_complete(pending, result, time.monotonic() - started)
