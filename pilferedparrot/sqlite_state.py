@@ -68,6 +68,13 @@ class SaveResult:
 
 
 @dataclass(frozen=True)
+class ExportResult:
+    revision: int
+    sha256: str
+    tree_hash: str
+
+
+@dataclass(frozen=True)
 class JournalEvent:
     seq: int
     event_id: str
@@ -116,6 +123,24 @@ def _canonical_bytes(document: dict[str, Any]) -> bytes:
 
 def _tree_hash(document: dict[str, Any]) -> str:
     return hashlib.sha256(_canonical_bytes(document)).hexdigest()
+
+
+def _is_link_or_reparse(path: Path) -> bool:
+    """Reject path redirection, including Windows directory junctions."""
+    info = path.lstat()
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    )
+
+
+def _export_parent(destination: Path) -> Path:
+    """Check every path component before opening the export directory."""
+    parent = destination.parent
+    for component in (*reversed(parent.parents), parent):
+        if _is_link_or_reparse(component) or not component.is_dir():
+            raise StateStoreError("export directory must be a real directory")
+    return parent
 
 
 def _sanitize_event(value: Any) -> Any:
@@ -456,6 +481,74 @@ class SQLiteStateStore:
         with self._lock:
             self._require_ready()
             return self._load_locked()
+
+    def export_json(self, destination: Path) -> ExportResult:
+        """Export the committed full document to a new, private JSON file.
+
+        This explicit operation never writes the retained source or its backup.
+        The destination directory must exist and contain no symlink or reparse
+        point in its path. Publication uses a hard link so it cannot overwrite
+        an existing file, even if another process creates it concurrently.
+        """
+        if os.name != "posix":
+            raise StateStoreError("private JSON export is unavailable on this platform")
+        destination = Path(os.path.abspath(os.fspath(destination)))
+        with self._lock:
+            self._require_ready()
+            snapshot = self._load_locked()
+            raw = _canonical_bytes(snapshot.document)
+            digest = hashlib.sha256(raw).hexdigest()
+            if digest != snapshot.tree_hash:
+                raise StateStoreError("state document tree hash does not match")
+            stage_name = f".{destination.name}.export-{uuid.uuid4().hex}.tmp"
+            directory_fd: int | None = None
+            stage_created = False
+            published = False
+            try:
+                parent = _export_parent(destination)
+                database = Path(os.path.abspath(os.fspath(self.path)))
+                protected = (database, self._source_path,
+                             *(Path(str(database) + suffix) for suffix in ("-wal", "-shm")))
+                if destination in protected or os.path.lexists(destination):
+                    raise StateStoreError("export destination must be a new path")
+                directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                opened = os.fstat(directory_fd)
+                named = parent.stat()
+                if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
+                    raise StateStoreError("export directory changed")
+                descriptor = os.open(
+                    stage_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600, dir_fd=directory_fd,
+                )
+                stage_created = True
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(raw)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.link(stage_name, destination.name, src_dir_fd=directory_fd,
+                        dst_dir_fd=directory_fd, follow_symlinks=False)
+                published = True
+                os.unlink(stage_name, dir_fd=directory_fd)
+                stage_created = False
+                if directory_fd is not None:
+                    os.fsync(directory_fd)
+                return ExportResult(snapshot.revision, digest, snapshot.tree_hash)
+            except OSError:
+                if published:
+                    try:
+                        os.unlink(destination.name, dir_fd=directory_fd)
+                        os.fsync(directory_fd)
+                    except OSError:
+                        pass
+                raise StateStoreError("could not safely export state document") from None
+            finally:
+                if stage_created:
+                    try:
+                        os.unlink(stage_name, dir_fd=directory_fd)
+                    except OSError:
+                        pass
+                if directory_fd is not None:
+                    os.close(directory_fd)
 
     def _insert_event(self, event_id: str, session_key: str, run_id: str,
                       kind: str, payload: bytes, revision: int) -> int:

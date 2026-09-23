@@ -166,6 +166,81 @@ class SQLiteStateTests(unittest.TestCase):
                     self.assertEqual(connection.execute("SELECT count(*) FROM state_document").fetchone()[0], 1)
             self.assertEqual(source.read_bytes(), RAW)
 
+    @unittest.skipUnless(os.name == "posix", "private export requires POSIX file permissions")
+    def test_export_current_complete_document_after_multiple_saves(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, database = paths(root)
+            destination = root / "restored.json"
+            with SQLiteStateStore(database) as store:
+                snapshot = store.import_json(source)
+                for revision in range(2):
+                    document = deepcopy(snapshot.document)
+                    document["chats"][0]["draft"] = f"revision {revision + 1}"
+                    document["preferences"]["future_preference"] += 1
+                    saved = store.save_document(document, expected_revision=revision)
+                    snapshot = store.load()
+                    self.assertEqual(saved.revision, snapshot.revision)
+                exported = store.export_json(destination)
+                self.assertEqual(exported.revision, 2)
+                self.assertEqual(exported.tree_hash, snapshot.tree_hash)
+                self.assertEqual(exported.sha256,
+                                 hashlib.sha256(destination.read_bytes()).hexdigest())
+                self.assertEqual(json.loads(destination.read_bytes()), snapshot.document)
+                self.assertEqual(json.loads(destination.read_bytes())["unknown_top"],
+                                 {"keep": "🦜"})
+                self.assertEqual(json.loads(destination.read_bytes())["chat"]["id"], "chat-a")
+                self.assertEqual(json.loads(destination.read_bytes())["preferences"]
+                                 ["future_preference"], 44)
+                self.assertEqual(store.source_backup()[0], RAW)
+            self.assertEqual(source.read_bytes(), RAW)
+            self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o600)
+
+    @unittest.skipUnless(os.name == "posix", "private export requires POSIX file permissions")
+    def test_export_refuses_collisions_and_redirected_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, database = paths(root)
+            existing = root / "existing.json"
+            existing.write_text("keep", encoding="utf-8")
+            with SQLiteStateStore(database) as store:
+                store.import_json(source)
+                for destination in (source, database, Path(str(database) + "-wal"),
+                                    existing):
+                    with self.assertRaises(StateStoreError):
+                        store.export_json(destination)
+                self.assertEqual(existing.read_text(encoding="utf-8"), "keep")
+                alias = root / "alias.json"
+                alias.symlink_to(source)
+                redirected = root / "redirected"
+                redirected.symlink_to(root, target_is_directory=True)
+                for destination in (alias, redirected / "new.json"):
+                    with self.assertRaises(StateStoreError):
+                        store.export_json(destination)
+                self.assertFalse((root / "new.json").exists())
+                self.assertEqual(store.source_backup()[0], RAW)
+
+    @unittest.skipUnless(os.name == "posix", "private export requires POSIX file permissions")
+    def test_export_write_failure_leaves_no_destination_or_private_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, database = paths(root)
+            destination = root / "never-published.json"
+            with SQLiteStateStore(database) as store:
+                snapshot = store.import_json(source)
+                private = "unsent"
+                self.assertIn(private, json.dumps(snapshot.document))
+                with patch.object(sqlite_state.os, "fsync", side_effect=OSError(
+                    f"write failed while handling {private}"
+                )):
+                    with self.assertRaises(StateStoreError) as caught:
+                        store.export_json(destination)
+                self.assertNotIn(private, str(caught.exception))
+                self.assertFalse(destination.exists())
+                self.assertEqual(list(root.glob(f".{destination.name}.export-*.tmp")), [])
+                self.assertEqual(store.load(), snapshot)
+            self.assertEqual(source.read_bytes(), RAW)
+
     def test_event_and_state_fault_roll_back_together_across_reopen(self):
         with tempfile.TemporaryDirectory() as directory:
             source, database = paths(Path(directory))
