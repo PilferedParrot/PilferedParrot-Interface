@@ -133,6 +133,23 @@ class ACPOptionCatalogTests(unittest.TestCase):
             )
         self.assertEqual([item["value"] for item in result["models"]], ["haiku"])
 
+    def test_model_switch_uses_returned_mode_list_when_agent_provides_it(self):
+        class ChangingModeClient(FakeClient):
+            def set_config_option(self, session_id, config_id, value, *, timeout):
+                result = super().set_config_option(session_id, config_id, value, timeout=timeout)
+                result["modes"] = {
+                    "availableModes": [{"id": "review", "name": "Review"}],
+                    "currentModeId": "review",
+                }
+                return result
+        with tempfile.TemporaryDirectory() as directory:
+            result = discover_acp_options(
+                ["fake"], cwd=Path(directory).resolve(), env={}, model="haiku",
+                client_factory=ChangingModeClient,
+            )
+        self.assertEqual([item["value"] for item in result["modes"]], ["review"])
+        self.assertEqual(result["current_mode"], "review")
+
 
 if __name__ == "__main__":
     unittest.main()

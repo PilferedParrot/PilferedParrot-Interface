@@ -85,6 +85,7 @@ def discover_acp_options(
         session = client.new_session(workspace.resolve(), timeout=timeout)
         session_id = session["sessionId"]
         options = session.get("configOptions")
+        mode_source = session.get("modes") if isinstance(session.get("modes"), dict) else {}
         model_option = _find(options, category="model", ids=("model",))
         models = _choices(model_option)
         if model is not None:
@@ -97,6 +98,8 @@ def discover_acp_options(
                     session_id, str(model_option["id"]), model, timeout=timeout,
                 )
                 options = result.get("configOptions")
+                if isinstance(result.get("modes"), dict):
+                    mode_source = result["modes"]
                 model_option = _find(options, category="model", ids=("model",))
             if not isinstance(model_option, dict) or model_option.get("currentValue") != model:
                 raise ACPError("ACP agent did not apply the requested model")
@@ -104,7 +107,6 @@ def discover_acp_options(
         effort_option = _find(
             options, category="thought_level", ids=("reasoning_effort", "effort"),
         )
-        mode_source = session.get("modes") if isinstance(session.get("modes"), dict) else {}
         modes = []
         for item in mode_source.get("availableModes", [])[:50] \
                 if isinstance(mode_source.get("availableModes"), list) else []:
