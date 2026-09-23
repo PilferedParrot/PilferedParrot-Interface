@@ -13,6 +13,7 @@ from pilferedparrot.sqlite_state import (
     RevisionConflict, SourceChanged, SQLiteStateStore, StateStoreError,
 )
 from pilferedparrot.config import load_config
+from pilferedparrot.dispatch import RunResult
 from pilferedparrot.web import ChatStore, PilferedParrotApp
 
 
@@ -243,6 +244,80 @@ class ChatStoreSQLiteCutoverTests(unittest.TestCase):
                          "attachment secret")
         self.assertEqual(saved["chats"][0]["messages"][0]["activity"][0]["future_secret"],
                          "activity secret")
+
+    def test_sqlite_harness_public_contract_plan_run_review_and_child_navigation(self):
+        config = load_config(self.root / "missing.json")
+        config["web"]["chat_store"] = str(self.source)
+        config["web"]["model_catalog_store"] = str(self.root / "models.json")
+        config["ledger"] = str(self.root / "runs.jsonl")
+        app = PilferedParrotApp(config, self.root, sqlite_state_path=self.database)
+        self.addCleanup(app.shutdown)
+        parent_id = app.create_chat({"provider": "codex", "cwd": str(self.root)})["id"]
+        contract = {
+            "task": "Write the fixture", "category": "implementation",
+            "inputs": [], "write_scope": ["output.txt"],
+            "acceptance_check": "The fixture contains done", "artifact": "output.txt",
+            "stop_conditions": "Stop if another file is needed",
+        }
+        estimates = dict(unit="effort_points", direct=20, briefing=1,
+                         execution=4, verification=2, rework=1)
+        planned = app.harness_action(parent_id, {
+            "action": "plan", "preset": "sol-luna", "contract": contract,
+            "estimates": estimates,
+        })["harness_tasks"][0]
+        self.assertEqual(planned["contract"], contract)
+        self.assertEqual(planned["route"]["requested"]["model"], "gpt-6-luna")
+        self.assertEqual(planned["attempts"], [])
+        task_id = planned["id"]
+
+        def captured(*_args):
+            (self.root / "output.txt").write_text("done", encoding="utf-8")
+            return RunResult("done", 0, "fixture-session")
+
+        with patch("pilferedparrot.web.capture_dispatch", side_effect=captured):
+            child = app.harness_action(parent_id, {"action": "run", "task_id": task_id})
+            with app.runs_lock:
+                active = app.runs.get(child["id"])
+            if active:
+                active.thread.join(5)
+                self.assertFalse(active.thread.is_alive())
+        child_public = app.chat_state(child["id"])
+        self.assertEqual(child_public["harness_parent"], {
+            "chat_id": parent_id, "task_id": task_id,
+        })
+        reviewed = app.harness_action(parent_id, {
+            "action": "review", "task_id": task_id, "accepted": True,
+            "artifact": "output.txt", "evidence": "Fixture matches",
+        })["harness_tasks"][0]
+        self.assertEqual(reviewed["attempts"][0]["review"]["evidence"], "Fixture matches")
+        self.assertEqual(reviewed["attempts"][0]["review"]["artifact_snapshot"]["bytes"], 4)
+        with app.store.lock:
+            app.store.get(parent_id)["harness_tasks"][0]["contract"]["future_secret"] = "hidden"
+            app.store.save()
+        self.assertNotIn("future_secret", json.dumps(app.chat_state(parent_id)))
+        with SQLiteStateStore(self.database) as inspected:
+            saved = inspected.import_json(self.source).document
+        matching = next(chat for chat in saved["chats"] if chat["id"] == parent_id)
+        self.assertEqual(matching["harness_tasks"][0]["contract"]["future_secret"], "hidden")
+
+    def test_acp_text_content_block_survives_public_projection(self):
+        source_tree = json.loads(RAW)
+        source_tree["chats"][0]["messages"] = [{
+            "id": "message-a", "role": "assistant", "content": "done",
+            "acp_updates": [{"id": "update-a", "update": {
+                "sessionUpdate": "tool_call", "toolCallId": "tool-a", "title": "Read file",
+                "content": [{"type": "content", "content": {
+                    "type": "text", "text": "known output", "future_secret": "nested secret",
+                }, "future_secret": "block secret"}],
+            }}],
+        }]
+        self.source.write_text(json.dumps(source_tree), encoding="utf-8")
+        store = self.open_store()
+        tool = store.list_public()[0]["messages"][0]["acp_updates"][0]["update"]
+        self.assertEqual(tool["content"], [{
+            "type": "content", "content": {"type": "text", "text": "known output"},
+        }])
+        self.assertNotIn("future_secret", json.dumps(tool))
 
     def test_load_repairs_invalid_ids_without_losing_opaque_fields(self):
         source_tree = json.loads(RAW)

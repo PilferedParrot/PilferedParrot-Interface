@@ -64,7 +64,8 @@ _PUBLIC_SESSION_FIELDS = frozenset({
     "id", "window_id", "title", "cwd", "created_at", "updated_at",
     "requested_provider", "requested_model", "provider", "model",
     "reasoning_effort", "acp_mode", "messages", "draft", "archived",
-    "archived_at", "last_used_order", "harness_tasks", "context_chars", "context_warning",
+    "archived_at", "last_used_order", "harness_parent", "harness_tasks",
+    "context_chars", "context_warning",
     "pending", "session_engine", "run_id",
 })
 _PUBLIC_MESSAGE_FIELDS = frozenset({
@@ -83,6 +84,96 @@ def _public_fields(value: Any, allowed: frozenset[str]) -> dict[str, Any]:
         if isinstance(value, dict) else {}
 
 
+_OMIT_PUBLIC = object()
+_SETTING_SHAPE = {"provider": None, "model": None, "reasoning_effort": None}
+_METRIC_SHAPE = {"value": None, "source": None, "unit": None}
+_CONTRACT_SHAPE = {
+    "task": None, "category": None, "inputs": [None], "write_scope": [None],
+    "acceptance_check": None, "artifact": None, "stop_conditions": None,
+    "hypothesis": None,
+}
+_USAGE_OBSERVATION_SHAPE = {
+    "id": None, "scope_id": None, "basis": None, "source": None,
+    "input_tokens": None, "output_tokens": None, "cached_input_tokens": None,
+    "includes_children": None,
+}
+_USAGE_SHAPE = {
+    "input_tokens": _METRIC_SHAPE, "output_tokens": _METRIC_SHAPE,
+    "cached_input_tokens": _METRIC_SHAPE, "observations": None,
+    "complete": None, "ambiguity": None,
+    "api_equivalent_cost": _METRIC_SHAPE,
+    "subscription_consumption": _METRIC_SHAPE,
+}
+_REVIEW_SHAPE = {
+    "accepted": None, "artifact_snapshot": {"sha256": None, "bytes": None},
+    "artifact": None, "evidence": None, "acceptance_check": None,
+    "review_seconds": _METRIC_SHAPE, "rework_seconds": _METRIC_SHAPE,
+    "recorded_at": None, "source": None,
+}
+_ATTEMPT_SHAPE = {
+    "id": None, "chat_id": None, "parent_chat_id": None, "task_id": None,
+    "category": None, "contract": _CONTRACT_SHAPE, "requested": _SETTING_SHAPE,
+    "route_mode": None, "retry_index": None, "started_at": None,
+    "status": None, "confirmed": {**_SETTING_SHAPE, "source": None},
+    "elapsed_seconds": _METRIC_SHAPE, "usage_observations": [_USAGE_OBSERVATION_SHAPE],
+    "usage": _USAGE_SHAPE, "review": _REVIEW_SHAPE,
+    "api_equivalent_cost": _METRIC_SHAPE,
+    "subscription_consumption": _METRIC_SHAPE, "inherited_context": None,
+    "message_id": None, "run_id": None, "failure_reason": None,
+}
+_HARNESS_TASK_SHAPE = {
+    "id": None, "status": None, "created_at": None,
+    "contract": _CONTRACT_SHAPE,
+    "route": {
+        "mode": None, "requested": _SETTING_SHAPE, "reason": None,
+        "estimates": {"unit": None, "source": None, "direct": None,
+                      "briefing": None, "execution": None,
+                      "verification": None, "rework": None},
+        "prior_selection": {"model": None, "reasoning_effort": None,
+                            "source": None, "runtime_confirmed": None},
+    },
+    "policy": {
+        "name": None, "label": None, "mode": None, "provider": None,
+        "lead": _SETTING_SHAPE, "worker": _SETTING_SHAPE,
+        "escalation": [_SETTING_SHAPE], "custom_routing_required": None,
+        "delegation_enabled": None,
+    },
+    "attempts": [_ATTEMPT_SHAPE],
+    "events": [{"type": None, "attempt_id": None, "evidence": None,
+                "requested": _SETTING_SHAPE, "at": None, **_REVIEW_SHAPE}],
+    "summary": {
+        "counts": {key: None for key in (
+            "total", "accepted", "rejected", "awaiting_review", "failed", "running",
+        )},
+        "usage": _USAGE_SHAPE, "elapsed": _METRIC_SHAPE,
+        "review": _METRIC_SHAPE, "rework": _METRIC_SHAPE,
+        "rework_attempts": None, "api_equivalent_cost": _METRIC_SHAPE,
+        "subscription_consumption": _METRIC_SHAPE,
+    },
+}
+
+
+def _public_shape(value: Any, shape: Any) -> Any:
+    if value is None:
+        return None
+    if shape is None:
+        return value if not isinstance(value, (dict, list)) else _OMIT_PUBLIC
+    if isinstance(shape, list):
+        if not isinstance(value, list):
+            return _OMIT_PUBLIC
+        return [public for item in value
+                if (public := _public_shape(item, shape[0])) is not _OMIT_PUBLIC]
+    if not isinstance(value, dict):
+        return _OMIT_PUBLIC
+    result = {}
+    for key, child_shape in shape.items():
+        if key in value:
+            public = _public_shape(value[key], child_shape)
+            if public is not _OMIT_PUBLIC:
+                result[key] = public
+    return result
+
+
 def _public_acp_update(entry: Any) -> dict[str, Any] | None:
     if not isinstance(entry, dict) or not isinstance(entry.get("update"), dict):
         return None
@@ -94,12 +185,24 @@ def _public_acp_update(entry: Any) -> dict[str, Any] | None:
     ) if isinstance(update.get(key), str)}
     content = update.get("content")
     if isinstance(content, list):
-        public["content"] = [
-            {key: block[key] for key in ("type", "path", "oldText", "newText")
-             if isinstance(block.get(key), str)
-             or key == "oldText" and key in block and block[key] is None}
-            for block in content if isinstance(block, dict) and block.get("type") == "diff"
-        ]
+        public_content = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "diff":
+                public_content.append({
+                    key: block[key] for key in ("type", "path", "oldText", "newText")
+                    if isinstance(block.get(key), str)
+                    or key == "oldText" and key in block and block[key] is None
+                })
+            elif block.get("type") == "content" and isinstance(block.get("content"), dict) \
+                    and block["content"].get("type") == "text" \
+                    and isinstance(block["content"].get("text"), str):
+                public_content.append({
+                    "type": "content",
+                    "content": {"type": "text", "text": block["content"]["text"]},
+                })
+        public["content"] = public_content
     output = update.get("rawOutput")
     if isinstance(output, str):
         public["rawOutput"] = output
@@ -113,17 +216,21 @@ def _sqlite_public_projection(result: dict[str, Any]) -> dict[str, Any]:
     """Keep opaque future fields out of SQLite-backed browser responses."""
     projected = {key: value for key, value in result.items()
                  if key in _PUBLIC_SESSION_FIELDS and (
-                     key in {"messages", "harness_tasks"}
+                     key in {"messages", "harness_tasks", "harness_parent"}
                      or not isinstance(value, (dict, list))
                  )}
     tasks = projected.get("harness_tasks")
     if isinstance(tasks, list):
-        projected["harness_tasks"] = [
-            {"status": task["status"]} for task in tasks
-            if isinstance(task, dict) and isinstance(task.get("status"), str)
-        ]
+        projected["harness_tasks"] = _public_shape(tasks, [_HARNESS_TASK_SHAPE])
     else:
         projected.pop("harness_tasks", None)
+    parent = projected.get("harness_parent")
+    if isinstance(parent, dict):
+        projected["harness_parent"] = _public_shape(
+            parent, {"chat_id": None, "task_id": None},
+        )
+    else:
+        projected.pop("harness_parent", None)
     messages = projected.get("messages")
     if isinstance(messages, list):
         public_messages = []
