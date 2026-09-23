@@ -47,7 +47,7 @@ class FakeACPClient:
         update_burst=0, flush_error=None, ignore_cancel=False,
         ignore_model_value=False, hold_flush=False, permission_session_override=None,
         permission_on_load=False, hold_initialize=False, mode_ack=None,
-        ignore_effort_value=False, message_burst=0,
+        ignore_effort_value=False, message_burst=0, empty_mode_result=False,
     ):
         self.cwd = cwd
         self.on_update = on_update
@@ -71,6 +71,7 @@ class FakeACPClient:
         self.permission_on_load = permission_on_load
         self.hold_initialize = hold_initialize
         self.mode_ack = mode_ack
+        self.empty_mode_result = empty_mode_result
         self.ignore_effort_value = ignore_effort_value
         self.message_burst = message_burst
         self.prompt_started = threading.Event()
@@ -129,6 +130,8 @@ class FakeACPClient:
 
     def set_mode(self, session_id, mode, *, timeout=30):
         self.calls.append(("mode", session_id, mode, timeout))
+        if self.empty_mode_result:
+            return {}
         return {"currentModeId": self.mode_ack if self.mode_ack is not None else mode}
 
     def set_config_option(self, session_id, option_id, value, *, timeout=30):
@@ -206,6 +209,24 @@ class FakeACPClient:
 
 
 class ACPWorkEngineTests(unittest.TestCase):
+    def test_empty_protocol_mode_result_still_allows_prompt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            clients: list[FakeACPClient] = []
+
+            def factory(*args, **kwargs):
+                client = FakeACPClient(*args, empty_mode_result=True, **kwargs)
+                clients.append(client)
+                return client
+
+            result = run_acp_turn(
+                ["fake-agent"], cwd=Path(directory).resolve(), prompt="mode check",
+                mode="plan", client_factory=factory,
+            )
+            self.assertTrue(result.succeeded)
+            self.assertEqual(result.mode, "plan")
+            self.assertEqual([call[0] for call in clients[0].calls if call[0] in {"mode", "prompt"}],
+                             ["mode", "prompt"])
+
     def test_fake_agent_sets_requested_mode_before_prompt(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

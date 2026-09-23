@@ -447,7 +447,9 @@ def run_acp_turn(
             if current_mode != mode:
                 mode_result = client.set_mode(client_session_id, mode, timeout=option_timeout)
                 check_cancelled()
-                mode_acknowledged = False
+                # ACP v1 defines an empty successful set_mode result. The RPC
+                # success acknowledges the change; optional returned state can
+                # still contradict it and must then fail before the prompt.
                 if "configOptions" in mode_result:
                     latest_options = _sanitize_options(
                         _config_options(mode_result.get("configOptions")), sanitize_update,
@@ -458,24 +460,16 @@ def run_acp_turn(
                     if config_mode is not None:
                         if config_mode.get("currentValue") != mode:
                             raise ACPError("ACP agent did not apply the requested mode")
-                        mode_acknowledged = True
                 reported_mode = mode_result.get("currentModeId")
                 if isinstance(reported_mode, str):
                     if reported_mode != mode:
                         raise ACPError("ACP agent did not apply the requested mode")
                     latest_mode_id = reported_mode
-                    mode_acknowledged = True
                 else:
                     flush_updates = getattr(client, "flush_updates", None)
                     if callable(flush_updates):
                         flush_updates(timeout=min(option_timeout, 5))
                     check_cancelled()
-                    with lock:
-                        reported_mode = latest_mode_id
-                    if reported_mode == mode:
-                        mode_acknowledged = True
-                    if not mode_acknowledged:
-                        raise ACPError("ACP agent did not acknowledge the requested mode")
                 current_mode = mode
                 latest_mode_id = mode
                 check_cancelled()
