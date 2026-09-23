@@ -712,8 +712,13 @@ function renderReasoningSelect(provider, model, effort, disabled, chatSurface = 
 function renderACPModeSelect(provider, mode, disabled) {
   const control = $("#acpModeControl");
   const select = $("#acpModeSelect");
-  const modes = state.provider_engines?.[provider] === "acp"
-    ? state.model_catalog?.[provider]?.acp_options?.modes : null;
+  if (!isACPProvider(provider)) {
+    control.hidden = true;
+    select.innerHTML = '<option value="">Agent default</option>';
+    select.disabled = true;
+    return;
+  }
+  const modes = state.model_catalog?.[provider]?.acp_options?.modes;
   const savedMode = typeof mode === "string" && mode.length <= 128 ? mode : "";
   const choices = Array.isArray(modes) ? modes.filter((item) =>
     item && typeof item.value === "string" && item.value.length <= 128) : [];
@@ -725,7 +730,7 @@ function renderACPModeSelect(provider, mode, disabled) {
   select.value = savedMode && (savedUnavailable || choices.some((item) => item.value === savedMode))
     ? savedMode : "";
   select.disabled = disabled || (choices.length === 0 && !savedUnavailable);
-  select.title = "Applies to each turn in this Work session. Agent default leaves the agent or configured mode unchanged.";
+  select.title = "Applies to each turn in this Work session. Agent default leaves the configured mode unchanged. Permissions still require your approval.";
 }
 function renderContextSummary(usage, status) {
   const summary = $("#contextSummary");
@@ -1446,7 +1451,7 @@ function renderHeader() {
   renderReasoningSelect(state.windowProvider, $("#modelSelect").value,
     chat ? chat.reasoning_effort : draftReasoningEffort,
     !state.initialized || activeRunning() || selectionSavePending);
-  renderACPModeSelect(state.windowProvider, chat?.acp_mode ?? draftACPMode,
+  renderACPModeSelect(state.windowProvider, chat ? chat.acp_mode : draftACPMode,
     !state.initialized || activeRunning() || selectionSavePending);
 }
 
@@ -1794,6 +1799,7 @@ async function createChat(requestedModel = "") {
       }),
     });
     state.chats.unshift(chat);
+    draftACPMode = null;
     if (state.workModelSelections) delete state.workModelSelections[provider];
     state.activeId = chat.id;
     state.selected_project = chat.project_cwd || chat.cwd;

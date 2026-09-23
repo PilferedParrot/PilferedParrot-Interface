@@ -145,6 +145,12 @@ class ACPWorkBrowserEndToEndTests(unittest.TestCase):
         reloaded_mode = self.page.get_by_role("combobox", name="ACP mode")
         expect(reloaded_mode).to_be_visible()
         expect(reloaded_mode).to_have_value("plan")
+        self.page.evaluate("() => { state.provider_engines.codex = 'legacy'; renderHeader(); }")
+        expect(self.page.locator("#acpModeControl")).to_be_hidden()
+        expect(self.page.locator("#acpModeSelect")).to_have_value("")
+        self.page.evaluate("() => { state.provider_engines.codex = 'acp'; renderHeader(); }")
+        expect(reloaded_mode).to_be_visible()
+        expect(reloaded_mode).to_have_value("plan")
 
     def test_unavailable_saved_mode_stays_visible_and_can_be_cleared(self):
         self.fixture.mode_choices = []

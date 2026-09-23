@@ -83,6 +83,35 @@ class ACPWorkBackendTests(unittest.TestCase):
         cleared = self.app.set_acp_mode(self.chat["id"], {"mode": None}, window_id="main")
         self.assertNotIn("acp_mode", cleared)
 
+    def test_mode_probe_releases_run_lock_and_rechecks_changed_session(self):
+        changed = threading.Event()
+
+        def probe(_provider, **kwargs):
+            self.assertEqual(kwargs["workspace"], self.root)
+
+            def change_model():
+                self.app.set_reasoning_effort(
+                    self.chat["id"], {"model": "other-model", "reasoning_effort": None},
+                    window_id="main",
+                )
+                changed.set()
+
+            worker = threading.Thread(target=change_model)
+            worker.start()
+            try:
+                self.assertTrue(changed.wait(1), "mode probe held the global run lock")
+            finally:
+                worker.join(1)
+            return {"acp_options": {"modes": [{"value": "plan"}]}}
+
+        with patch.object(self.app, "poll_provider_models", side_effect=probe):
+            with self.assertRaisesRegex(ValueError, "Work session changed"):
+                self.app.set_acp_mode(
+                    self.chat["id"], {"mode": "plan"}, window_id="main",
+                )
+        with self.app.store.lock:
+            self.assertNotIn("acp_mode", self.app.store.get(self.chat["id"]))
+
     def test_mode_selected_before_first_prompt_is_saved_with_new_work_session(self):
         with patch.object(self.app, "poll_provider_models", return_value={
             "acp_options": {"modes": [{"value": "plan"}]},

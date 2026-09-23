@@ -1262,7 +1262,7 @@ class PilferedParrotApp(HarnessWorkflow):
     def poll_provider_models(
         self, provider: str, *, model: str | None = None,
         window_id: str = "main", window_provider: str | None = None,
-        scope: str = "dashboard",
+        scope: str = "dashboard", workspace: Path | None = None,
     ) -> dict[str, Any]:
         """Refresh a provider's model choices without spending a model turn."""
         if provider not in self._provider_ids():
@@ -1274,10 +1274,13 @@ class PilferedParrotApp(HarnessWorkflow):
             selected_model = self._normalize_model(model) if model is not None else None
             if model is not None and selected_model is None:
                 raise ValueError("model must be a valid model ID")
-            with self.store.lock:
-                selected_project = self.store.project_state(
-                    window_id, provider, self.default_cwd, aggregate=window_id == "main",
-                )["selected_project"] or self.default_cwd
+            if workspace is None:
+                with self.store.lock:
+                    selected_project = self.store.project_state(
+                        window_id, provider, self.default_cwd, aggregate=window_id == "main",
+                    )["selected_project"] or self.default_cwd
+            else:
+                selected_project = workspace
             try:
                 workspace = _project_directory(_migrate_renamed_project_path(
                     selected_project, self.renamed_repository_root,
@@ -1579,8 +1582,8 @@ class PilferedParrotApp(HarnessWorkflow):
                     or any(ord(char) < 32 for char in requested_acp_mode)):
                 raise ValueError("ACP mode must be non-empty text")
             options = self.poll_provider_models(
-                provider, model=requested_model, window_id=window_id,
-                window_provider=provider,
+                provider, model=model, window_id=window_id,
+                window_provider=provider, workspace=cwd,
             ).get("acp_options", {}).get("modes", [])
             if not any(isinstance(item, dict) and item.get("value") == requested_acp_mode
                        for item in options):
@@ -1914,28 +1917,35 @@ class PilferedParrotApp(HarnessWorkflow):
                 provider = str(chat.get("requested_provider") or self.default_provider)
                 if provider not in {"codex", "claude"} or self.config[provider].get("engine") != "acp":
                     raise ValueError("ACP mode is only available for ACP Work sessions")
-                model = chat.get("requested_model")
+                model = chat.get("requested_model") or effective_model(self.config, provider)
                 owner = chat.get("window_id", "main")
-            if value is not None:
-                catalog = self.poll_provider_models(
-                    provider, model=model, window_id=owner, window_provider=provider,
-                )
-                choices = catalog.get("acp_options", {}).get("modes", [])
-                if not any(isinstance(item, dict) and item.get("value") == value
-                           for item in choices):
-                    raise ValueError("ACP mode is not advertised by the selected agent")
-            with self.runs_lock:
-                if chat_id in self.runs:
-                    raise ValueError("stop the response before changing ACP mode")
-                with self.store.lock:
-                    chat = self._owned_chat(chat_id, window_id)
-                    if value is None:
-                        chat.pop("acp_mode", None)
-                    else:
-                        chat["acp_mode"] = value
-                    self.store.mark_used(chat)
-                    self.store.save()
-                    return self.store.public(chat)
+                workspace = Path(chat["cwd"])
+        if value is not None:
+            catalog = self.poll_provider_models(
+                provider, model=model, window_id=owner,
+                window_provider=provider, workspace=workspace,
+            )
+            choices = catalog.get("acp_options", {}).get("modes", [])
+            if not any(isinstance(item, dict) and item.get("value") == value
+                       for item in choices):
+                raise ValueError("ACP mode is not advertised by the selected agent")
+        with self.runs_lock:
+            if chat_id in self.runs:
+                raise ValueError("stop the response before changing ACP mode")
+            with self.store.lock:
+                chat = self._owned_chat(chat_id, window_id)
+                if (str(chat.get("requested_provider") or self.default_provider) != provider
+                        or (chat.get("requested_model") or effective_model(self.config, provider)) != model
+                        or Path(chat["cwd"]) != workspace
+                        or self.config[provider].get("engine") != "acp"):
+                    raise ValueError("Work session changed while checking ACP mode")
+                if value is None:
+                    chat.pop("acp_mode", None)
+                else:
+                    chat["acp_mode"] = value
+                self.store.mark_used(chat)
+                self.store.save()
+                return self.store.public(chat)
 
     def activate_chat(
         self, chat_id: str, *, window_id: str | None = None,
