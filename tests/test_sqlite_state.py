@@ -298,6 +298,32 @@ class SQLiteStateTests(unittest.TestCase):
                 self.assertEqual(reopened.import_json(source).revision, 1)
                 self.assertEqual(len(reopened.replay(session_key="work-a")), 26)
 
+    def test_stale_writer_cannot_append_new_progress_for_changed_document(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, database = paths(Path(directory))
+            with SQLiteStateStore(database) as writer, SQLiteStateStore(database) as stale:
+                initial = writer.import_json(source)
+                stale.import_json(source)
+                first = stale.append_event(
+                    "work-a", "run-a", "progress", {"index": 1},
+                    event_id="progress_0001", expected_revision=0,
+                )
+                changed = deepcopy(initial.document)
+                changed["chats"][0]["draft"] = "writer committed"
+                writer.save_document(changed, expected_revision=0)
+                with self.assertRaises(RevisionConflict):
+                    stale.append_event(
+                        "work-a", "run-a", "progress", {"index": 2},
+                        event_id="progress_0002", expected_revision=0,
+                    )
+                # A retry of an already committed event stays idempotent.
+                retry = stale.append_event(
+                    "work-a", "run-a", "progress", {"index": 1},
+                    event_id="progress_0001", expected_revision=0,
+                )
+                self.assertEqual(retry.seq, first.seq)
+                self.assertEqual([event.seq for event in writer.replay()], [1])
+
     def test_changed_source_and_unsupported_or_corrupt_database_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             source, database = paths(Path(directory))

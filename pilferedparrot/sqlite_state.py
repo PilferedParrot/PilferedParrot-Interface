@@ -469,13 +469,21 @@ class SQLiteStateStore:
     def append_event(
         self, session_key: str, run_id: str, kind: str,
         payload: dict[str, Any], *, event_id: str | None = None,
+        expected_revision: int | None = None,
     ) -> JournalEvent:
         """Durably append one sanitized progress event without saving the document.
 
         Return only after the WAL transaction commits; callers may publish the
         returned event to a browser stream then. A caller-supplied event ID can
         be retried safely if its scope, kind and sanitized payload are equal.
+        A writer can require its document revision before a new append so a
+        stale process cannot journal progress for another writer's state.
         """
+        if expected_revision is not None and (
+            isinstance(expected_revision, bool) or not isinstance(expected_revision, int)
+            or expected_revision < 0
+        ):
+            raise ValueError("expected_revision must be a nonnegative integer")
         session_key = _event_scope(session_key, "session_key")
         run_id = _event_scope(run_id, "run_id")
         event_id, payload_json = _prepared_event(kind, payload, event_id)
@@ -498,6 +506,8 @@ class SQLiteStateStore:
                     if current is None:
                         raise StateStoreError("state document is missing")
                     revision = int(current[0])
+                    if expected_revision is not None and revision != expected_revision:
+                        raise RevisionConflict("state revision changed")
                     seq = self._insert_event(
                         event_id, session_key, run_id, kind, payload_json, revision,
                     )
