@@ -42,6 +42,8 @@ retaining the exact original JSON as a rollback source. In that opt-in path,
 sanitized progress commits to the event journal before browser publication;
 the final document and completion event commit together. The browser still
 uses its process-local stream cursor and reloads a snapshot after restart.
-Normal app startup still uses JSON.
+An explicit POSIX-only export can write the committed SQLite document to a new,
+private JSON file without replacing the source. Normal app startup still uses
+JSON.
 Windows runtime behavior and provider permission UI have not yet been
 certified for release.

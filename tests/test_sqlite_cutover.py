@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -155,6 +156,29 @@ class ChatStoreSQLiteCutoverTests(unittest.TestCase):
                 self.assertEqual(inspected.source_backup()[0], RAW)
         finally:
             restarted.shutdown()
+        self.assertEqual(self.source.read_bytes(), RAW)
+
+    @unittest.skipUnless(os.name == "posix", "private export requires POSIX file permissions")
+    def test_app_opt_in_exports_the_committed_document_to_a_new_file(self):
+        config = load_config(self.root / "missing.json")
+        config["web"]["chat_store"] = str(self.source)
+        config["web"]["model_catalog_store"] = str(self.root / "models.json")
+        config["ledger"] = str(self.root / "runs.jsonl")
+        app = PilferedParrotApp(config, self.root, sqlite_state_path=self.database)
+        try:
+            work = app.create_chat({"provider": "codex", "cwd": str(self.root)})
+            app.set_draft(work["id"], {"draft": "export this saved work"})
+            destination = self.root / "exported-current.json"
+            exported = app.store._sqlite_state.export_json(destination)
+            snapshot = app.store._sqlite_state.load()
+            self.assertEqual(exported.revision, snapshot.revision)
+            self.assertEqual(json.loads(destination.read_bytes()), snapshot.document)
+            self.assertEqual(snapshot.document["unknown_top"], {"keep": True})
+            self.assertEqual(app.store._sqlite_state.source_backup()[0], RAW)
+            with self.assertRaises(StateStoreError):
+                app.store._sqlite_state.export_json(destination)
+        finally:
+            app.shutdown()
         self.assertEqual(self.source.read_bytes(), RAW)
 
 
