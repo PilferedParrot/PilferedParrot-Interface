@@ -1041,17 +1041,15 @@ function acpText(value, limit = 8_000) {
   return escapeHtml(text.length > limit ? `${text.slice(0, limit)}\n… Preview shortened.` : text);
 }
 
-function acpDiffMarkup(block, key, limit) {
+function acpDiffMarkup(block, limit) {
   const path = typeof block.path === "string" ? block.path : "Changed file";
-  const pathId = `${key}-path`;
-  const beforeId = `${key}-before`;
-  const afterId = `${key}-after`;
+  const safePath = acpText(path, 1_000);
   const oldText = block.oldText === null ? "New file" : block.oldText;
-  return `<section class="acp-diff" role="region" aria-label="File change: ${acpText(path, 1_000)}">
-    <div class="acp-diff-path" id="${escapeHtml(pathId)}">${acpText(path, 1_000)}</div>
+  return `<section class="acp-diff" role="region" aria-label="File change: ${safePath}">
+    <div class="acp-diff-path">${safePath}</div>
     <div class="acp-diff-pair">
-      <div role="group" aria-labelledby="${escapeHtml(beforeId)} ${escapeHtml(pathId)}"><strong id="${escapeHtml(beforeId)}">Before</strong><pre>${acpText(oldText, limit)}</pre></div>
-      <div role="group" aria-labelledby="${escapeHtml(afterId)} ${escapeHtml(pathId)}"><strong id="${escapeHtml(afterId)}">After</strong><pre>${acpText(block.newText, limit)}</pre></div>
+      <div role="group" aria-label="Before ${safePath}"><strong>Before</strong><pre>${acpText(oldText, limit)}</pre></div>
+      <div role="group" aria-label="After ${safePath}"><strong>After</strong><pre>${acpText(block.newText, limit)}</pre></div>
     </div></section>`;
 }
 
@@ -1073,9 +1071,9 @@ function acpToolCards(message, openState) {
     const status = ["pending", "in_progress", "completed", "failed"].includes(tool.status)
       ? tool.status : "pending";
     const content = Array.isArray(tool.content) ? tool.content : [];
-    const details = content.map((block, blockIndex) => {
+    const details = content.map((block) => {
       if (block?.type === "diff") {
-        return acpDiffMarkup(block, `tool-${message.id || "message"}-${tool.toolCallId}-${blockIndex}`, 20_000);
+        return acpDiffMarkup(block, 20_000);
       }
       if (block?.type === "content" && block.content?.type === "text") {
         return `<pre class="acp-tool-output">${acpText(block.content.text)}</pre>`;
@@ -1097,8 +1095,8 @@ function acpPermissionCards(message, chatId) {
   const requests = Array.isArray(message.acp_permissions) ? message.acp_permissions : [];
   return requests.map((request) => {
     const tool = request.toolCall || {};
-    const preview = Array.isArray(tool.content) ? tool.content.map((block, blockIndex) =>
-      block?.type === "diff" ? acpDiffMarkup(block, `permission-${request.requestId}-${blockIndex}`, 65_536) : "",
+    const preview = Array.isArray(tool.content) ? tool.content.map((block) =>
+      block?.type === "diff" ? acpDiffMarkup(block, 65_536) : "",
     ).join("") : "";
     const command = tool.command ? `<div class="acp-command"><strong>Command</strong><pre>${acpText(tool.command, 65_536)}</pre></div>` : "";
     const buttons = (Array.isArray(request.options) ? request.options : []).map((option) => {
