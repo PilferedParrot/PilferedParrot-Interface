@@ -62,8 +62,133 @@ class ChatStoreSQLiteCutoverTests(unittest.TestCase):
             snapshot = inspected.import_json(self.source)
             self.assertEqual(snapshot.revision, 1)
             self.assertEqual(snapshot.document["chats"][0]["draft"], "saved in SQLite")
+            self.assertEqual(snapshot.document["preferences"]["future_preference"], 42)
+            self.assertEqual(snapshot.document["chats"][0]["future_field"], {"nested": [1, 2]})
             self.assertEqual(inspected.source_backup()[0], RAW)
         self.assertEqual(self.source.read_bytes(), RAW)
+
+    def test_app_startup_and_later_edits_preserve_nested_unknown_fields(self):
+        source_tree = json.loads(RAW)
+        source_tree["preferences"]["appearance"] = {
+            "tone": "darker", "future_appearance": {"keep": True},
+        }
+        source_tree["chat"]["future_chat"] = {"keep": [1, 2]}
+        source_tree["chat"]["messages"] = [{
+            "id": "message-a", "role": "user", "content": "hello",
+            "future_message": {"keep": True},
+        }]
+        source_tree["chats"][0]["messages"] = [{
+            "id": "work-message-a", "role": "assistant", "content": "before",
+            "future_message": {"keep": [3]},
+        }]
+        source_tree["chats"][0]["context_used_tokens"] = 999999
+        self.source.write_text(json.dumps(source_tree), encoding="utf-8")
+        original_bytes = self.source.read_bytes()
+        config = load_config(self.root / "missing.json")
+        config["web"]["chat_store"] = str(self.source)
+        config["web"]["model_catalog_store"] = str(self.root / "models.json")
+        config["ledger"] = str(self.root / "runs.jsonl")
+        app = PilferedParrotApp(config, self.root, sqlite_state_path=self.database)
+        try:
+            work_public = app.store.list_public()[0]
+            self.assertNotIn("future_field", work_public)
+            self.assertNotIn("future_message", work_public["messages"][0])
+            self.assertNotIn("future_chat", app.store.chat_public())
+            self.assertNotIn("future_message", app.store.chat_public()["messages"][0])
+            with SQLiteStateStore(self.database) as inspected:
+                startup = inspected.import_json(self.source).document
+            self.assertEqual(startup["preferences"]["future_preference"], 42)
+            self.assertEqual(startup["preferences"]["appearance"]["future_appearance"], {"keep": True})
+            self.assertEqual(startup["chat"]["future_chat"], {"keep": [1, 2]})
+            self.assertEqual(startup["chat"]["messages"][0]["future_message"], {"keep": True})
+            self.assertNotIn("context_used_tokens", startup["chats"][0])
+            app.store.set_draft("work-a", "later")
+            app.store.set_appearance_preferences({"surface": "balanced"})
+            with app.store.lock:
+                app.store.get("work-a")["messages"][0]["content"] = "after"
+                app.store.data["chat"]["messages"].append({
+                    "id": "message-b", "role": "user", "content": "later",
+                })
+                app.store.save()
+        finally:
+            app.shutdown()
+        with SQLiteStateStore(self.database) as inspected:
+            saved = inspected.import_json(self.source).document
+            self.assertEqual(inspected.source_backup()[0], original_bytes)
+        self.assertEqual(saved["preferences"]["future_preference"], 42)
+        self.assertEqual(saved["preferences"]["appearance"]["future_appearance"], {"keep": True})
+        self.assertEqual(saved["chat"]["future_chat"], {"keep": [1, 2]})
+        self.assertEqual(saved["chat"]["messages"][0]["future_message"], {"keep": True})
+        self.assertEqual(saved["chat"]["messages"][1]["content"], "later")
+        self.assertEqual(saved["chats"][0]["messages"][0]["future_message"], {"keep": [3]})
+        self.assertEqual(saved["chats"][0]["messages"][0]["content"], "after")
+        self.assertEqual(saved["chats"][0]["draft"], "later")
+        self.assertEqual(saved["preferences"]["appearance"]["surface"], "balanced")
+        restarted = PilferedParrotApp(config, self.root, sqlite_state_path=self.database)
+        try:
+            restarted.store.set_draft("work-a", "after restart")
+        finally:
+            restarted.shutdown()
+        with SQLiteStateStore(self.database) as inspected:
+            again = inspected.import_json(self.source).document
+        self.assertEqual(again["preferences"]["future_preference"], 42)
+        self.assertEqual(again["chat"]["messages"][0]["future_message"], {"keep": True})
+        self.assertEqual(again["chats"][0]["messages"][0]["future_message"], {"keep": [3]})
+        self.assertEqual(self.source.read_bytes(), original_bytes)
+
+    def test_chat_reset_moves_opaque_fields_into_archive(self):
+        source_tree = json.loads(RAW)
+        source_tree["chat"]["messages"] = [{
+            "id": "message-a", "role": "user", "content": "hello",
+            "future_message": "keep",
+        }]
+        source_tree["chat"]["future_chat"] = {"keep": True}
+        self.source.write_text(json.dumps(source_tree), encoding="utf-8")
+        store = self.open_store()
+        store.reset_chat()
+        with SQLiteStateStore(self.database) as inspected:
+            saved = inspected.import_json(self.source).document
+        self.assertEqual(saved["chat_history"][0]["future_chat"], {"keep": True})
+        self.assertEqual(saved["chat_history"][0]["messages"][0]["future_message"], "keep")
+        self.assertNotIn("future_chat", saved["chat"])
+
+    def test_deleting_session_does_not_delete_other_opaque_fields(self):
+        store = self.open_store()
+        store.delete("work-a")
+        with SQLiteStateStore(self.database) as inspected:
+            saved = inspected.import_json(self.source).document
+        self.assertEqual(saved["chats"], [])
+        self.assertEqual(saved["preferences"]["future_preference"], 42)
+        self.assertEqual(saved["unknown_top"], {"keep": True})
+
+    def test_unkeyed_message_reorder_fails_without_committing(self):
+        source_tree = json.loads(RAW)
+        source_tree["chat"]["messages"] = [
+            {"role": "user", "content": "one", "future": 1},
+            {"role": "user", "content": "two", "future": 2},
+        ]
+        self.source.write_text(json.dumps(source_tree), encoding="utf-8")
+        store = self.open_store()
+        store.data["chat"]["messages"].reverse()
+        with self.assertRaises(StateStoreError):
+            store.save()
+        with SQLiteStateStore(self.database) as inspected:
+            self.assertEqual(inspected.import_json(self.source).document, source_tree)
+
+    def test_load_repairs_invalid_ids_without_losing_opaque_fields(self):
+        source_tree = json.loads(RAW)
+        source_tree["chats"][0]["id"] = "invalid id"
+        source_tree["chat"]["id"] = "invalid chat id"
+        source_tree["chat"]["future_chat"] = "keep"
+        self.source.write_text(json.dumps(source_tree), encoding="utf-8")
+        store = self.open_store()
+        store.save()
+        with SQLiteStateStore(self.database) as inspected:
+            saved = inspected.import_json(self.source).document
+        self.assertNotEqual(saved["chats"][0]["id"], "invalid id")
+        self.assertEqual(saved["chats"][0]["future_field"], {"nested": [1, 2]})
+        self.assertNotEqual(saved["chat"]["id"], "invalid chat id")
+        self.assertEqual(saved["chat"]["future_chat"], "keep")
 
     def test_stale_writer_fails_closed_without_overwriting_first_writer(self):
         first = self.open_store()

@@ -46,6 +46,157 @@ PROJECT_RECENT_LIMIT = 24
 PROJECT_PIN_LIMIT = 24
 PROJECT_LIST_LIMIT = 60
 
+# These are fields the compatibility loader deliberately retires. An absent
+# field elsewhere is not evidence that an older or newer writer meant to erase
+# it from SQLite's opaque document.
+_RETIRED_ROOT_FIELDS = frozenset({"coordinator", "coordinator_history"})
+_RETIRED_WORK_FIELDS = frozenset({
+    "qwen_messages", "context_used_tokens", "acp_mode", "last_used_order",
+})
+_RETIRED_CHAT_FIELDS = frozenset({"context_used_tokens"})
+_RETIRED_CHAT_MESSAGE_FIELDS = frozenset({"active_chat_id", "control_action"})
+_KNOWN_PREFERENCES = frozenset({
+    "work_models", "work_context_window_percent", "chat_model",
+    "chat_context_window_percent", "notification_permission", "appearance",
+    WORK_CLEANUP_LAST_RUN, PROJECT_WORKROOMS,
+})
+_PUBLIC_SESSION_FIELDS = frozenset({
+    "id", "window_id", "title", "cwd", "created_at", "updated_at",
+    "requested_provider", "requested_model", "provider", "model",
+    "reasoning_effort", "acp_mode", "messages", "draft", "archived",
+    "archived_at", "last_used_order", "attachments", "harness_parent",
+    "harness_child", "harness_reference", "harness_tasks", "harness_outcome",
+    "harness_route", "harness_contract", "context_chars", "context_warning",
+    "pending", "session_engine", "provider_job_id", "job_id", "job",
+    "active_job", "run_id",
+})
+_PUBLIC_MESSAGE_FIELDS = frozenset({
+    "id", "role", "content", "created_at", "pending", "run_id",
+    "requested_provider", "requested_model", "provider", "model",
+    "reasoning_effort", "engine", "acp_mode", "acp_stop_reason",
+    "acp_updates", "acp_updates_truncated", "streamed_text",
+    "streamed_text_truncated", "activity", "error", "interrupted",
+    "cancel_requested", "cancelled", "exit_code", "harness_contract",
+    "harness_route", "harness_reference", "response_identity",
+    "whiteboard_discovered",
+})
+
+
+def _sqlite_public_projection(result: dict[str, Any]) -> dict[str, Any]:
+    """Keep opaque future fields out of SQLite-backed browser responses."""
+    projected = {key: value for key, value in result.items()
+                 if key in _PUBLIC_SESSION_FIELDS}
+    messages = projected.get("messages")
+    if isinstance(messages, list):
+        projected["messages"] = [
+            {key: value for key, value in item.items()
+             if key in _PUBLIC_MESSAGE_FIELDS} if isinstance(item, dict) else item
+            for item in messages
+        ]
+    return projected
+
+
+def _retired_on_load(path: tuple[str, ...], key: str) -> bool:
+    if not path:
+        return key in _RETIRED_ROOT_FIELDS
+    if path == ("preferences",):
+        return key in _KNOWN_PREFERENCES
+    if len(path) == 2 and path[0] == "chats":
+        return key in _RETIRED_WORK_FIELDS
+    if path == ("chat",) or len(path) == 2 and path[0] == "chat_history":
+        return key in _RETIRED_CHAT_FIELDS
+    if len(path) == 3 and path[:2] == ("chat", "messages") \
+            or len(path) == 4 and path[0] == "chat_history" \
+            and path[2] == "messages":
+        return key in _RETIRED_CHAT_MESSAGE_FIELDS
+    return False
+
+
+def _id_map(items: list[Any]) -> dict[str, dict[str, Any]] | None:
+    if not all(isinstance(item, dict) and isinstance(item.get("id"), str)
+               and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", item["id"])
+               for item in items):
+        return None
+    result = {item["id"]: item for item in items}
+    return result if len(result) == len(items) else None
+
+
+def _same_json_value(left: Any, right: Any) -> bool:
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            _same_json_value(value, right[key]) for key, value in left.items()
+        )
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            _same_json_value(old, new) for old, new in zip(left, right)
+        )
+    return left == right
+
+
+def _merge_runtime_delta(
+    before: Any, after: Any, authority: Any, path: tuple[str, ...] = (),
+    *, load_transform: bool = False,
+) -> Any:
+    """Apply a runtime change without replacing unchanged opaque subtrees.
+
+    The first pass represents a known compatibility transformation. Later
+    passes represent app edits. Ambiguous object-list edits fail closed.
+    """
+    if _same_json_value(before, after):
+        return deepcopy(authority)
+    if isinstance(before, dict) and isinstance(after, dict) and isinstance(authority, dict):
+        if not load_transform and path == ("chat",) \
+                and before.get("id") != after.get("id"):
+            # reset_chat creates a new thread. The old thread may be moved to
+            # chat_history, but its opaque fields do not belong to the new one.
+            return deepcopy(after)
+        result = deepcopy(authority)
+        for key in before.keys() - after.keys():
+            if not load_transform or _retired_on_load(path, key):
+                result.pop(key, None)
+        for key, value in after.items():
+            if key in before:
+                result[key] = _merge_runtime_delta(
+                    before[key], value, authority.get(key), path + (key,),
+                    load_transform=load_transform,
+                )
+            else:
+                result[key] = deepcopy(value)
+        return result
+    if isinstance(before, list) and isinstance(after, list) and isinstance(authority, list):
+        if not before:
+            if authority:
+                raise StateStoreError("ambiguous SQLite object-list mutation")
+            return deepcopy(after)
+        keyed_before, keyed_after, keyed_authority = (
+            _id_map(items) for items in (before, after, authority)
+        )
+        if keyed_before is not None and keyed_after is not None \
+                and keyed_authority is not None \
+                and set(keyed_before) <= set(keyed_authority):
+            return [
+                _merge_runtime_delta(
+                    keyed_before[item["id"]], item, keyed_authority[item["id"]],
+                    path + (item["id"],), load_transform=load_transform,
+                ) if item["id"] in keyed_before else deepcopy(item)
+                for item in after
+            ]
+        if any(isinstance(item, dict) for item in (*before, *after, *authority)):
+            if load_transform and len(before) == len(after) == len(authority):
+                return [
+                    _merge_runtime_delta(old, new, raw, path + (str(index),),
+                                         load_transform=True)
+                    for index, (old, new, raw) in enumerate(zip(before, after, authority))
+                ]
+            if len(after) >= len(before) and len(authority) == len(before) \
+                    and _same_json_value(after[:len(before)], before):
+                return deepcopy(authority) + deepcopy(after[len(before):])
+            raise StateStoreError("ambiguous SQLite object-list mutation")
+        return deepcopy(after)
+    return deepcopy(after)
+
 
 def _atomic_json_write(
     path: Path, payload: Any, *, indent: int | None = 2,
@@ -246,13 +397,15 @@ class PersistentChatStore:
         self._sqlite_state: SQLiteStateStore | None = None
         self._sqlite_revision: int | None = None
         self._sqlite_committed_data: dict[str, Any] | None = None
+        self._sqlite_authority: dict[str, Any] | None = None
+        self._sqlite_initial_document: dict[str, Any] | None = None
+        self._sqlite_load_pending = False
         self._sqlite_failed = False
         try:
             self._load(sqlite_state_path=sqlite_state_path)
             if self._sqlite_state is not None:
-                # Runtime normalization can differ from the raw imported tree.
-                # Preserve both: SQLite retains the raw source at revision 0,
-                # while this copy can restore a failed in-memory mutation.
+                # The runtime view may omit fields the application does not
+                # understand. Keep the imported full tree for SQLite saves.
                 self._sqlite_committed_data = deepcopy(self.data)
         except Exception:
             self.close()
@@ -270,7 +423,10 @@ class PersistentChatStore:
             self._sqlite_state = SQLiteStateStore(sqlite_state_path)
             snapshot = self._sqlite_state.import_json(source)
             self._sqlite_revision = snapshot.revision
-            self.data = snapshot.document
+            self._sqlite_authority = snapshot.document
+            self._sqlite_initial_document = deepcopy(snapshot.document)
+            self._sqlite_load_pending = True
+            self.data = deepcopy(snapshot.document)
         elif source.exists():
             try:
                 payload = json.loads(source.read_text(encoding="utf-8"))
@@ -694,6 +850,35 @@ class PersistentChatStore:
                     raise StateStoreError("SQLite chat store requires a fresh load")
                 try:
                     snapshot = deepcopy(self.data)
+                    authority = self._sqlite_authority
+                    if not isinstance(authority, dict):
+                        raise StateStoreError("SQLite authority is unavailable")
+                    if self._sqlite_load_pending:
+                        authority = _merge_runtime_delta(
+                            self._sqlite_initial_document, self._sqlite_committed_data,
+                            authority, load_transform=True,
+                        )
+                    merged = _merge_runtime_delta(
+                        self._sqlite_committed_data, snapshot, authority,
+                    )
+                    old_chat = self._sqlite_committed_data.get("chat")
+                    new_chat = snapshot.get("chat")
+                    if isinstance(old_chat, dict) and isinstance(new_chat, dict) \
+                            and old_chat.get("id") != new_chat.get("id"):
+                        archived = [item for item in snapshot.get("chat_history", [])
+                                    if item.get("id") == old_chat.get("id")]
+                        if len(archived) == 1:
+                            raw_chat = authority.get("chat")
+                            if not isinstance(raw_chat, dict):
+                                raise StateStoreError("SQLite Chat archive has no source thread")
+                            merged_archive = _merge_runtime_delta(
+                                old_chat, archived[0], raw_chat, ("chat_history", str(old_chat["id"])),
+                            )
+                            positions = [index for index, item in enumerate(merged["chat_history"])
+                                         if item.get("id") == old_chat.get("id")]
+                            if len(positions) != 1:
+                                raise StateStoreError("ambiguous SQLite Chat archive")
+                            merged["chat_history"][positions[0]] = merged_archive
                     event_kwargs = {} if completed_event is None else {
                         "event_kind": "completed",
                         "event_payload": {"message_id": completed_event[2]},
@@ -702,7 +887,7 @@ class PersistentChatStore:
                         "event_id": f"completed_{completed_event[2]}",
                     }
                     saved = self._sqlite_state.save_document(
-                        snapshot, expected_revision=self._sqlite_revision, **event_kwargs,
+                        merged, expected_revision=self._sqlite_revision, **event_kwargs,
                     )
                 except Exception:
                     # Callers often mutate self.data before save(). A failed
@@ -711,6 +896,9 @@ class PersistentChatStore:
                     self._sqlite_failed = True
                     raise
                 self._sqlite_committed_data = snapshot
+                self._sqlite_authority = merged
+                self._sqlite_initial_document = None
+                self._sqlite_load_pending = False
                 self._sqlite_revision = saved.revision
                 return
             _atomic_json_write(
@@ -814,6 +1002,8 @@ class PersistentChatStore:
                 "output_reservation_tokens",
             }
         })
+        if self._sqlite_state is not None:
+            result = _sqlite_public_projection(result)
         result["project_cwd"] = _canonical_project_cwd(chat.get("cwd"))
         result.update(self.context_public(chat))
         return result
@@ -866,6 +1056,8 @@ class PersistentChatStore:
                 "output_reservation_tokens",
             }
         })
+        if self._sqlite_state is not None:
+            result = _sqlite_public_projection(result)
         usage = self._context_usage(
             int(chat_thread.get("context_chars", 0)), self.chat_warning_chars,
             limit_tokens=chat_thread.get("context_limit_tokens"),
