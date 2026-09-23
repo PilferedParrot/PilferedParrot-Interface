@@ -8,6 +8,7 @@ const state = {
   windowId: "main", windowProvider: "codex", providerModels: {}, authPending: {},
   authConfirmation: {}, authCodes: {}, providers: [], provider_templates: [],
   providerDraft: null, preferences: {}, modelPolls: {}, modelFeedback: {},
+  acpSetup: null, acpSetupMessage: "", gpuInventory: null, gpuMessage: "",
   initialized: false,
 };
 const CAPABILITY_SESSION_KEY = "pilferedparrot-dashboard-capability";
@@ -821,7 +822,10 @@ function renderProviderConnections() {
   const list = $("#providerConnectionList");
   if (!list) return;
   const draft = state.providerDraft ? providerDraftMarkup() : "";
-  list.innerHTML = draft + providerIds().map((provider) => {
+  const visibleProviders = state.windowId === "main" ? providerIds()
+    : providerIds().filter((provider) => provider === state.windowProvider);
+  const setupProviders = state.windowId === "main" ? ["codex", "claude"] : visibleProviders;
+  list.innerHTML = acpSetupMarkup(setupProviders) + gpuMarkup() + draft + visibleProviders.map((provider) => {
     const info = providerInfo(provider);
     const budget = state.budgets[provider];
     const missingCli = budget?.status === "cli_missing";
@@ -872,6 +876,51 @@ function renderProviderConnections() {
       </div>
     </section>`;
   }).join("");
+}
+
+function acpSetupMarkup(providers) {
+  const supported = providers.filter((provider) => provider === "codex" || provider === "claude");
+  if (!supported.length) return "";
+  const rows = supported.map((provider) => {
+    const item = state.acpSetup?.providers?.[provider];
+    const engine = item?.engine === "acp" ? "acp" : "legacy";
+    const status = item ? (item.error || (item.installed ? "ACP adapter installed." : "ACP adapter is not installed.")) : "Setup status not checked.";
+    return `<section class="setup-provider-row"><strong>${escapeHtml(providerLabel(provider))}</strong>
+      <label><span>Transport</span><select data-acp-engine="${provider}" aria-label="${providerLabel(provider)} transport" ${item ? "" : "disabled"}>
+        <option value="legacy" ${engine === "legacy" ? "selected" : ""}>Legacy</option>
+        <option value="acp" ${engine === "acp" ? "selected" : ""} ${item?.installed ? "" : "disabled"}>ACP</option>
+      </select></label><p role="status">${escapeHtml(status)}</p>
+      <p>Changing transport starts a new provider session on the next turn, including in an existing Work session.</p></section>`;
+  }).join("");
+  return `<section class="setup-panel" aria-labelledby="acpSetupHeading"><h3 id="acpSetupHeading">Provider transport</h3>
+    <p>Check setup to choose Legacy or ACP. Installing adds both the Codex and Claude ACP adapters, including from a provider window.</p>
+    <button type="button" class="secondary" data-acp-check>Check setup</button>
+    <button type="button" class="secondary" data-acp-install ${state.windowId === "main" && supported.every((provider) => state.acpSetup?.providers?.[provider]?.installed) ? "disabled" : ""}>Install ACP adapters</button>
+    <div class="setup-provider-list">${rows}</div><p role="status" data-acp-feedback>${escapeHtml(state.acpSetupMessage)}</p></section>`;
+}
+
+function gpuMarkup() {
+  const rows = (state.gpuInventory?.gpus || []).map((gpu) => `<li><strong>${escapeHtml(gpu.name || "GPU")}</strong>
+    <span>UUID: ${escapeHtml(gpu.uuid || "Unavailable")}</span>
+    <span>${Number(gpu.memory_free_mib || 0).toLocaleString()} MiB free · ${Number(gpu.memory_used_mib || 0).toLocaleString()} / ${Number(gpu.memory_total_mib || 0).toLocaleString()} MiB used · ${Number(gpu.utilization_percent || 0)}% utilized</span></li>`).join("");
+  const status = state.gpuMessage || (state.gpuInventory?.error || (state.gpuInventory ? (state.gpuInventory.available ? "GPU inventory checked." : "No GPU inventory available.") : "GPU inventory has not been checked."));
+  return `<section class="setup-panel" aria-labelledby="gpuHeading"><h3 id="gpuHeading">GPU inventory</h3>
+    <button type="button" class="secondary" data-gpu-check>Check GPUs</button><p role="status" data-gpu-feedback>${escapeHtml(status)}</p>
+    ${rows ? `<ul class="gpu-list">${rows}</ul>` : ""}</section>`;
+}
+
+async function loadAcpSetup() {
+  state.acpSetupMessage = "Checking provider setup…"; renderProviderConnections();
+  try { state.acpSetup = await api("/api/acp/setup"); state.acpSetupMessage = "Provider setup checked."; }
+  catch (error) { state.acpSetupMessage = error.message; }
+  renderProviderConnections();
+}
+
+async function checkGpuInventory() {
+  state.gpuMessage = "Checking GPUs…"; renderProviderConnections();
+  try { state.gpuInventory = await api("/api/hardware/gpus"); state.gpuMessage = state.gpuInventory.error || "GPU inventory checked."; }
+  catch (error) { state.gpuMessage = error.message; }
+  renderProviderConnections();
 }
 
 function providerTemplateInfo(id) {
@@ -2546,6 +2595,48 @@ $("#newWorkSession").addEventListener("click", () => {
 $("#providerWindows").addEventListener("click", () => {
   renderProviderConnections();
   $("#providerDialog").showModal();
+  loadAcpSetup();
+});
+$("#providerConnectionList").addEventListener("click", async (event) => {
+  const target = event.target.closest("[data-acp-check], [data-acp-install], [data-gpu-check]");
+  if (!target) return;
+  target.disabled = true;
+  try {
+    if (target.matches("[data-acp-check]")) await loadAcpSetup();
+    else if (target.matches("[data-gpu-check]")) await checkGpuInventory();
+    else {
+      state.acpSetupMessage = "Installing ACP adapter…"; renderProviderConnections();
+      try {
+        state.acpSetup = await api("/api/acp/install", { method: "POST", body: "{}" });
+        const statuses = Object.values(state.acpSetup?.providers || {});
+        const unavailable = statuses.filter((item) => !item.installed);
+        if (unavailable.length) {
+          const reasons = [...new Set(unavailable.map((item) => item.error).filter(Boolean))];
+          state.acpSetupMessage = reasons.length
+            ? `Installation failed: ${reasons.join("; ")}`
+            : "Installation failed: one or more ACP adapters remain unavailable.";
+        } else {
+          state.acpSetupMessage = "ACP adapters are installed and ready.";
+        }
+      } catch (error) { state.acpSetupMessage = error.message; }
+      renderProviderConnections();
+    }
+  } finally {
+    const button = target.isConnected ? target : null;
+    if (button) button.disabled = false;
+  }
+});
+$("#providerConnectionList").addEventListener("change", async (event) => {
+  const select = event.target.closest("[data-acp-engine]");
+  if (!select) return;
+  select.disabled = true;
+  try {
+    state.acpSetup = await api(`/api/acp/providers/${encodeURIComponent(select.dataset.acpEngine)}/engine`, {
+      method: "POST", body: JSON.stringify({ engine: select.value }),
+    });
+    state.acpSetupMessage = "Transport saved. The next turn starts a new provider session.";
+  } catch (error) { state.acpSetupMessage = error.message; }
+  renderProviderConnections();
 });
 $("#refreshProviderDashboard").addEventListener("click", async () => {
   const button = $("#refreshProviderDashboard");

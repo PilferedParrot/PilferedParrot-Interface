@@ -28,7 +28,9 @@ Windows provider accounts and CLIs are not live-certified by this package.
 - Work history loads compact summaries before the selected transcript. Live progress uses
   an authenticated event stream with polling fallback; a reconnect can reload a snapshot.
 - An opt-in ACP Work preview for Codex and Claude streams text, tool details and diffs, and
-  surfaces permission choices in the Work window. The legacy engine remains the default.
+  surfaces permission choices in the Work window. The Provider dashboard can install its
+  adapters on demand, choose transport per provider, and show an on-demand GPU snapshot.
+  The legacy engine remains the default.
 - New Codex Chat sessions default to GPT-6 Luna with low reasoning when no Chat selection is
   saved; an explicit saved model and reasoning selection takes precedence.
 - Optional product feedback remains off by default. Users can review and download local reports

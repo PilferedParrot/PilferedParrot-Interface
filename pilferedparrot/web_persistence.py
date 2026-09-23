@@ -155,6 +155,7 @@ def empty_dashboard_models(provider_ids: Iterable[str]) -> dict[str, Any]:
         "providers": {provider: {} for provider in provider_ids},
         "provider_cards": {},
         "hidden_providers": [],
+        "provider_engines": {},
     }
 
 
@@ -188,6 +189,13 @@ def load_dashboard_models(path: Path, provider_ids: Iterable[str]) -> dict[str, 
     hidden = payload.get("hidden_providers")
     if isinstance(hidden, list):
         normalized["hidden_providers"] = [value for value in hidden if isinstance(value, str)]
+    engines = payload.get("provider_engines")
+    if isinstance(engines, dict):
+        normalized["provider_engines"] = {
+            provider: engine for provider, engine in engines.items()
+            if provider in {"codex", "claude"} and isinstance(engine, str)
+            and engine in {"legacy", "acp"}
+        }
     return normalized
 
 

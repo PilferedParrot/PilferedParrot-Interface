@@ -35,6 +35,10 @@ ASSET_NAMES = (
 API_GENERATION = 23
 
 
+class EngineSwitchConflict(RuntimeError):
+    """A provider run must finish before its engine can change."""
+
+
 class ServerApp(Protocol):
     config: dict[str, Any]
     default_provider: str
@@ -59,6 +63,10 @@ class ServerApp(Protocol):
     def budgets(self) -> dict[str, Any]: ...
     def poll_provider_models(self, provider: str) -> Any: ...
     def provider_update(self, provider: str) -> Any: ...
+    def acp_setup(self, *, provider: str | None = None) -> Any: ...
+    def install_acp_adapters(self, *, provider: str | None = None) -> Any: ...
+    def set_acp_engine(self, provider: str, engine: str, *, visible_provider: str | None = None) -> Any: ...
+    def gpu_snapshot(self) -> Any: ...
     def native_window_action(self, window_id: str, payload: dict[str, Any]) -> Any: ...
     def browser_theme(self) -> Any: ...
     def chrome_theme_background(self, *, theme_version: str | None = None) -> tuple[bytes, str] | None: ...
@@ -589,6 +597,21 @@ def make_handler(
                     "asset_version": asset_version,
                     "runtime_version": runtime_version,
                 })
+            elif path == "/api/acp/setup":
+                context = self._request_capability_context()
+                if context is None or context.get("scope") != "dashboard":
+                    self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
+                else:
+                    provider = context.get("provider") if context.get("window_id") != "main" else None
+                    if provider is not None and provider not in {"codex", "claude"}:
+                        self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
+                    else:
+                        self._json(app.acp_setup(provider=provider))
+            elif path == "/api/hardware/gpus":
+                if self._request_capability_scope() != "dashboard":
+                    self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
+                else:
+                    self._json(app.gpu_snapshot())
             elif path == "/api/state":
                 context = self._request_capability_context()
                 if context is None:
@@ -778,6 +801,24 @@ def make_handler(
                 feedback_consent = snapshot() if not feedback_control else {}
                 if feedback_control:
                     self._json(app.feedback_action(parts[-1], payload))
+                elif path == "/api/acp/install":
+                    provider = window_provider if lifecycle_window_id != "main" else None
+                    if provider is not None and provider not in {"codex", "claude"}:
+                        self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
+                    else:
+                        self._json(app.install_acp_adapters(provider=provider))
+                elif len(parts) == 5 and parts[:3] == ["api", "acp", "providers"] \
+                        and parts[4] == "engine":
+                    provider = parts[3]
+                    if provider not in {"codex", "claude"}:
+                        raise ValueError("unsupported ACP provider")
+                    if lifecycle_window_id != "main" and window_provider != provider:
+                        self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
+                    else:
+                        self._json(app.set_acp_engine(
+                            provider, payload.get("engine"),
+                            visible_provider=window_provider if lifecycle_window_id != "main" else None,
+                        ))
                 elif path == "/api/chats":
                     self._json(app.create_chat(
                         payload, window_id=window_id, window_provider=window_provider,
@@ -922,6 +963,8 @@ def make_handler(
                 self._json({"error": "work session not found"}, HTTPStatus.NOT_FOUND)
             except (ValueError, json.JSONDecodeError) as exc:
                 self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except EngineSwitchConflict as exc:
+                self._json({"error": str(exc)}, HTTPStatus.CONFLICT)
             except Exception as exc:
                 if locals().get("authorized") and not locals().get("feedback_control"):
                     record("problems", "request_failed", context["scope"], locals().get("feedback_consent", {}))

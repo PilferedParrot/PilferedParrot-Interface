@@ -810,6 +810,19 @@ dialog::backdrop { background: rgba(0, 0, 0, .62); }
 .dialog-card .terminal-note { margin: 12px 0 0; }
 .dialog-card .dialog-notice { padding: 10px 12px; border-left: 3px solid var(--border); border-radius: 8px; background: var(--panel-2); color: var(--text); }
 .provider-connection-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(245px, 1fr)); gap: 10px; }
+.setup-panel { min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel-2); font-size: 16px; line-height: 1.4; overflow-wrap: anywhere; }
+.setup-panel h3 { margin: 0 0 8px; font-size: 18px; }
+.setup-panel > p { margin: 8px 0; color: var(--muted); font-size: 16px; }
+.setup-provider-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 10px; }
+.setup-provider-row { display: grid; min-width: 0; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 9px; }
+.setup-provider-row label { display: grid; gap: 5px; }
+.setup-provider-row select { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-3); color: var(--text); font: inherit; }
+.setup-provider-row p { margin: 0; color: var(--muted); font-size: 16px; overflow-wrap: anywhere; }
+.setup-provider-row button, .setup-panel button { min-height: 42px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-3); color: var(--text); cursor: pointer; font: inherit; }
+.setup-panel button:disabled, .setup-provider-row button:disabled, .setup-provider-row select:disabled { cursor: default; opacity: .65; }
+.gpu-list { display: grid; gap: 8px; margin: 10px 0 0; padding: 0; list-style: none; }
+.gpu-list li { display: grid; gap: 4px; min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: 8px; overflow-wrap: anywhere; }
+.gpu-list span { color: var(--muted); font-size: 16px; }
 .provider-connection-card { display: flex; min-width: 0; flex-direction: column; padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel-2); }
 .provider-connection-head { display: grid; gap: 5px; min-width: 0; }
 .provider-connection-head > span { display: grid; min-width: 0; grid-template-columns: 7px minmax(0, 1fr); align-items: baseline; gap: 8px; }

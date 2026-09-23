@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from . import __version__
-from .web_server import BrowserHTTPServer as ThreadingHTTPServer
+from .web_server import BrowserHTTPServer as ThreadingHTTPServer, EngineSwitchConflict
 from .adapters import ProviderCapabilities, adapter_for
 from .budgets import collect_budgets
 from .config import (
@@ -670,6 +670,12 @@ class PilferedParrotApp(HarnessWorkflow):
         self.model_catalog_lock = self._model_catalog_store.lock
         self.dashboard_models = self._model_catalog_store.data
         self._apply_dashboard_models()
+        for acp_provider in ("codex", "claude"):
+            configured = self.config.get(acp_provider, {}).get("engine")
+            selected = self.dashboard_models["provider_engines"].get(acp_provider)
+            self.config[acp_provider]["engine"] = selected or (
+                "acp" if configured == "acp" else "legacy"
+            )
         active_providers = self._provider_ids()
         self.default_provider = str(config["web"].get("default_provider", "codex"))
         if self.default_provider not in active_providers:
@@ -1086,6 +1092,80 @@ class PilferedParrotApp(HarnessWorkflow):
 
     def _save_dashboard_models(self) -> None:
         self._model_catalog_store.save(self.dashboard_models)
+
+    def acp_setup(self, *, provider: str | None = None,
+                  install_error: str | None = None) -> dict[str, Any]:
+        """Read adapter availability only for providers visible to this window."""
+        providers = (provider,) if provider else ("codex", "claude")
+        result: dict[str, Any] = {}
+        for name in providers:
+            if name not in {"codex", "claude"}:
+                raise ValueError("unsupported ACP provider")
+            error = install_error
+            try:
+                installed = self.acp_adapters.locate(name) is not None
+            except Exception as exc:
+                installed = False
+                # Adapter errors can include local paths or command output.
+                error = "ACP adapter installation is invalid or its runtime is unavailable"
+                if "Node.js 22" in str(exc):
+                    error = "Node.js 22 or newer is required for ACP adapters"
+            if not installed and error is None:
+                error = "ACP adapter is not installed"
+            result[name] = {
+                "engine": self.config[name]["engine"],
+                "installed": installed,
+                "error": error,
+            }
+        return {"providers": result}
+
+    def install_acp_adapters(self, *, provider: str | None = None) -> dict[str, Any]:
+        """Install pinned adapters only for an explicit setup request."""
+        error = None
+        try:
+            self.acp_adapters.install()
+        except Exception as exc:
+            error = "ACP adapter installation failed"
+            if "Node.js 22" in str(exc):
+                error = "Node.js 22 or newer is required for ACP adapters"
+            elif "npm is required" in str(exc):
+                error = "npm is required to install ACP adapters"
+        return self.acp_setup(provider=provider, install_error=error)
+
+    def set_acp_engine(self, provider: str, engine: str,
+                       *, visible_provider: str | None = None) -> dict[str, Any]:
+        if provider not in {"codex", "claude"}:
+            raise ValueError("unsupported ACP provider")
+        if visible_provider is not None and visible_provider != provider:
+            raise PermissionError("window authorization failed")
+        if not isinstance(engine, str) or engine not in {"legacy", "acp"}:
+            raise ValueError("engine must be legacy or acp")
+        with self.runs_lock:
+            with self.store.lock:
+                for chat_id in self.runs:
+                    chat = self.store.get(chat_id)
+                    if chat.get("requested_provider") == provider or chat.get("provider") == provider:
+                        raise EngineSwitchConflict("wait for the active provider run before changing engines")
+                with self.model_catalog_lock:
+                    previous = self.config[provider]["engine"]
+                    prior_saved = self.dashboard_models["provider_engines"].get(provider)
+                    self.config[provider]["engine"] = engine
+                    self.dashboard_models["provider_engines"][provider] = engine
+                    try:
+                        self._save_dashboard_models()
+                    except Exception:
+                        self.config[provider]["engine"] = previous
+                        if prior_saved is None:
+                            self.dashboard_models["provider_engines"].pop(provider, None)
+                        else:
+                            self.dashboard_models["provider_engines"][provider] = prior_saved
+                        raise
+        return self.acp_setup(provider=visible_provider)
+
+    @staticmethod
+    def gpu_snapshot() -> dict[str, Any]:
+        from .gpu_inventory import snapshot_gpus
+        return snapshot_gpus()
 
     @staticmethod
     def _model_text(value: Any, field: str, *, required: bool = True) -> str:
