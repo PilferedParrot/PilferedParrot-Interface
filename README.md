@@ -88,7 +88,8 @@ The source branch includes changes beyond the published 0.7.1 assets:
 - Project workrooms remember recent and pinned folders, group the visible session list by
   selected project, and restore that selection when the app reopens. Use **Project** in the
   sidebar to switch folders; use **＋** to start a session in another folder. Existing
-  sessions keep their original folder. See [project workrooms](docs/project-workrooms.md).
+  sessions keep their original folder. Search filters the loaded session summaries in the
+  selected project. See [project workrooms](docs/project-workrooms.md).
 - The Work window loads compact session summaries first, then the selected transcript.
   During a run it receives progress over a capability-protected stream, with snapshot
   polling as a recovery path. See [live work events](docs/live-work-events.md).
@@ -96,7 +97,8 @@ The source branch includes changes beyond the published 0.7.1 assets:
   tool details and diffs, and shows explicit permission choices. Legacy Work remains
   the default while the new path is validated. The Provider dashboard can install the pinned
   adapters on demand, choose transport per provider, and show a requested GPU snapshot.
-  The Work model picker reads live ACP model and effort choices without sending a prompt.
+  The Work picker reads live ACP model, effort and mode choices without sending a prompt.
+  Streamed text updates the pending answer without rebuilding earlier messages.
 - New Codex Chat sessions default to GPT-6 Luna with low reasoning when no Chat selection is
   saved. An explicit saved model and reasoning selection takes precedence.
 - When work remains unfinished, providers receive continuation guidance to leave a copyable

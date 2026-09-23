@@ -10,6 +10,10 @@ Opening the app again resumes the most recently used session in its selected pro
 original folder; selecting another project does not move its files or transcript. Drafts
 remain with their sessions when you switch projects.
 
+**Search sessions in this project** filters the visible session summaries by title, provider,
+and project name or path. Press Escape or Clear to show all sessions again. Search text stays
+in the browser and is not saved; message contents and other projects are outside this filter.
+
 Provider windows keep their own session history and project choices. The main dashboard can
 show project session counts across provider windows, but it does not expose another window's
 messages or session IDs. To work in the selected project with another provider, open

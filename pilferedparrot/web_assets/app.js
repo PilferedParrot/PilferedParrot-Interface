@@ -820,9 +820,10 @@ function renderChats() {
     scope.title = selected;
   }
   if (status) {
-    status.textContent = sessionSearch.trim()
+    const summary = sessionSearch.trim()
       ? `${chats.length} of ${allChats.length} ${allChats.length === 1 ? "session" : "sessions"} in this project match.`
       : `${allChats.length} ${allChats.length === 1 ? "session" : "sessions"} in this project.`;
+    if (status.textContent !== summary) status.textContent = summary;
   }
   list.innerHTML = chats.length ? chats.map((chat) => `
     <button class="chat-item ${chat.id === state.activeId ? "active" : ""}" data-chat="${escapeHtml(chat.id)}">
@@ -868,6 +869,7 @@ $("#sessionSearch").addEventListener("input", (event) => {
 $("#sessionSearch").addEventListener("keydown", (event) => {
   if (event.key === "Escape" && sessionSearch) {
     event.preventDefault();
+    event.stopPropagation();
     sessionSearch = "";
     event.currentTarget.value = "";
     renderChats();

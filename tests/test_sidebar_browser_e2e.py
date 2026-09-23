@@ -183,7 +183,6 @@ class SidebarBrowserEndToEndTests(unittest.TestCase):
         )
         expect(page.get_by_role("textbox", name="Message")).to_be_enabled(timeout=5_000)
         search = page.get_by_role("searchbox", name="Search sessions in this project")
-        expect(search).to_be_visible()
         expect(page.locator("#sessionSearchScope")).to_have_text("Scope: session-indexed-project")
         expect(page.locator("#sessionSearchScope")).to_have_attribute("title", str(indexed_project))
         expect(page.locator("#chatList .chat-item")).to_have_count(2)
@@ -198,6 +197,9 @@ class SidebarBrowserEndToEndTests(unittest.TestCase):
         project_before = page.locator("#projectSelect").input_value()
         prompt = page.get_by_role("textbox", name="Message")
         prompt.fill("draft stays while filtering")
+        page.get_by_role("button", name="Open sidebar").click()
+        expect(page.locator("#sidebar")).to_have_class(re.compile(r"\bopen\b"))
+        expect(search).to_be_visible()
         search.fill("codex")
         expect(page.locator("#chatList .chat-item")).to_have_count(2)
         expect(page.locator("#sessionSearchStatus")).to_have_text("2 of 2 sessions in this project match.")
@@ -237,6 +239,9 @@ class SidebarBrowserEndToEndTests(unittest.TestCase):
         expect(search).to_have_value("")
         expect(search).to_be_focused()
         expect(page.locator("#chatList .chat-item")).to_have_count(2)
+        search.press("Escape")
+        expect(page.locator("#sidebar")).not_to_have_class(re.compile(r"\bopen\b"))
+        expect(page.get_by_role("button", name="Open sidebar")).to_be_focused()
 
 
     def test_workspace_and_connection_controls_stay_in_their_groups_across_themes(self):
