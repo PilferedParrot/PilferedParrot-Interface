@@ -92,6 +92,11 @@ class ACPWorkBackendTests(unittest.TestCase):
                 window_provider="codex",
             )
         self.assertEqual(chat["acp_mode"], "plan")
+        with self.app.store.lock:
+            self.assertEqual(self.app.store.get(chat["id"])["acp_mode"], "plan")
+        snapshot = json.loads(Path(self.config["web"]["chat_store"]).read_text())
+        saved = next(item for item in snapshot["chats"] if item["id"] == chat["id"])
+        self.assertEqual(saved["acp_mode"], "plan")
         with self.assertRaisesRegex(ValueError, "only available"):
             legacy_config = deepcopy(self.config)
             legacy_config["codex"]["engine"] = "legacy"
@@ -138,6 +143,28 @@ class ACPWorkBackendTests(unittest.TestCase):
         finally:
             release.set()
         self.wait_done()
+
+    def test_unadvertised_send_mode_does_not_become_persistent_preference(self):
+        calls = []
+
+        def fake_turn(_argv, **kwargs):
+            calls.append(kwargs["mode"])
+            if kwargs["mode"] == "removed-mode":
+                raise ValueError("requested ACP mode is not advertised by the session")
+            return _result("done", "session", "end_turn")
+
+        with patch("pilferedparrot.web.run_acp_turn", side_effect=fake_turn):
+            self.app.send_message(
+                self.chat["id"], {"content": "invalid mode", "mode": "removed-mode"},
+                window_id="main",
+            )
+            self.wait_done()
+            with self.app.store.lock:
+                self.assertNotIn("acp_mode", self.app.store.get(self.chat["id"]))
+            self.app.send_message(self.chat["id"], {"content": "retry without mode"},
+                                  window_id="main")
+            self.wait_done()
+        self.assertEqual(calls, ["removed-mode", None])
 
     def test_exact_model_resume_and_recursive_secret_redaction(self):
         calls = []

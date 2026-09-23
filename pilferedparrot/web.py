@@ -1612,12 +1612,9 @@ class PilferedParrotApp(HarnessWorkflow):
             chat = self.store.create(
                 cwd, provider, requested_model, context_limit, context_max, percent,
                 overhead, reservation, window_id, reasoning_effort,
-                remember_project=True,
+                remember_project=True, acp_mode=requested_acp_mode,
             )
-            if requested_acp_mode is not None:
-                chat["acp_mode"] = requested_acp_mode
-                self.store.save()
-            return self.store.public(chat)
+            return chat
 
     def _validated_project(self, payload: dict[str, Any], provider: str) -> Path:
         raw_cwd = payload.get("cwd")
@@ -2088,8 +2085,6 @@ class PilferedParrotApp(HarnessWorkflow):
                 chat["requested_provider"] = provider
                 chat["requested_model"] = requested_model
                 chat["reasoning_effort"] = reasoning_effort
-                if acp_enabled and payload.get("mode"):
-                    chat["acp_mode"] = acp_mode
                 if not same_session:
                     chat.pop("live_context_usage", None)
                     chat.pop("last_turn_usage", None)

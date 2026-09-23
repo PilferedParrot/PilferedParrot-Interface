@@ -975,6 +975,7 @@ class PersistentChatStore:
         context_window_percent: int = 100, context_overhead_tokens: int = 0,
         output_reservation_tokens: int = 0, window_id: str = "main",
         reasoning_effort: str | None = None, remember_project: bool = False,
+        acp_mode: str | None = None,
     ) -> dict[str, Any]:
         now = int(time.time())
         chat = {
@@ -996,6 +997,8 @@ class PersistentChatStore:
             "context_overhead_tokens": max(0, int(context_overhead_tokens)),
             "output_reservation_tokens": max(0, int(output_reservation_tokens)),
         }
+        if acp_mode is not None:
+            chat["acp_mode"] = acp_mode
         if context_limit_tokens is not None and context_limit_tokens > 0:
             chat["context_limit_tokens"] = context_limit_tokens
         if context_max_tokens is not None and context_max_tokens > 0:

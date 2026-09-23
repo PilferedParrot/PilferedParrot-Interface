@@ -554,6 +554,8 @@ async function pollProviderModels(provider, select = null, requestedModel = "") 
       } else if (provider === state.windowProvider) {
         renderModelSelect(provider, state.workModelSelections[provider]
           || activeChat()?.requested_model || selected);
+        renderACPModeSelect(provider, activeChat()?.acp_mode ?? draftACPMode,
+          !state.initialized || activeRunning() || selectionSavePending);
       }
       providerModelFeedback(provider, selectedMissing
         ? `Saved model “${choiceToValidate}” is not advertised by this ACP agent.`
@@ -712,13 +714,17 @@ function renderACPModeSelect(provider, mode, disabled) {
   const select = $("#acpModeSelect");
   const modes = state.provider_engines?.[provider] === "acp"
     ? state.model_catalog?.[provider]?.acp_options?.modes : null;
+  const savedMode = typeof mode === "string" && mode.length <= 128 ? mode : "";
   const choices = Array.isArray(modes) ? modes.filter((item) =>
     item && typeof item.value === "string" && item.value.length <= 128) : [];
-  control.hidden = choices.length === 0;
+  const savedUnavailable = savedMode && !choices.some((item) => item.value === savedMode);
+  control.hidden = choices.length === 0 && !savedUnavailable;
   select.innerHTML = '<option value="">Agent default</option>' + choices.map((item) =>
-    `<option value="${escapeHtml(item.value)}" title="${escapeHtml(item.description || "")}">${escapeHtml(item.label || item.value)}</option>`).join("");
-  select.value = choices.some((item) => item.value === mode) ? mode : "";
-  select.disabled = disabled || choices.length === 0;
+    `<option value="${escapeHtml(item.value)}" title="${escapeHtml(item.description || "")}">${escapeHtml(item.label || item.value)}</option>`).join("")
+    + (savedUnavailable ? `<option value="${escapeHtml(savedMode)}" disabled>${escapeHtml(savedMode)} · unavailable</option>` : "");
+  select.value = savedMode && (savedUnavailable || choices.some((item) => item.value === savedMode))
+    ? savedMode : "";
+  select.disabled = disabled || (choices.length === 0 && !savedUnavailable);
   select.title = "Applies to each turn in this Work session. Agent default leaves the agent or configured mode unchanged.";
 }
 function renderContextSummary(usage, status) {

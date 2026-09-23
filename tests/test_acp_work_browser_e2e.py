@@ -11,6 +11,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 from unittest.mock import patch
 
+from pilferedparrot.web import PilferedParrotApp
+
 try:
     from playwright.sync_api import expect, sync_playwright
 except ModuleNotFoundError:
@@ -40,6 +42,24 @@ class ACPBrowserFixture(PilferedParrotBrowserFixture):
         self._agent_mode.start()
         super().__init__()
         self.app.acp_adapters.locate = lambda provider: [sys.executable, str(FAKE_AGENT)]
+        self.mode_choices = [
+            {"value": "default", "label": "Agent default", "description": ""},
+            {"value": "plan", "label": "Plan", "description": "Plan before acting"},
+        ]
+        self.app.poll_provider_models = self._poll_acp_models
+
+    def _poll_acp_models(self, provider, *args, **kwargs):
+        del args, kwargs
+        catalog = PilferedParrotApp.poll_provider_models(self.app, provider)
+        catalog["source"] = "acp"
+        catalog["acp_options"] = {
+            "models": [{"value": "fake-small", "label": "Fake Small"}],
+            "efforts": [],
+            "modes": self.mode_choices,
+            "current_model": "fake-small", "current_effort": "",
+            "current_mode": "default",
+        }
+        return catalog
 
     def stop(self):
         try:
@@ -125,6 +145,32 @@ class ACPWorkBrowserEndToEndTests(unittest.TestCase):
         reloaded_mode = self.page.get_by_role("combobox", name="ACP mode")
         expect(reloaded_mode).to_be_visible()
         expect(reloaded_mode).to_have_value("plan")
+
+    def test_unavailable_saved_mode_stays_visible_and_can_be_cleared(self):
+        self.fixture.mode_choices = []
+        chat = self.fixture.app.create_chat(
+            {"cwd": str(self.fixture.project), "model": "fake-small"},
+            window_id="main", window_provider="codex",
+        )
+        with self.fixture.app.store.lock:
+            stored = self.fixture.app.store.get(chat["id"])
+            stored["acp_mode"] = "removed-mode"
+            self.fixture.app.store.save()
+        self.page.evaluate(
+            "id => sessionStorage.setItem('pilferedparrot-dashboard-active-chat', id)",
+            chat["id"],
+        )
+        self.page.reload(wait_until="domcontentloaded")
+        expect(self.page.get_by_role("textbox", name="Message")).to_be_enabled(timeout=5_000)
+        self.page.locator("#modelSelect").dispatch_event("pointerdown")
+        mode = self.page.get_by_role("combobox", name="ACP mode")
+        expect(mode).to_be_visible()
+        expect(mode.locator('option[value="removed-mode"]')).to_contain_text("unavailable")
+        expect(mode).to_have_value("removed-mode")
+        mode.select_option("")
+        expect(self.page.locator("#acpModeControl")).to_be_hidden()
+        with self.fixture.app.store.lock:
+            self.assertNotIn("acp_mode", self.fixture.app.store.get(chat["id"]))
 
     def test_streamed_acp_answer_diff_preview_and_scoped_permission_choices(self):
         card = self._send_and_wait_for_permission("browser-e2e-deny")
