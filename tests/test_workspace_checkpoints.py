@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import errno
 import os
 import stat
 import tempfile
@@ -177,6 +178,62 @@ class WorkspaceCheckpointTests(unittest.TestCase):
         self.storage.chmod(0o755)
         with self.assertRaises(ValueError):
             self.capture()
+
+    def test_nested_quota_stop_does_not_call_unvisited_root_sibling_deleted(self):
+        child = self.workspace / "a"
+        child.mkdir()
+        (child / "one").write_text("1")
+        (child / "two").write_text("2")
+        (self.workspace / "z").write_text("still here")
+        first = self.capture()
+        limited = self.capture(checkpoints.Limits(max_files=1))
+        report = checkpoints.observed_changes(first, limited)
+        self.assertFalse(limited["coverage_complete_under_policy"])
+        self.assertTrue(any(c["path"] == "." and "scan stopped" in c["reason"]
+                            for c in limited["coverage"]))
+        self.assertNotIn("z", {c["path"] for c in report["changes"]})
+        self.assertIn("z", report["unverified_paths"])
+
+    def test_storage_parent_swap_cannot_redirect_bytes_into_workspace(self):
+        (self.workspace / "payload").write_bytes(b"private bytes")
+        redirect = self.workspace / "redirect"
+        redirect.mkdir(mode=0o700)
+        moved = self.base / "private-moved"
+        actual_mkdir = os.mkdir
+        swapped = False
+
+        def swap_then_mkdir(path, mode=0o777, *, dir_fd=None):
+            nonlocal swapped
+            if str(path).startswith("checkpoint-") and not swapped:
+                swapped = True
+                self.storage.rename(moved)
+                self.storage.symlink_to(redirect, target_is_directory=True)
+            return actual_mkdir(path, mode, dir_fd=dir_fd)
+
+        with patch.object(checkpoints, "_require_posix"), patch.object(
+                checkpoints.os, "mkdir", side_effect=swap_then_mkdir):
+            with self.assertRaises(RuntimeError):
+                self.capture()
+        self.assertTrue(swapped)
+        self.assertEqual(list(redirect.iterdir()), [])
+        self.assertEqual(list(moved.iterdir()), [])
+
+    def test_manifest_enospc_removes_only_this_capture(self):
+        (self.workspace / "payload").write_bytes(b"private bytes")
+        existing = self.storage / "keep"
+        existing.mkdir()
+        (existing / "sentinel").write_text("preserve")
+
+        def fail_manifest(_manifest, output, **_kwargs):
+            output.write("partial")
+            raise OSError(errno.ENOSPC, "no space left")
+
+        with patch.object(checkpoints.json, "dump", side_effect=fail_manifest):
+            with self.assertRaises(OSError) as caught:
+                self.capture()
+        self.assertEqual(caught.exception.errno, errno.ENOSPC)
+        self.assertEqual([p.name for p in self.storage.iterdir()], ["keep"])
+        self.assertEqual((existing / "sentinel").read_text(), "preserve")
 
 
 if __name__ == "__main__":

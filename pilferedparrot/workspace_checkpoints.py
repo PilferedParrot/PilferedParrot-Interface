@@ -13,7 +13,6 @@ import hashlib
 import json
 import os
 import stat
-import tempfile
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,7 +50,7 @@ class Limits:
 def _require_posix() -> None:
     if os.name != "posix" or not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
         raise UnsupportedPlatform("checkpoints require POSIX fd-relative no-follow operations")
-    required = {os.open, os.stat, os.mkdir, os.unlink}
+    required = {os.open, os.stat, os.mkdir, os.unlink, os.rmdir}
     if not required.issubset(os.supports_dir_fd):
         raise UnsupportedPlatform("fd-relative filesystem operations are unavailable")
 
@@ -63,6 +62,128 @@ def _identity(info: os.stat_result) -> tuple[int, ...]:
 
 def _record(path: str, reason: str, disposition: str = "incomplete") -> dict[str, str]:
     return {"path": path, "disposition": disposition, "reason": reason}
+
+
+class _CheckpointStorage:
+    """Own one private capture directory through directory descriptors."""
+
+    def __init__(self, path: Path, initial: os.stat_result, workspace_real: str):
+        self.path = path
+        self.initial = initial
+        self.workspace_real = workspace_real
+        self.name = f"checkpoint-{uuid.uuid4().hex}"
+        self.folder_path = path / self.name
+        self.store_fd: int | None = None
+        self.folder_fd: int | None = None
+        self.blobs_fd: int | None = None
+        self.created = False
+        self.folder_info: os.stat_result | None = None
+        self.blobs_info: os.stat_result | None = None
+
+    def __enter__(self) -> _CheckpointStorage:
+        try:
+            self.store_fd = os.open(self.path, _DIR_FLAGS)
+            if _identity(os.fstat(self.store_fd)) != _identity(self.initial):
+                raise RuntimeError("checkpoint storage changed before open")
+            os.mkdir(self.name, 0o700, dir_fd=self.store_fd)
+            self.created = True
+            self.folder_fd = os.open(self.name, _DIR_FLAGS, dir_fd=self.store_fd)
+            self.folder_info = os.fstat(self.folder_fd)
+            os.mkdir("blobs", 0o700, dir_fd=self.folder_fd)
+            self.blobs_fd = os.open("blobs", _DIR_FLAGS, dir_fd=self.folder_fd)
+            self.blobs_info = os.fstat(self.blobs_fd)
+            self._verify_path()
+            return self
+        except BaseException:
+            try:
+                if self.created:
+                    self._cleanup()
+            finally:
+                self._close()
+            raise
+
+    def __exit__(self, exc_type, _exc, _tb) -> None:
+        changed = False
+        if exc_type is None:
+            try:
+                self._verify_path()
+            except (OSError, RuntimeError):
+                changed = True
+        try:
+            if exc_type is not None or changed:
+                self._cleanup()
+        finally:
+            self._close()
+        if changed:
+            raise RuntimeError("checkpoint storage changed during capture; capture removed")
+
+    def _verify_path(self) -> None:
+        assert self.store_fd is not None
+        linked = os.stat(self.path, follow_symlinks=False)
+        opened = os.fstat(self.store_fd)
+        identity = lambda s: (s.st_dev, s.st_ino, s.st_uid, s.st_mode)
+        if identity(linked) != identity(opened) or identity(opened) != identity(self.initial):
+            raise RuntimeError("checkpoint storage path changed")
+        if os.path.commonpath((self.workspace_real, os.path.realpath(self.path))) == self.workspace_real:
+            raise RuntimeError("checkpoint storage moved into workspace")
+
+    def _cleanup(self) -> None:
+        assert self.store_fd is not None
+        if self.folder_fd is None:
+            # No content has been written; without an opened descriptor there is
+            # no verified directory to remove by name.
+            return
+        if self.blobs_fd is not None:
+            with os.scandir(self.blobs_fd) as listing:
+                for item in listing:
+                    os.unlink(item.name, dir_fd=self.blobs_fd)
+            os.close(self.blobs_fd)
+            self.blobs_fd = None
+            if self._entry_is("blobs", self.folder_fd, self.blobs_info):
+                os.rmdir("blobs", dir_fd=self.folder_fd)
+        try:
+            os.unlink("manifest.json", dir_fd=self.folder_fd)
+        except FileNotFoundError:
+            pass
+        if self._entry_is(self.name, self.store_fd, self.folder_info):
+            os.rmdir(self.name, dir_fd=self.store_fd)
+
+    @staticmethod
+    def _entry_is(name: str, parent_fd: int, expected: os.stat_result | None) -> bool:
+        if expected is None:
+            return False
+        try:
+            linked = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        return (linked.st_dev, linked.st_ino) == (expected.st_dev, expected.st_ino)
+
+    def _close(self) -> None:
+        for name in ("blobs_fd", "folder_fd", "store_fd"):
+            fd = getattr(self, name)
+            if fd is not None:
+                os.close(fd)
+                setattr(self, name, None)
+
+    def open_blob(self, name: str):
+        assert self.blobs_fd is not None
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=self.blobs_fd)
+        return os.fdopen(fd, "wb")
+
+    def unlink_blob(self, name: str) -> None:
+        assert self.blobs_fd is not None
+        try:
+            os.unlink(name, dir_fd=self.blobs_fd)
+        except FileNotFoundError:
+            pass
+
+    def write_manifest(self, manifest: dict[str, Any]) -> None:
+        assert self.folder_fd is not None
+        fd = os.open("manifest.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=self.folder_fd)
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            json.dump(manifest, output, ensure_ascii=True, sort_keys=True, indent=2)
 
 
 def capture(workspace: os.PathLike[str] | str, storage_parent: os.PathLike[str] | str,
@@ -86,22 +207,24 @@ def capture(workspace: os.PathLike[str] | str, storage_parent: os.PathLike[str] 
     real_root, real_store = os.path.realpath(root), os.path.realpath(store)
     if os.path.commonpath((real_root, real_store)) == real_root:
         raise ValueError("checkpoint storage must be outside the workspace")
+    with _CheckpointStorage(store, store_info, real_root) as private:
+        return _capture_contents(root, root_info, store, limits, private)
 
+
+def _capture_contents(root: Path, root_info: os.stat_result, store: Path,
+                      limits: Limits, private: _CheckpointStorage) -> dict[str, Any]:
     entries: dict[str, dict[str, Any]] = {}
     coverage: list[dict[str, str]] = [
         _record(str(store), "checkpoint storage outside workspace", "excluded")]
     counts = {"files": 0, "entries": 0, "bytes": 0}
-    checkpoint_id = uuid.uuid4().hex
-    folder = Path(tempfile.mkdtemp(prefix=f"checkpoint-{checkpoint_id}-", dir=store))
-    os.chmod(folder, 0o700)
-    (folder / "blobs").mkdir(mode=0o700)
+    checkpoint_id = private.name.removeprefix("checkpoint-")
 
     def discard_subtree(rel: str) -> None:
         for path in list(entries):
             if not rel or path == rel or path.startswith(rel + "/"):
                 entry = entries.pop(path)
                 if entry["type"] == "file":
-                    (folder / entry["blob"]).unlink(missing_ok=True)
+                    private.unlink_blob(entry["blob"].removeprefix("blobs/"))
                     counts["files"] -= 1
                     counts["bytes"] -= entry["size"]
 
@@ -182,7 +305,6 @@ def capture(workspace: os.PathLike[str] | str, storage_parent: os.PathLike[str] 
                 coverage.append(_record(rel or ".", "total byte limit reached"))
                 return True
             blob_name = uuid.uuid4().hex
-            blob = folder / "blobs" / blob_name
             source_fd = None
             try:
                 source_fd = os.open(name, _FILE_FLAGS, dir_fd=directory_fd)
@@ -191,8 +313,7 @@ def capture(workspace: os.PathLike[str] | str, storage_parent: os.PathLike[str] 
                     raise OSError("file changed before open")
                 digest = hashlib.sha256()
                 size = 0
-                with open(blob, "xb") as output:
-                    os.chmod(blob, 0o600)
+                with private.open_blob(blob_name) as output:
                     while True:
                         chunk = os.read(source_fd, min(_CHUNK, limits.max_file_bytes + 1 - size))
                         if not chunk:
@@ -212,7 +333,7 @@ def capture(workspace: os.PathLike[str] | str, storage_parent: os.PathLike[str] 
                 counts["files"] += 1
                 counts["bytes"] += size
             except OSError as exc:
-                blob.unlink(missing_ok=True)
+                private.unlink_blob(blob_name)
                 coverage.append(_record(path, f"file not captured: {exc.strerror or str(exc)}"))
             finally:
                 if source_fd is not None:
@@ -228,7 +349,8 @@ def capture(workspace: os.PathLike[str] | str, storage_parent: os.PathLike[str] 
             if _identity(root_info) != _identity(os.fstat(root_fd)):
                 coverage.append(_record(".", "workspace changed before open"))
             else:
-                scan(root_fd, "")
+                if scan(root_fd, ""):
+                    coverage.append(_record(".", "scan stopped before all workspace paths were visited"))
             try:
                 if _identity(root_info) != _identity(os.fstat(root_fd)) or _identity(root_info) != _identity(os.stat(root, follow_symlinks=False)):
                     coverage.append(_record(".", "workspace changed during scan"))
@@ -240,14 +362,12 @@ def capture(workspace: os.PathLike[str] | str, storage_parent: os.PathLike[str] 
             os.close(root_fd)
     manifest: dict[str, Any] = {
         "schema": 1, "label": "filesystem observation", "checkpoint_id": checkpoint_id,
-        "workspace": str(root), "storage": str(folder), "entries": entries,
+        "workspace": str(root), "storage": str(private.folder_path), "entries": entries,
         "coverage": coverage,
         "coverage_complete_under_policy": not any(c["disposition"] == "incomplete" for c in coverage),
         "counts": counts,
     }
-    with open(folder / "manifest.json", "x", encoding="utf-8") as output:
-        json.dump(manifest, output, ensure_ascii=True, sort_keys=True, indent=2)
-    os.chmod(folder / "manifest.json", 0o600)
+    private.write_manifest(manifest)
     return manifest
 
 
