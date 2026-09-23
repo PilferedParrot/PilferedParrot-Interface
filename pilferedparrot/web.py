@@ -619,12 +619,14 @@ class ChatStore(PersistentChatStore):
         self, path: Path, *, chat_warning_chars: int = 80_000,
         technical_warning_chars: int = 120_000, legacy_path: Path | None = None,
         chat_model: str = "gpt-6-luna",
+        sqlite_state_path: Path | None = None,
     ):
         super().__init__(
             path, chat_warning_chars=chat_warning_chars,
             technical_warning_chars=technical_warning_chars,
             legacy_path=legacy_path, chat_model=chat_model,
             context_usage=_context_usage, chat_model_options=CHAT_MODEL_OPTIONS,
+            sqlite_state_path=sqlite_state_path,
         )
 
 
@@ -3293,6 +3295,7 @@ class PilferedParrotApp(HarnessWorkflow):
         self.native.shutdown(deadline=deadline)
         self.feedback.close()
         self.events.close()
+        self.store.close()
 
 
 def make_handler(app: PilferedParrotApp) -> type[Any]:

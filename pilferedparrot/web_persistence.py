@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .config import expanded_path
+from .sqlite_state import SQLiteStateStore, StateStoreError
 
 
 DEFAULT_CHAT_MODEL_OPTIONS = (
@@ -230,6 +231,7 @@ class PersistentChatStore:
         chat_model: str = "gpt-6-luna",
         context_usage: Callable[..., dict[str, Any]],
         chat_model_options: tuple[str, ...] = DEFAULT_CHAT_MODEL_OPTIONS,
+        sqlite_state_path: Path | None = None,
     ):
         self.path = path
         self.legacy_path = legacy_path
@@ -241,13 +243,35 @@ class PersistentChatStore:
             else self.chat_model_options[0]
         self._context_usage = context_usage
         self.data: dict[str, Any] = {"version": 8, "chats": [], "preferences": {}}
-        self._load()
+        self._sqlite_state: SQLiteStateStore | None = None
+        self._sqlite_revision: int | None = None
+        self._sqlite_committed_data: dict[str, Any] | None = None
+        self._sqlite_failed = False
+        try:
+            self._load(sqlite_state_path=sqlite_state_path)
+            if self._sqlite_state is not None:
+                # Runtime normalization can differ from the raw imported tree.
+                # Preserve both: SQLite retains the raw source at revision 0,
+                # while this copy can restore a failed in-memory mutation.
+                self._sqlite_committed_data = deepcopy(self.data)
+        except Exception:
+            self.close()
+            raise
 
-    def _load(self) -> None:
+    def _load(self, *, sqlite_state_path: Path | None = None) -> None:
         source = self.path
         if not source.exists() and self.legacy_path is not None and self.legacy_path.exists():
             source = self.legacy_path
-        if source.exists():
+        if sqlite_state_path is not None:
+            # This opt-in path is intentionally separate from app configuration.
+            # The source is a fixed rollback file; SQLite is the only writer.
+            if not source.exists():
+                raise StateStoreError("SQLite cutover requires an existing JSON source")
+            self._sqlite_state = SQLiteStateStore(sqlite_state_path)
+            snapshot = self._sqlite_state.import_json(source)
+            self._sqlite_revision = snapshot.revision
+            self.data = snapshot.document
+        elif source.exists():
             try:
                 payload = json.loads(source.read_text(encoding="utf-8"))
             except (OSError, UnicodeError, json.JSONDecodeError) as error:
@@ -657,10 +681,32 @@ class PersistentChatStore:
 
     def save(self) -> None:
         with self.lock:
+            if self._sqlite_state is not None:
+                if self._sqlite_failed or self._sqlite_revision is None:
+                    raise StateStoreError("SQLite chat store requires a fresh load")
+                try:
+                    snapshot = deepcopy(self.data)
+                    saved = self._sqlite_state.save_document(
+                        snapshot, expected_revision=self._sqlite_revision,
+                    )
+                except Exception:
+                    # Callers often mutate self.data before save(). A failed
+                    # commit must not leave uncommitted values in the root tree.
+                    self.data = deepcopy(self._sqlite_committed_data)
+                    self._sqlite_failed = True
+                    raise
+                self._sqlite_committed_data = snapshot
+                self._sqlite_revision = saved.revision
+                return
             _atomic_json_write(
                 self.path, self.data, ensure_ascii=False, indent=2,
                 trailing_newline=True, fsync=True,
             )
+
+    def close(self) -> None:
+        with self.lock:
+            if self._sqlite_state is not None:
+                self._sqlite_state.close()
 
     def list_public(
         self, window_id: str | None = None, provider: str | None = None,
