@@ -669,6 +669,46 @@ class PersistentChatStore:
                 key=lambda item: item.get("updated_at", 0), reverse=True,
             )]
 
+    def list_summary_public(
+        self, window_id: str | None = None, provider: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return ordered dashboard rows without copying transcript content."""
+        with self.lock:
+            visible = sorted(
+                (
+                    item for item in self.data["chats"]
+                    if window_id is None or item.get("window_id", "main") == window_id
+                    if provider is None or (
+                        item.get("requested_provider") or item.get("provider")
+                    ) == provider
+                ),
+                key=lambda item: item.get("updated_at", 0), reverse=True,
+            )
+            return [self.summary_public(chat) for chat in visible]
+
+    @staticmethod
+    def summary_public(chat: dict[str, Any]) -> dict[str, Any]:
+        """Build the lightweight direct-work-session summary used by compact state."""
+        messages = chat.get("messages", [])
+        return {
+            "id": chat.get("id"),
+            "title": chat.get("title"),
+            "cwd": chat.get("cwd"),
+            "project_cwd": _canonical_project_cwd(chat.get("cwd")),
+            "requested_provider": chat.get("requested_provider"),
+            "requested_model": chat.get("requested_model"),
+            "provider": chat.get("requested_provider") or chat.get("provider"),
+            "model": chat.get("requested_model") or chat.get("model"),
+            "window_id": chat.get("window_id", "main"),
+            "updated_at": chat.get("updated_at"),
+            "last_used_order": chat.get("last_used_order"),
+            "pending": any(
+                isinstance(message, dict) and bool(message.get("pending"))
+                for message in messages
+            ),
+            "message_count": len(messages) if isinstance(messages, list) else 0,
+        }
+
     def public(self, chat: dict[str, Any]) -> dict[str, Any]:
         result = deepcopy({
             key: value for key, value in chat.items()

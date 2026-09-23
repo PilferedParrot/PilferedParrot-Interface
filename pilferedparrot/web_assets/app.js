@@ -161,6 +161,11 @@ function latestUsedChat(chats) {
     || (Number(b.updated_at) || 0) - (Number(a.updated_at) || 0)
   )[0];
 }
+async function hydrateChat(chatId) {
+  const full = await api(`/api/chats/${encodeURIComponent(chatId)}`);
+  state.chats = state.chats.map((chat) => chat.id === chatId ? full : chat);
+  return full;
+}
 function windowChats() {
   return state.chats.filter((chat) =>
     (chat.window_id || "main") === state.windowId
@@ -171,7 +176,10 @@ function visibleChats() {
   const selected = state.selected_project || state.draftCwd;
   return windowChats().filter((chat) => !selected || projectOfChat(chat) === selected);
 }
-function pendingMessage(chat = activeChat()) { return chat?.messages?.find((message) => message.pending); }
+function pendingMessage(chat = activeChat()) {
+  return chat?.messages?.find((message) => message.pending)
+    || (chat?.pending ? { pending: true } : undefined);
+}
 function activeRunning() { return Boolean(pendingMessage()); }
 function anyRunning() { return state.chats.some((chat) => pendingMessage(chat)); }
 function harnessRunning(chat = activeChat()) {
@@ -702,29 +710,33 @@ function renderChats() {
   list.innerHTML = chats.length ? chats.map((chat) => `
     <button class="chat-item ${chat.id === state.activeId ? "active" : ""}" data-chat="${escapeHtml(chat.id)}">
       <div class="chat-item-title">${escapeHtml(chat.title)}</div>
-      <div class="chat-item-meta"><span>${escapeHtml(providerLabel(chat.provider || chat.requested_provider))}</span><span>${chat.context_status !== "normal" ? '<i class="limit-dot" title="Near practical limit" aria-label="Near practical limit">!</i>' : ""}${relativeTime(chat.updated_at)}</span></div>
+      <div class="chat-item-meta"><span>${escapeHtml(providerLabel(chat.provider || chat.requested_provider))}</span><span>${chat.context_status && chat.context_status !== "normal" ? '<i class="limit-dot" title="Near practical limit" aria-label="Near practical limit">!</i>' : ""}${relativeTime(chat.updated_at)}</span></div>
     </button>`).join("") : '<p class="project-empty">No sessions in this project yet.</p>';
   list.querySelectorAll("[data-chat]").forEach((button) => button.addEventListener("click", async () => {
     saveActiveDraft();
     const chatId = button.dataset.chat;
-    state.activeId = chatId;
-    try { sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, state.activeId); } catch (_error) {}
-    state.draftCwd = projectOfChat(activeChat());
-    reportActiveSession();
-    $("#prompt").value = cachedDraft(activeChat());
-    resizePrompt();
-    render();
-    setSidebarOpen(false);
     try {
-      const updated = await api(`/api/chats/${chatId}/activate`, {
-        method: "POST", body: JSON.stringify({}),
-      });
-      state.chats = state.chats.map((chat) => chat.id === updated.id ? updated : chat)
-        .sort((a, b) => b.updated_at - a.updated_at);
-      renderChats();
-    } catch (_error) {
-      // The selected session remains usable if its best-effort recency update
-      // is interrupted by a shutdown or a transient local-server error.
+      const full = await hydrateChat(chatId);
+      state.activeId = chatId;
+      try { sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, chatId); } catch (_error) {}
+      state.draftCwd = projectOfChat(full);
+      reportActiveSession();
+      $("#prompt").value = cachedDraft(full);
+      resizePrompt();
+      render();
+      setSidebarOpen(false);
+      try {
+        const updated = await api(`/api/chats/${encodeURIComponent(chatId)}/activate`, {
+          method: "POST", body: JSON.stringify({}),
+        });
+        state.chats = state.chats.map((chat) => chat.id === updated.id ? updated : chat)
+          .sort((a, b) => b.updated_at - a.updated_at);
+        renderChats();
+      } catch (_error) {
+        // Recency is best effort; a failed update does not hide the session.
+      }
+    } catch (error) {
+      toast(error.message);
     }
   }));
 }
@@ -1510,9 +1522,10 @@ async function selectProject(path, { newSession = false } = {}) {
     const existing = newSession ? null : latestUsedChat(windowChats().filter((chat) =>
       projectOfChat(chat) === selection.selected_project));
     if (existing) {
+      const full = await hydrateChat(existing.id);
       state.activeId = existing.id;
       try { sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, existing.id); } catch (_error) {}
-      $("#prompt").value = cachedDraft(existing);
+      $("#prompt").value = cachedDraft(full);
       resizePrompt();
       reportActiveSession();
       api(`/api/chats/${encodeURIComponent(existing.id)}/activate`, {
@@ -1676,12 +1689,27 @@ function applyServerState(initial) {
 
 async function refreshState() {
   const sequence = ++stateRequestSequence;
+  const activeBefore = state.activeId;
+  const projectBefore = state.selected_project;
   const conversation = $("#conversation");
   const previousScrollTop = conversation.scrollTop;
   const followOutput = conversation.scrollHeight - conversation.scrollTop
     - conversation.clientHeight < 120;
-  const initial = await api("/api/state");
-  if (sequence < stateAppliedSequence || selectionSavePending) return;
+  const initial = await api("/api/state?compact=1");
+  if (sequence < stateAppliedSequence || selectionSavePending
+      || state.activeId !== activeBefore || state.selected_project !== projectBefore) return;
+  const selected = initial.selected_project || projectBefore;
+  const candidates = initial.chats.filter((chat) =>
+    (chat.window_id || "main") === (initial.window_id || state.windowId)
+    && (chat.requested_provider || chat.provider) === (initial.window_provider || state.windowProvider)
+    && (!selected || projectOfChat(chat) === selected));
+  const target = candidates.find((chat) => chat.id === activeBefore) || latestUsedChat(candidates);
+  if (target) {
+    const full = await api(`/api/chats/${encodeURIComponent(target.id)}`);
+    initial.chats = initial.chats.map((chat) => chat.id === full.id ? full : chat);
+  }
+  if (sequence < stateAppliedSequence || selectionSavePending
+      || state.activeId !== activeBefore || state.selected_project !== projectBefore) return;
   stateAppliedSequence = sequence;
   applyServerState(initial);
   render();
@@ -1797,7 +1825,7 @@ async function init() {
   globalThis.PilferedParrotFeedback?.connect(api);
   try {
     restorePaneWidths();
-    const initial = await api("/api/state");
+    const initial = await api("/api/state?compact=1");
     Object.assign(state, initial);
     globalThis.PilferedParrotAppearanceSync.connect(api, initial.preferences?.appearance, message => toast(message, "error"));
     if (fragmentCwd) state.defaultCwd = fragmentCwd;
@@ -1823,7 +1851,8 @@ async function init() {
     } else if (!state.activeId) {
       await createChat(fragmentModel);
     } else {
-      $("#prompt").value = cachedDraft(activeChat());
+      const full = await hydrateChat(state.activeId);
+      $("#prompt").value = cachedDraft(full);
       resizePrompt();
     }
     state.initialized = true;

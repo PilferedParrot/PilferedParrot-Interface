@@ -831,6 +831,97 @@ class WebStoreTests(unittest.TestCase):
         self.assertFalse(chat_state["chat"]["pending"])
         self.assertEqual(chat_state["chat_history"], [])
 
+    def test_compact_dashboard_state_keeps_order_and_excludes_session_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = PilferedParrotApp(_web_config(directory), Path(directory))
+            first = app.create_chat({"provider": "codex", "cwd": directory})
+            second = app.create_chat({"provider": "codex", "cwd": directory})
+            sentinel_values = (
+                "compact-message-sentinel",
+                "compact-draft-sentinel",
+                "compact-provider-message-sentinel",
+            )
+            with app.store.lock:
+                first_chat = app.store.get(first["id"])
+                first_chat["updated_at"] = 1
+                app.store.get(second["id"])["updated_at"] = 2
+                first_chat["messages"] = [
+                    {"role": "user", "content": sentinel_values[0]},
+                    {"role": "assistant", "content": "pending", "pending": True},
+                ]
+                first_chat["draft"] = sentinel_values[1]
+                first_chat["provider_messages"] = [{
+                    "role": "assistant", "content": sentinel_values[2],
+                }]
+
+            full_before = app.state(
+                "dashboard", window_id="main", window_provider="codex",
+            )
+            compact = app.state(
+                "dashboard", window_id="main", window_provider="codex", compact=True,
+            )
+            full_after = app.state(
+                "dashboard", window_id="main", window_provider="codex",
+            )
+            self.assertEqual(full_before, full_after)
+            self.assertIn(sentinel_values[0], json.dumps(full_before))
+            self.assertEqual(full_before.keys(), compact.keys())
+            self.assertEqual(
+                [chat["id"] for chat in compact["chats"]],
+                [chat["id"] for chat in full_before["chats"]],
+            )
+            self.assertEqual(
+                [chat["id"] for chat in compact["chats"]],
+                [second["id"], first["id"]],
+            )
+            allowed = {
+                "id", "title", "cwd", "project_cwd", "requested_provider",
+                "requested_model", "provider", "model", "window_id",
+                "updated_at", "last_used_order", "pending", "message_count",
+            }
+            first_summary = next(chat for chat in compact["chats"] if chat["id"] == first["id"])
+            self.assertEqual(set(first_summary), allowed)
+            self.assertTrue(first_summary["pending"])
+            self.assertEqual(first_summary["message_count"], 2)
+            self.assertEqual(first_summary["provider"], "codex")
+            self.assertNotIn("messages", first_summary)
+            self.assertNotIn("draft", first_summary)
+            self.assertNotIn("provider_messages", first_summary)
+            serialized = json.dumps(compact)
+            for sentinel in sentinel_values:
+                self.assertNotIn(sentinel, serialized)
+
+    def test_compact_state_route_is_opt_in_and_wrong_window_full_fetch_is_denied(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = PilferedParrotApp(_web_config(directory), Path(directory))
+            chat = app.create_chat({"provider": "codex", "cwd": directory})
+            handler_type = make_handler(app)
+
+            compact_handler = object.__new__(handler_type)
+            compact_handler.path = "/api/state?compact=1"
+            compact_handler._local_request_allowed = lambda: True
+            compact_handler._request_capability_context = lambda **_kwargs: {
+                "scope": "dashboard", "window_id": "main", "provider": "codex",
+            }
+            compact_handler._json = MagicMock()
+            compact_handler._do_GET()
+            compact_payload = compact_handler._json.call_args.args[0]
+            self.assertEqual([item["id"] for item in compact_payload["chats"]], [chat["id"]])
+            self.assertNotIn("messages", compact_payload["chats"][0])
+
+            full_handler = object.__new__(handler_type)
+            full_handler.path = f"/api/chats/{chat['id']}"
+            full_handler._local_request_allowed = lambda: True
+            full_handler._request_capability_context = lambda **_kwargs: {
+                "scope": "dashboard", "window_id": "another-window",
+                "history_id": "provider-codex", "provider": "codex",
+            }
+            full_handler._json = MagicMock()
+            full_handler.do_GET()
+            full_handler._json.assert_called_once_with(
+                {"error": "work session not found"}, HTTPStatus.NOT_FOUND,
+            )
+
     def test_dashboard_state_and_actions_are_isolated_by_window_and_provider(self):
         with tempfile.TemporaryDirectory() as directory:
             app = PilferedParrotApp(_web_config(directory), Path(directory))

@@ -1198,6 +1198,7 @@ class PilferedParrotApp(HarnessWorkflow):
     def state(
         self, scope: str = "dashboard", *, window_id: str = "main",
         window_provider: str | None = None,
+        compact: bool = False,
     ) -> dict[str, Any]:
         catalog = model_catalog(self.config)
         codex_models = {
@@ -1263,7 +1264,10 @@ class PilferedParrotApp(HarnessWorkflow):
             raise ValueError("unknown provider")
         return {
             **shared,
-            "chats": self.store.list_public(window_id, provider),
+            "chats": (
+                self.store.list_summary_public(window_id, provider)
+                if compact else self.store.list_public(window_id, provider)
+            ),
             **self.store.project_state(
                 window_id, provider, self.default_cwd, aggregate=window_id == "main",
             ),

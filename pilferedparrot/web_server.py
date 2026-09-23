@@ -41,7 +41,10 @@ class ServerApp(Protocol):
     dashboard_capability: str
 
     def capability_context(self, supplied: str) -> dict[str, str] | None: ...
-    def state(self, scope: str, *, window_id: str, window_provider: str | None) -> Any: ...
+    def state(
+        self, scope: str, *, window_id: str, window_provider: str | None,
+        compact: bool = False,
+    ) -> Any: ...
     def cleanup_stale_sessions(self, *, protected_window_ids: tuple[str, ...] = (), protected_chat_ids: tuple[str, ...] = ()) -> int: ...
     def chat_state(self, chat_id: str, *, window_id: str) -> Any: ...
     def current_chat_state(self) -> Any: ...
@@ -514,20 +517,30 @@ def make_handler(
                 if context is None:
                     self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
                 else:
-                    self._json(app.state(
-                        context["scope"],
-                        window_id=context.get("history_id") or context.get("window_id") or "main",
-                        window_provider=context.get("provider") or None,
-                    ))
+                    compact = parse_qs(
+                        urlparse(self.path).query, keep_blank_values=True,
+                    ).get("compact") == ["1"]
+                    state_kwargs = {
+                        "window_id": context.get("history_id") or context.get("window_id") or "main",
+                        "window_provider": context.get("provider") or None,
+                    }
+                    if compact:
+                        state_kwargs["compact"] = True
+                    self._json(app.state(context["scope"], **state_kwargs))
             elif re.fullmatch(r"/api/chats/[^/]+", path):
                 context = self._request_capability_context()
                 if context is None or context.get("scope") != "dashboard":
                     self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
                 else:
-                    self._json(app.chat_state(
-                        path.rsplit("/", 1)[1],
-                        window_id=context.get("history_id") or context.get("window_id") or "main",
-                    ))
+                    try:
+                        payload = app.chat_state(
+                            path.rsplit("/", 1)[1],
+                            window_id=context.get("history_id") or context.get("window_id") or "main",
+                        )
+                    except KeyError:
+                        self._json({"error": "work session not found"}, HTTPStatus.NOT_FOUND)
+                    else:
+                        self._json(payload)
             elif path == "/api/chat/current":
                 if self._request_capability_scope() != "chat":
                     self._json({"error": "Chat authorization failed"}, HTTPStatus.FORBIDDEN)
