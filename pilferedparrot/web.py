@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hmac
 import json
+import math
 import os
 import re
 import secrets
@@ -35,6 +36,10 @@ from .config import (
     validate_compatible_base_url,
 )
 from .dispatch import RunCancelled, RunResult, capture_dispatch, _stop_process
+from .dispatch import _provider_process_environment
+from .acp_adapters import AdapterManager
+from .acp_engine import ACPCancelled, run_acp_turn
+from .acp_permissions import PermissionBroker
 from .processes import provider_argv
 from .ledger import append_run
 from .feedback import FeedbackStore
@@ -76,6 +81,104 @@ CODE_BLOCK_LANGUAGES = frozenset({
 API_GENERATION = 21
 CHAT_MODEL_OPTIONS = DEFAULT_CHAT_MODEL_OPTIONS
 MESSAGE_MAX_CHARS = 40_000
+ACP_UPDATE_LIMIT = 100
+ACP_TEXT_LIMIT = 80_000
+ACP_FINAL_TEXT_LIMIT = 1_000_000
+ACP_STOP_REASONS = frozenset({
+    "end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled",
+})
+_ACP_EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}(?![\w.-])")
+_ACP_EMAIL_TAIL = re.compile(r"[\w.+@-]+$")
+
+
+def _acp_public_text(config: dict[str, Any], value: Any) -> str:
+    return _ACP_EMAIL.sub("[redacted-email]", redact_configured_secrets(config, value))
+
+
+def _acp_secret_values(config: dict[str, Any]) -> tuple[str, ...]:
+    sources = [item for item in config.values() if isinstance(item, dict)]
+    definitions = config.get("provider_definitions")
+    if isinstance(definitions, dict):
+        sources.extend(item for item in definitions.values() if isinstance(item, dict))
+    variables = {
+        item["api_key_env"].strip() for item in sources
+        if isinstance(item.get("api_key_env"), str) and item["api_key_env"].strip()
+    }
+    return tuple(sorted({value for name in variables if (value := os.environ.get(name))},
+                        key=len, reverse=True))
+
+
+def _acp_visible_stream(config: dict[str, Any], raw: str,
+                        secrets: tuple[str, ...]) -> str:
+    """Hold trailing secret/email candidates until another chunk resolves them."""
+    match = _ACP_EMAIL_TAIL.search(raw)
+    hold = len(match.group()) if match else 0
+    for secret in secrets:
+        for count in range(1, min(len(secret), len(raw) + 1)):
+            if raw.endswith(secret[:count]):
+                hold = max(hold, count)
+    return _acp_public_text(config, raw[:-hold] if hold else raw)
+
+
+def _acp_chunk_text(value: Any) -> str:
+    if isinstance(value, dict):
+        return value.get("text", "") if value.get("type") == "text" \
+            and isinstance(value.get("text"), str) else ""
+    if isinstance(value, list):
+        return "".join(_acp_chunk_text(item) for item in value)
+    return ""
+
+
+def _acp_public_value(config: dict[str, Any], value: Any) -> Any:
+    """Redact configured secrets throughout protocol data before any public use."""
+    if isinstance(value, str):
+        return _acp_public_text(config, value)
+    if isinstance(value, list):
+        return [_acp_public_value(config, item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _acp_public_value(config, item) for key, item in value.items()
+            if not (
+                str(key).lower().replace("_", "").startswith(
+                    ("account", "auth", "credential", "secret", "email")
+                ) or str(key).lower().replace("_", "") in {
+                    "apikey", "token", "accesstoken", "refreshtoken", "meta",
+                    "rawoutput",
+                    "availablecommands", "availablecommandsupdate",
+                }
+            )
+        }
+    return value
+
+
+def _acp_public_update(config: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    def has_auth_status(value: Any) -> bool:
+        if isinstance(value, dict):
+            if value.get("sessionUpdate") == "_auth/status_update" \
+                    or value.get("method") == "_auth/status_update":
+                return True
+            return any(has_auth_status(item) for item in value.values())
+        if isinstance(value, list):
+            return any(has_auth_status(item) for item in value)
+        return False
+
+    kind = update.get("sessionUpdate")
+    if not isinstance(kind, str) or kind.startswith("_auth/") \
+            or kind == "available_commands_update" or kind == "agent_thought_chunk" \
+            or kind.startswith("terminal_") or has_auth_status(update):
+        return {"sessionUpdate": "filtered_update"}
+    clean = _acp_public_value(config, update)
+    if kind in {"tool_call", "tool_call_update"}:
+        clean.pop("rawInput", None)
+        content = clean.get("content")
+        if isinstance(content, list):
+            clean["content"] = [item for item in content
+                                if isinstance(item, dict) and item.get("type") == "diff"]
+    if len(json.dumps(clean, ensure_ascii=False).encode("utf-8")) > 128 * 1024:
+        if kind == "agent_message_chunk":
+            raise ValueError("ACP assistant update exceeds the display limit")
+        return {"sessionUpdate": kind, "truncated": True}
+    return clean
 PROVIDER_LABELS = {item["id"]: item["label"] for item in PROVIDER_CATALOG}
 PROVIDER_TEMPLATES: tuple[dict[str, str], ...] = (
     {
@@ -579,6 +682,8 @@ class PilferedParrotApp(HarnessWorkflow):
             legacy_path=legacy_chat_store_path(config),
         )
         self.events = EventHub()
+        self.acp_adapters = AdapterManager(config)
+        self.acp_permissions = PermissionBroker(timeout_seconds=300.0)
         self.capabilities_lock = threading.RLock()
         self.capabilities: dict[str, dict[str, str]] = {}
         self.dashboard_capability = self.issue_capability(
@@ -1391,6 +1496,27 @@ class PilferedParrotApp(HarnessWorkflow):
         with self.store.lock:
             return self.store.public(self._owned_chat(chat_id, window_id))
 
+    def work_permissions(self, chat_id: str, *, window_id: str) -> dict[str, Any]:
+        with self.store.lock:
+            chat = self._owned_chat(chat_id, window_id)
+            pending = next((item for item in chat["messages"] if item.get("pending")), None)
+            message_id = pending["id"] if pending else None
+        return {"permissions": [
+            {"message_id": message_id, "request": _acp_public_value(self.config, request)}
+            for request in self.acp_permissions.pending_for_chat(chat_id)
+        ] if message_id else []}
+
+    def decide_work_permission(
+        self, chat_id: str, payload: dict[str, Any], *, window_id: str,
+    ) -> dict[str, bool]:
+        with self.store.lock:
+            self._owned_chat(chat_id, window_id)
+        request_id = payload.get("request_id")
+        option_id = payload.get("option_id")
+        if not isinstance(request_id, str) or not isinstance(option_id, str):
+            raise ValueError("request_id and option_id must be text")
+        return {"accepted": self.acp_permissions.decide(chat_id, request_id, option_id)}
+
     def work_event_batch(
         self, chat_id: str, after: int, *, epoch: str | None,
         window_id: str, timeout: float = 10,
@@ -1689,26 +1815,43 @@ class PilferedParrotApp(HarnessWorkflow):
                     else chat.get("requested_model")
                 requested_model = self._normalize_model(model_value)
                 selected_model = requested_model or effective_model(self.config, provider)
+                acp_enabled = provider in {"codex", "claude"} and \
+                    self.config.get(provider, {}).get("engine") == "acp"
+                acp_mode = payload.get("mode", self.config.get(provider, {}).get("acp_mode")) \
+                    if acp_enabled else None
+                if acp_mode is not None and (not isinstance(acp_mode, str)
+                                             or not acp_mode.strip()
+                                             or len(acp_mode) > 128):
+                    raise ValueError("ACP mode must be non-empty text")
                 if _harness_attempt is not None and provider == "claude":
                     # Validated by the selected harness policy. Ordinary Claude
                     # composer defaults retain their existing behavior.
                     reasoning_effort = payload.get("reasoning_effort")
                 elif "reasoning_effort" in payload:
-                    reasoning_effort = self._selected_reasoning_effort(
+                    reasoning_effort = payload.get("reasoning_effort") if acp_enabled \
+                        else self._selected_reasoning_effort(
                         provider, selected_model, payload.get("reasoning_effort"),
                     )
+                    if acp_enabled and reasoning_effort is not None and (
+                        not isinstance(reasoning_effort, str) or not reasoning_effort.strip()
+                        or len(reasoning_effort) > 128
+                    ):
+                        raise ValueError("ACP reasoning effort must be valid text")
                 else:
                     reasoning_effort = chat.get("reasoning_effort")
-                    try:
-                        reasoning_effort = self._selected_reasoning_effort(
-                            provider, selected_model, reasoning_effort,
-                        )
-                    except ValueError:
-                        reasoning_effort = None
+                    if not acp_enabled:
+                        try:
+                            reasoning_effort = self._selected_reasoning_effort(
+                                provider, selected_model, reasoning_effort,
+                            )
+                        except ValueError:
+                            reasoning_effort = None
                 if requested_model and not chat.get("harness_parent"):
                     self.store.data["preferences"]["work_models"][provider] = requested_model
                 same_session = provider == chat.get("provider") \
-                    and selected_model == chat.get("model")
+                    and selected_model == chat.get("model") \
+                    and chat.get("session_engine", "legacy") == \
+                    ("acp" if acp_enabled else "legacy")
                 chat["requested_provider"] = provider
                 chat["requested_model"] = requested_model
                 chat["reasoning_effort"] = reasoning_effort
@@ -1763,6 +1906,10 @@ class PilferedParrotApp(HarnessWorkflow):
                     "provider": provider,
                     "reasoning_effort": reasoning_effort,
                 }
+                if acp_enabled:
+                    pending["engine"] = "acp"
+                    if acp_mode is not None:
+                        pending["acp_mode"] = acp_mode
                 if _harness_attempt is not None:
                     pending["harness_reference"] = list(_harness_attempt)
                     _, task, attempt = self._harness_reference(_harness_attempt)
@@ -1801,6 +1948,183 @@ class PilferedParrotApp(HarnessWorkflow):
             raise
         return public
 
+    def _run_acp_message(
+        self, chat_id: str, pending_id: str, provider: str, prompt: str, cwd: Path,
+        session_id: str | None, model: str | None, effort: str | None,
+        mode: str | None, active: ActiveRun,
+    ) -> RunResult:
+        argv = self.acp_adapters.locate(provider)
+        if argv is None:
+            raise RuntimeError(
+                f"{provider.title()} ACP adapter is not installed. Install it explicitly before using ACP."
+            )
+        oversized_assistant = threading.Event()
+        raw_assistant = ""
+        raw_lock = threading.Lock()
+        configured_secrets = _acp_secret_values(self.config)
+
+        def sanitize_update(update: dict[str, Any]) -> dict[str, Any]:
+            nonlocal raw_assistant
+            try:
+                clean = _acp_public_update(self.config, update)
+                if clean.get("sessionUpdate") != "agent_message_chunk":
+                    return clean
+                if "streamed_text" in update:
+                    return {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": ""},
+                        "streamed_text": clean.get("streamed_text", ""),
+                        "streamed_text_truncated": bool(clean.get("streamed_text_truncated")),
+                    }
+                chunk = _acp_chunk_text(update.get("content"))
+                with raw_lock:
+                    raw_assistant += chunk
+                    if len(raw_assistant) > ACP_FINAL_TEXT_LIMIT:
+                        raise ValueError("ACP assistant response exceeds the display limit")
+                    visible = _acp_visible_stream(
+                        self.config, raw_assistant, configured_secrets,
+                    )
+                return {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": ""},
+                    "streamed_text": visible[-ACP_TEXT_LIMIT:],
+                    "streamed_text_truncated": len(visible) > ACP_TEXT_LIMIT,
+                }
+            except ValueError:
+                if update.get("sessionUpdate") == "agent_message_chunk":
+                    oversized_assistant.set()
+                raise
+
+        def publish(kind: str, payload: dict[str, Any]) -> None:
+            try:
+                self.events.publish(chat_id, kind, payload)
+            except RuntimeError:
+                pass
+
+        def on_update(_session_id: str, update: dict[str, Any]) -> None:
+            # Keep the store boundary safe even for a transport that skips the
+            # facade sanitizer or an injected test agent.
+            update = sanitize_update(update)
+            if update.get("sessionUpdate") == "filtered_update":
+                return
+            entry = {"id": uuid.uuid4().hex, "update": update}
+            with self.store.lock:
+                pending = self._message(self.store.get(chat_id), pending_id)
+                entries = pending.setdefault("acp_updates", [])
+                entries.append(entry)
+                if len(entries) > ACP_UPDATE_LIMIT:
+                    del entries[:-ACP_UPDATE_LIMIT]
+                    pending["acp_updates_truncated"] = True
+                if update.get("sessionUpdate") == "agent_message_chunk":
+                    pending["streamed_text"] = update.get("streamed_text", "")
+                    pending["streamed_text_truncated"] = bool(
+                        update.get("streamed_text_truncated")
+                    )
+                elif update.get("sessionUpdate") == "usage_update":
+                    used, size = update.get("used"), update.get("size")
+                    if all(type(item) in {int, float} and 0 <= item <= 1_000_000_000
+                           and math.isfinite(item) and float(item).is_integer()
+                           for item in (used, size)) and size >= 1:
+                        chat = self.store.get(chat_id)
+                        chat["context_limit_tokens"] = int(size)
+                        chat["context_max_tokens"] = int(size)
+                        chat["context_window_percent"] = 100
+                        _record_context_usage(chat, {
+                            "input_tokens": int(used), "output_tokens": 0,
+                            "context_window_tokens": int(size),
+                        })
+                        publish("usage", {
+                            "message_id": pending_id, **self.store.context_public(chat),
+                        })
+                now = time.monotonic()
+                if now - active.last_checkpoint >= 0.5:
+                    self.store.save()
+                    active.last_checkpoint = now
+                publish("acp_update", {"message_id": pending_id, "entry": entry})
+
+        def on_permission(params: dict[str, Any]) -> str | None:
+            clean = _acp_public_value(self.config, params)
+            raw_options = params.get("options")
+            clean_options = clean.get("options") if isinstance(clean, dict) else None
+            if not isinstance(raw_options, list) or not isinstance(clean_options, list) \
+                    or len(raw_options) != len(clean_options) \
+                    or any(not isinstance(raw, dict) or not isinstance(public, dict)
+                           or any(raw.get(key) != public.get(key)
+                                  for key in ("optionId", "name", "kind"))
+                           for raw, public in zip(raw_options, clean_options)):
+                return None
+            raw_tool = params.get("toolCall")
+            clean_tool = clean.get("toolCall") if isinstance(clean, dict) else None
+            if isinstance(raw_tool, dict) and isinstance(clean_tool, dict) and any(
+                raw_tool.get(key) != clean_tool.get(key)
+                for key in ("toolCallId", "title", "name", "kind", "rawInput", "content")
+            ):
+                return None
+            request_id: str | None = None
+
+            def opened(request: dict[str, Any]) -> None:
+                nonlocal request_id
+                request_id = request["requestId"]
+                publish("permission", {
+                    "message_id": pending_id, "request": _acp_public_value(self.config, request),
+                })
+
+            try:
+                return self.acp_permissions.request(
+                    chat_id, clean, active.cancel_event, opened,
+                )
+            finally:
+                if request_id is not None:
+                    publish("permission_closed", {
+                        "message_id": pending_id, "request_id": request_id,
+                    })
+
+        try:
+            result = run_acp_turn(
+                argv, cwd=cwd, prompt=prompt, session_id=session_id,
+                model=model, effort=effort, mode=mode,
+                env=_provider_process_environment(), on_update=on_update,
+                sanitize_update=sanitize_update,
+                on_permission=on_permission, cancel_event=active.cancel_event,
+                max_collected_updates=ACP_UPDATE_LIMIT,
+            )
+        except Exception as error:
+            if oversized_assistant.is_set():
+                raise ValueError("ACP assistant update exceeds the display limit") from error
+            raise
+        if oversized_assistant.is_set():
+            raise ValueError("ACP assistant update exceeds the display limit")
+        if result.stop_reason not in ACP_STOP_REASONS:
+            raise ValueError("ACP agent returned an unsupported stop reason")
+        if not isinstance(result.session_id, str) or not result.session_id \
+                or _acp_public_text(self.config, result.session_id) != result.session_id:
+            raise ValueError("ACP agent returned an unsafe session ID")
+        with self.store.lock:
+            pending = self._message(self.store.get(chat_id), pending_id)
+            pending["acp_stop_reason"] = result.stop_reason
+            pending["acp_updates_truncated"] = bool(
+                pending.get("acp_updates_truncated") or result.updates_truncated
+            )
+        with raw_lock:
+            complete_text = raw_assistant or result.text
+        text = _acp_public_text(self.config, complete_text)
+        if result.succeeded and not text.strip():
+            text = "Completed."
+        if len(text) > ACP_FINAL_TEXT_LIMIT:
+            text = text[:ACP_FINAL_TEXT_LIMIT] + "\n\n[ACP response truncated]"
+        elif getattr(result, "text_truncated", False):
+            text += "\n\n[ACP response truncated]"
+        return RunResult(
+            text=text, exit_code=0 if result.succeeded else 1,
+            session_id=result.session_id,
+            error=None if result.succeeded else f"ACP turn stopped: {result.stop_reason}",
+            input_tokens=int(result.usage["input_tokens"])
+            if "input_tokens" in result.usage else None,
+            output_tokens=int(result.usage["output_tokens"])
+            if "output_tokens" in result.usage else None,
+            reported_model=result.model, reported_reasoning_effort=result.effort,
+        )
+
     def _run_message(
         self, chat_id: str, pending_id: str, prompt: str, active: ActiveRun,
     ) -> None:
@@ -1827,7 +2151,10 @@ class PilferedParrotApp(HarnessWorkflow):
             if provider == "qwen":
                 ensure_qwen(self.config, cancel_event=active.cancel_event)
             selected_model = requested_model or effective_model(self.config, provider)
-            same_session = provider == current_provider and selected_model == current_model
+            engine = "acp" if provider in {"codex", "claude"} and \
+                self.config.get(provider, {}).get("engine") == "acp" else "legacy"
+            same_session = provider == current_provider and selected_model == current_model \
+                and chat.get("session_engine", "legacy") == engine
             percent = _context_percent(chat.get(
                 "context_window_percent", context_window_percent(self.config, provider),
             ))
@@ -1923,10 +2250,17 @@ class PilferedParrotApp(HarnessWorkflow):
                             pass
 
             setattr(active.cancel_event, "_pilferedparrot_usage", report_usage)
-            result = capture_dispatch(
-                provider, prompt, cwd, conversation, run_config, active.cancel_event,
-            )
-            if result.exit_code == 0 and result.session_id:
+            if engine == "acp":
+                result = self._run_acp_message(
+                    chat_id, pending_id, provider, prompt, cwd,
+                    conversation.provider_session_id, selected_model,
+                    reasoning_effort, pending_snapshot.get("acp_mode"), active,
+                )
+            else:
+                result = capture_dispatch(
+                    provider, prompt, cwd, conversation, run_config, active.cancel_event,
+                )
+            if result.session_id and (result.exit_code == 0 or engine == "acp"):
                 conversation.provider_session_id = result.session_id
             content = result.text or result.error or f"{provider.title()} exited without a response."
             if result.exit_code and result.error and result.text:
@@ -1949,6 +2283,10 @@ class PilferedParrotApp(HarnessWorkflow):
                     chat["provider"] = provider
                     chat["model"] = selected_model
                     chat["provider_session_id"] = conversation.provider_session_id
+                    if engine == "acp":
+                        chat["session_engine"] = "acp"
+                    else:
+                        chat.pop("session_engine", None)
                     chat["provider_messages"] = conversation.messages
                     chat["whiteboard_discovered"] = conversation.whiteboard_discovered
                     if result.input_tokens is not None and result.output_tokens is not None:
@@ -1962,6 +2300,11 @@ class PilferedParrotApp(HarnessWorkflow):
                             "output_tokens": result.live_output_tokens or 0,
                             "context_window_tokens": result.live_context_window_tokens,
                         })
+                elif engine == "acp" and result.session_id:
+                    chat["provider"] = provider
+                    chat["model"] = selected_model
+                    chat["provider_session_id"] = result.session_id
+                    chat["session_engine"] = "acp"
             try:
                 append_run(
                     self.config["ledger"], provider=provider, prompt=prompt, cwd=cwd,
@@ -1972,7 +2315,7 @@ class PilferedParrotApp(HarnessWorkflow):
                 )
             except OSError as error:
                 print(f"[web] could not append run ledger: {error}")
-        except RunCancelled:
+        except (RunCancelled, ACPCancelled):
             self.feedback.record("problems", "cancelled", "work")
             with self.store.lock:
                 chat = self.store.get(chat_id)
@@ -1983,9 +2326,12 @@ class PilferedParrotApp(HarnessWorkflow):
             with self.store.lock:
                 chat = self.store.get(chat_id)
                 pending = self._message(chat, pending_id)
+                error_text = _acp_public_text(self.config, exc) \
+                    if locals().get("engine") == "acp" else \
+                    redact_configured_secrets(self.config, exc)
                 pending.update({
                     "content": "PilferedParrot error: "
-                    f"{redact_configured_secrets(self.config, exc)}",
+                    f"{error_text}",
                     "provider": provider,
                     "error": True,
                     "exit_code": 1,
@@ -2780,6 +3126,7 @@ class PilferedParrotApp(HarnessWorkflow):
         )
 
     def shutdown(self, timeout: float = 3) -> None:
+        self.acp_permissions.shutdown()
         with self.runs_lock:
             active = list(self.runs.values())
             if self.chat_run is not None:

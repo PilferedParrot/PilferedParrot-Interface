@@ -45,6 +45,8 @@ if (fragmentCapability) history.replaceState(null, "", location.pathname + locat
 let pollTimer = null;
 const workEventFollowers = new Map();
 let workAccessRevoked = false;
+let acpRenderFrame = null;
+const decidingPermissions = new Set();
 const notifiedWorkCompletions = new Set();
 let budgetPollTimer = null;
 let budgetRefresh = null;
@@ -946,6 +948,92 @@ function workLabel(item) {
   })[item.kind] || "Update";
 }
 
+function acpText(value, limit = 8_000) {
+  const text = typeof value === "string" ? value : "";
+  return escapeHtml(text.length > limit ? `${text.slice(0, limit)}\n… Preview shortened.` : text);
+}
+
+function acpToolCards(message, openState) {
+  const tools = new Map();
+  for (const entry of Array.isArray(message.acp_updates) ? message.acp_updates : []) {
+    const update = entry?.update;
+    if (!update || !["tool_call", "tool_call_update"].includes(update.sessionUpdate)
+        || typeof update.toolCallId !== "string") continue;
+    const previous = tools.get(update.toolCallId) || { toolCallId: update.toolCallId };
+    for (const field of ["name", "title", "kind", "status", "content", "rawOutput", "locations"]) {
+      if (update[field] !== undefined && update[field] !== null) previous[field] = update[field];
+    }
+    tools.set(update.toolCallId, previous);
+  }
+  if (!tools.size) return "";
+  return `<div class="acp-tools" aria-label="Agent actions">${[...tools.values()].map((tool) => {
+    const kind = typeof tool.kind === "string" ? tool.kind : "action";
+    const status = ["pending", "in_progress", "completed", "failed"].includes(tool.status)
+      ? tool.status : "pending";
+    const content = Array.isArray(tool.content) ? tool.content : [];
+    const details = content.map((block) => {
+      if (block?.type === "diff") {
+        const oldText = block.oldText === null ? "New file" : block.oldText;
+        return `<section class="acp-diff"><div class="acp-diff-path">${acpText(block.path, 1_000)}</div>
+          <div class="acp-diff-pair"><div><strong>Before</strong><pre>${acpText(oldText, 20_000)}</pre></div>
+          <div><strong>After</strong><pre>${acpText(block.newText, 20_000)}</pre></div></div></section>`;
+      }
+      if (block?.type === "content" && block.content?.type === "text") {
+        return `<pre class="acp-tool-output">${acpText(block.content.text)}</pre>`;
+      }
+      return "";
+    }).join("");
+    const output = typeof tool.rawOutput === "string" ? tool.rawOutput
+      : typeof tool.rawOutput?.formatted_output === "string" ? tool.rawOutput.formatted_output : "";
+    const key = `${message.id || ""}:${tool.toolCallId}`;
+    const isOpen = openState.has(key) ? openState.get(key) : Boolean(message.pending);
+    return `<details class="acp-tool-card" data-tool-key="${escapeHtml(key)}" ${isOpen ? "open" : ""}>
+      <summary><span class="acp-tool-kind">${acpText(kind, 60)}</span><strong>${acpText(tool.title || tool.name || "Agent action", 250)}</strong><span class="acp-tool-status ${status}">${escapeHtml(status.replace("_", " "))}</span></summary>
+      ${details}${output ? `<pre class="acp-tool-output">${acpText(output)}</pre>` : ""}
+    </details>`;
+  }).join("")}</div>`;
+}
+
+function acpPermissionCards(message, chatId) {
+  const requests = Array.isArray(message.acp_permissions) ? message.acp_permissions : [];
+  return requests.map((request) => {
+    const tool = request.toolCall || {};
+    const preview = Array.isArray(tool.content) ? tool.content.map((block) =>
+      block?.type === "diff" ? `<section class="acp-diff"><div class="acp-diff-path">${acpText(block.path, 1_000)}</div>
+        <div class="acp-diff-pair"><div><strong>Before</strong><pre>${acpText(block.oldText === null ? "New file" : block.oldText, 65_536)}</pre></div>
+        <div><strong>After</strong><pre>${acpText(block.newText, 65_536)}</pre></div></div></section>` : "",
+    ).join("") : "";
+    const command = tool.command ? `<div class="acp-command"><strong>Command</strong><pre>${acpText(tool.command, 65_536)}</pre></div>` : "";
+    const buttons = (Array.isArray(request.options) ? request.options : []).map((option) => {
+      const meaning = {
+        allow_once: "Allow once", allow_always: "Allow for this session",
+        reject_once: "Reject once", reject_always: "Always reject",
+      }[option.kind] || "Choose";
+      const offered = typeof option.name === "string" ? option.name : "";
+      const label = /allow|reject|deny|never/i.test(offered)
+        ? offered : `${meaning} · ${offered}`;
+      return (
+      `<button type="button" class="${option.kind?.startsWith("reject") ? "secondary" : ""}"
+        data-acp-permission="${escapeHtml(request.requestId)}" data-acp-option="${escapeHtml(option.optionId)}"
+        data-acp-chat="${escapeHtml(chatId)}" ${decidingPermissions.has(request.requestId) ? "disabled" : ""}>${acpText(label, 160)}</button>`);
+    }).join("");
+    return `<section class="acp-permission" role="group" aria-label="Permission requested">
+      <div class="acp-permission-heading"><strong>Permission requested</strong><span>${acpText(tool.kind || tool.name || "Action", 80)}</span></div>
+      <p>${acpText(tool.title || "Review this action before continuing.", 300)}</p>
+      ${command}${preview}<div class="acp-permission-actions">${buttons}</div>
+    </section>`;
+  }).join("");
+}
+
+function scheduleAcpRender() {
+  if (acpRenderFrame !== null) return;
+  acpRenderFrame = requestAnimationFrame(() => {
+    acpRenderFrame = null;
+    renderMessages();
+    renderChats();
+  });
+}
+
 function captureWorkScroll() {
   const positions = new Map();
   document.querySelectorAll(".work-items[data-work-key]").forEach((node) => {
@@ -968,6 +1056,13 @@ function restoreWorkScroll(positions) {
 function renderMessages() {
   const chat = activeChat();
   const messages = chat?.messages || [];
+  const focusedPermission = document.activeElement?.closest?.("[data-acp-permission][data-acp-option]");
+  const focusedChoice = focusedPermission ? {
+    requestId: focusedPermission.dataset.acpPermission,
+    optionId: focusedPermission.dataset.acpOption,
+  } : null;
+  const acpToolOpen = new Map([...$("#messages").querySelectorAll(".acp-tool-card[data-tool-key]")]
+    .map((node) => [node.dataset.toolKey, node.open]));
   const workScroll = captureWorkScroll();
   const identityState = globalThis.PilferedParrotIdentity.captureState($("#messages"));
   $("#welcome").classList.toggle("hidden", messages.length > 0);
@@ -978,6 +1073,9 @@ function renderMessages() {
     const name = assistant
       ? `${providerLabel(provider)} · ${modelLabel(provider, message.model)}` : "You";
     const activity = Array.isArray(message.activity) ? message.activity : [];
+    const acpCards = assistant ? acpToolCards(message, acpToolOpen) : "";
+    const acpPermissions = assistant && message.pending && chat
+      ? acpPermissionCards(message, chat.id) : "";
     const workKey = String(message.id || `message-${messageIndex}`);
     const work = activity.length ? `<details class="work-log" ${message.pending ? "open" : ""}>
       <summary><span>${message.pending ? `${providerLabel(provider)} is working` : "Work details"}</span><small>${activity.length} update${activity.length === 1 ? "" : "s"}</small></summary>
@@ -988,16 +1086,22 @@ function renderMessages() {
         </div>`).join("")}</div>
     </details>` : "";
     const response = message.pending
-      ? `<div class="pending-line"><span class="thinking" aria-label="${escapeHtml(providerLabel(provider))} is working"><i></i><i></i><i></i></span><span>${escapeHtml((activity.at(-1)?.content || `Starting ${providerLabel(provider)}…`).slice(0, 240))} · ${escapeHtml(relativeTime(message.created_at))}</span></div>`
+      ? `<div class="pending-line"><span class="thinking" aria-label="${escapeHtml(providerLabel(provider))} is working"><i></i><i></i><i></i></span><span>${escapeHtml((activity.at(-1)?.content || `Starting ${providerLabel(provider)}…`).slice(0, 240))} · ${escapeHtml(relativeTime(message.created_at))}</span></div>${message.streamed_text ? `<div class="acp-streamed-text">${message.streamed_text_truncated ? '<small>Earlier live text is omitted here; the completed answer will show the full response.</small>' : ""}${acpText(message.streamed_text, 80_000)}</div>` : ""}`
       : renderMarkdown(message.content, {
         commandTarget: assistant && message.id ? { messageId: message.id } : null,
         shellLanguages: CODE_BLOCK_LANGUAGES,
       });
     return `<article class="message ${role} ${message.error ? "error" : ""}" data-provider="${assistant ? escapeHtml(provider) : ""}">
       <div class="message-body"><div class="message-head"><span class="message-name">${escapeHtml(name)}</span>${message.cancelled ? '<span class="message-state">Cancelled</span>' : ""}</div>
-      <div class="message-content">${work}${response}${assistant && !message.pending ? globalThis.PilferedParrotIdentity.render(message) : ""}</div></div>
+      <div class="message-content">${work}${acpPermissions}${acpCards}${response}${assistant && !message.pending ? globalThis.PilferedParrotIdentity.render(message) : ""}</div></div>
     </article>`;
   }).join("");
+  if (focusedChoice) {
+    [...$("#messages").querySelectorAll("[data-acp-permission][data-acp-option]")]
+      .find((button) => button.dataset.acpPermission === focusedChoice.requestId
+        && button.dataset.acpOption === focusedChoice.optionId)
+      ?.focus({ preventScroll: true });
+  }
   restoreWorkScroll(workScroll);
   globalThis.PilferedParrotIdentity.restoreState($("#messages"), identityState);
 }
@@ -1849,6 +1953,68 @@ function applyWorkUsage(follower, payload) {
   else renderChats();
 }
 
+function pendingWorkMessage(chatId, messageId) {
+  const chat = state.chats.find((item) => item.id === chatId);
+  return chat?.messages?.find((item) => item.id === messageId && item.pending);
+}
+
+function applyAcpUpdate(follower, payload) {
+  const entry = payload?.entry;
+  const message = pendingWorkMessage(follower.chatId, payload?.message_id);
+  if (!message || typeof entry?.id !== "string" || !entry.id
+      || !entry.update || typeof entry.update !== "object") return;
+  if (!Array.isArray(message.acp_updates)) message.acp_updates = [];
+  if (message.acp_updates.some((item) => item.id === entry.id)) return;
+  message.acp_updates.push(entry);
+  if (message.acp_updates.length > 512) message.acp_updates.splice(0, message.acp_updates.length - 512);
+  if (entry.update.sessionUpdate === "agent_message_chunk") {
+    // The server redacts the aggregate before sending this replacement. Do
+    // not concatenate independently filtered chunks: a secret may straddle
+    // their boundary.
+    const replacement = typeof entry.update.streamed_text === "string"
+      ? entry.update : payload;
+    if (typeof replacement.streamed_text === "string") {
+      message.streamed_text = replacement.streamed_text;
+      message.streamed_text_truncated = Boolean(replacement.streamed_text_truncated);
+    }
+  }
+  scheduleAcpRender();
+}
+
+function applyAcpPermission(follower, payload) {
+  const message = pendingWorkMessage(follower.chatId, payload?.message_id);
+  const request = payload?.request;
+  if (!message || typeof request?.requestId !== "string" || !request.requestId) return;
+  if (!Array.isArray(message.acp_permissions)) message.acp_permissions = [];
+  if (!message.acp_permissions.some((item) => item.requestId === request.requestId)) {
+    message.acp_permissions.push(request);
+    scheduleAcpRender();
+  }
+}
+
+function applyAcpPermissionClosed(follower, payload) {
+  const message = pendingWorkMessage(follower.chatId, payload?.message_id);
+  if (!message || !Array.isArray(message.acp_permissions)) return;
+  message.acp_permissions = message.acp_permissions.filter((item) => item.requestId !== payload.request_id);
+  scheduleAcpRender();
+}
+
+async function hydrateAcpPermissions(follower) {
+  const chat = state.chats.find((item) => item.id === follower.chatId);
+  if (!chat || pendingMessage(chat)?.engine !== "acp") return;
+  const result = await api(`/api/chats/${encodeURIComponent(chat.id)}/permissions`);
+  if (follower.stopped) return;
+  for (const message of chat.messages || []) {
+    if (message.pending && message.engine === "acp") message.acp_permissions = [];
+  }
+  for (const item of Array.isArray(result.permissions) ? result.permissions : []) {
+    applyAcpPermission(follower, item?.request ? item : {
+      message_id: pendingMessage(chat)?.id, request: item,
+    });
+  }
+  scheduleAcpRender();
+}
+
 async function handleWorkEventFrame(follower, frame) {
   const eventName = frame.event || "message";
   if (!frame.data) return;
@@ -1876,6 +2042,12 @@ async function handleWorkEventFrame(follower, frame) {
     applyWorkProgress(follower, event.payload);
   } else if (event.kind === "usage") {
     applyWorkUsage(follower, event.payload);
+  } else if (event.kind === "acp_update") {
+    applyAcpUpdate(follower, event.payload);
+  } else if (event.kind === "permission") {
+    applyAcpPermission(follower, event.payload);
+  } else if (event.kind === "permission_closed") {
+    applyAcpPermissionClosed(follower, event.payload);
   } else if (event.kind === "completed") {
     await refreshChatFromWorkEvent(follower, event.payload?.message_id || "");
   }
@@ -1941,6 +2113,13 @@ async function runWorkEventFollower(follower) {
         return;
       }
       follower.messageId = pendingMessage(chat)?.id || follower.messageId || "";
+      if (!follower.permissionsLoaded) {
+        try {
+          await hydrateAcpPermissions(follower);
+          follower.permissionsLoaded = true;
+        }
+        catch (error) { if (error.status === 403) { revokeWorkAccess(); return; } }
+      }
       if (!follower.epoch && follower.after > 0) follower.after = 0;
       const query = new URLSearchParams({ after: String(follower.after) });
       if (follower.epoch) query.set("epoch", follower.epoch);
@@ -1986,6 +2165,7 @@ function startWorkEventFollower(chatId) {
   const follower = {
     chatId, after: 0, epoch: null, messageId: "", fallback: true,
     stopped: false, controller: null, retryTimer: null, retryResolve: null,
+    permissionsLoaded: false,
   };
   workEventFollowers.set(chatId, follower);
   runWorkEventFollower(follower).catch(() => {
@@ -2392,7 +2572,34 @@ $("#notificationPreferences").addEventListener("click", () => {
 $("#preferencesButton").addEventListener("click", () => $("#preferencesDialog").showModal());
 $("#chromeTheme").addEventListener("click", openChromeThemeGallery);
 setupPaneResizer("#sidebarResizer", "sidebar");
-$("#messages").addEventListener("click", (event) => {
+$("#messages").addEventListener("click", async (event) => {
+  const permissionButton = event.target.closest("[data-acp-permission][data-acp-option]");
+  if (permissionButton) {
+    const requestId = permissionButton.dataset.acpPermission;
+    const chatId = permissionButton.dataset.acpChat;
+    if (chatId !== state.activeId || decidingPermissions.has(requestId)) return;
+    decidingPermissions.add(requestId);
+    renderMessages();
+    try {
+      const result = await api(`/api/chats/${encodeURIComponent(chatId)}/permissions`, {
+        method: "POST", body: JSON.stringify({
+          request_id: requestId, option_id: permissionButton.dataset.acpOption,
+        }),
+      });
+      if (!result.accepted) {
+        toast("This permission request has expired. The agent was denied.");
+      } else {
+        const chat = state.chats.find((item) => item.id === chatId);
+        for (const message of chat?.messages || []) {
+          if (Array.isArray(message.acp_permissions)) {
+            message.acp_permissions = message.acp_permissions.filter((item) => item.requestId !== requestId);
+          }
+        }
+      }
+    } catch (error) { toast(error.message); }
+    finally { decidingPermissions.delete(requestId); renderMessages(); }
+    return;
+  }
   const button = event.target.closest("[data-run-command]");
   if (button) runTerminalCommand(button);
 });

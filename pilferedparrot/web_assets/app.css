@@ -657,6 +657,34 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .work-item > div { color: #aab5c2; }
 .work-item.tool > div { color: #aacfff; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 16px; }
 .work-item.tool_result > div { color: #9dd6bb; }
+.acp-streamed-text { margin: 12px 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); line-height: 1.6; }
+.acp-streamed-text small { display: block; margin-bottom: 8px; color: var(--faint); }
+.acp-tools { display: grid; gap: 9px; margin: 10px 0 14px; }
+.acp-tool-card { border: 1px solid var(--border); border-radius: 9px; background: var(--surface-control); overflow: hidden; }
+.acp-tool-card summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer; }
+.acp-tool-card summary strong { flex: 1; min-width: 120px; overflow-wrap: anywhere; }
+.acp-tool-kind, .acp-tool-status { color: var(--faint); font-size: 16px; text-transform: uppercase; letter-spacing: .04em; }
+.acp-tool-status.failed { color: var(--red); }
+.acp-tool-output { max-height: 320px; margin: 8px 12px 12px; padding: 10px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.acp-diff { margin: 8px 12px 12px; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.acp-diff-path { padding: 6px 9px; background: var(--surface-control); color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.acp-diff-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.acp-diff-pair > div { min-width: 0; padding: 8px; border-top: 1px solid var(--border); }
+.acp-diff-pair > div + div { border-left: 1px solid var(--border); }
+.acp-diff-pair strong { color: var(--faint); font-size: 16px; }
+.acp-diff-pair pre, .acp-command pre { max-height: 330px; overflow: auto; margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+.acp-permission { margin: 10px 0 14px; padding: 12px; border: 2px solid var(--blue); border-radius: 10px; background: var(--surface-control); }
+.acp-permission-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; color: var(--text); }
+.acp-permission-heading span { color: var(--faint); }
+.acp-permission p { margin: 8px 0; }
+.acp-permission .acp-diff { margin: 10px 0; }
+.acp-command { margin: 10px 0; padding: 9px; border: 1px solid var(--border); border-radius: 6px; }
+.acp-permission-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.acp-permission-actions button { min-width: 110px; }
+@media (max-width: 680px) {
+  .acp-diff-pair { grid-template-columns: minmax(0, 1fr); }
+  .acp-diff-pair > div + div { border-left: 0; }
+}
 .pending-line { display: flex; align-items: center; gap: 10px; margin-top: 8px; color: var(--faint); font-size: 16px; }
 .thinking { display: inline-flex; gap: 3px; align-items: center; height: 18px; }
 .thinking i { width: 5px; height: 5px; border-radius: 50%; background: var(--blue); animation: pulse 1.2s infinite ease-in-out; }

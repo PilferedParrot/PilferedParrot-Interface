@@ -92,6 +92,9 @@ The source branch includes changes beyond the published 0.7.1 assets:
 - The Work window loads compact session summaries first, then the selected transcript.
   During a run it receives progress over a capability-protected stream, with snapshot
   polling as a recovery path. See [live work events](docs/live-work-events.md).
+- An opt-in [ACP Work preview](docs/acp-work-preview.md) streams Codex and Claude text,
+  tool details and diffs, and shows explicit permission choices. Legacy Work remains
+  the default while the new path is validated.
 - New Codex Chat sessions default to GPT-6 Luna with low reasoning when no Chat selection is
   saved. An explicit saved model and reasoning selection takes precedence.
 - When work remains unfinished, providers receive continuation guidance to leave a copyable

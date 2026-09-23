@@ -36,9 +36,15 @@ def update(value):
 
 
 def options(model="luna"):
+    choices = ([{"value": "fake-small", "name": "Fake Small"},
+                {"value": "fake-large", "name": "Fake Large"}]
+               if os.environ.get("FAKE_ACP_BROWSER_E2E") == "1" else
+               [{"value": "luna", "name": "Luna"}, {"value": "sol", "name": "Sol"}])
+    if os.environ.get("FAKE_ACP_BROWSER_E2E") == "1" and model == "luna":
+        model = "fake-small"
     return [{"id": "model", "name": "Model", "category": "model",
              "type": "select", "currentValue": model,
-             "options": [{"value": "luna", "name": "Luna"}, {"value": "sol", "name": "Sol"}]}]
+             "options": choices}]
 
 
 print(f"fake agent boot {sentinel}", file=sys.stderr, flush=True)
@@ -93,11 +99,24 @@ for raw in sys.stdin:
         pending_content = content
         update({"sessionUpdate": "_auth/status_update", "accountEmail": sentinel})
         send({"method": "_auth/status_update", "params": {"email": sentinel}})
-        update({"sessionUpdate": "agent_message_chunk",
-                "content": {"type": "text", "text": f"working on {content}"},
-                "account": {"email": sentinel}})
+        if content == "browser-e2e-split":
+            split_at = len(sentinel) // 2
+            for part in (sentinel[:split_at], sentinel[split_at:]):
+                update({"sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": part},
+                        "account": {"email": sentinel}})
+        else:
+            update({"sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": f"working on {content}"},
+                    "account": {"email": sentinel}})
         if content in {"wait-cancel", "ignore-cancel"}:
             continue
+        browser_e2e = content.startswith("browser-e2e-")
+        if browser_e2e:
+            update({"sessionUpdate": "tool_call_update", "toolCallId": "browser-tool-1",
+                    "title": "Prepare browser preview", "kind": "edit", "status": "completed",
+                    "content": [{"type": "diff", "path": "preview.txt", "oldText": None,
+                                 "newText": "ACP browser preview\n"}]})
         pending_permission = "permission-1"
         permission = {"sessionId": session_id,
                       "toolCall": {"toolCallId": "tool-1", "title": "Write allowed.txt",
@@ -108,6 +127,13 @@ for raw in sys.stdin:
                            "_meta": {"accountEmail": sentinel}},
                           {"optionId": "no", "name": "Reject once", "kind": "reject_once"},
                       ], "accountEmail": sentinel}
+        if browser_e2e:
+            permission["toolCall"].update({
+                "name": "shell", "kind": "execute",
+                "rawInput": {"command": "printf 'approved\\n' > allowed.txt"},
+                "content": [{"type": "diff", "path": "allowed.txt", "oldText": None,
+                             "newText": "approved\n"}],
+            })
         if content == "malformed-permission":
             permission.pop("sessionId")
         elif content == "malformed-session-type":

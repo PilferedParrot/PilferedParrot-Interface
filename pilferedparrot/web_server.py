@@ -47,6 +47,8 @@ class ServerApp(Protocol):
     ) -> Any: ...
     def cleanup_stale_sessions(self, *, protected_window_ids: tuple[str, ...] = (), protected_chat_ids: tuple[str, ...] = ()) -> int: ...
     def chat_state(self, chat_id: str, *, window_id: str) -> Any: ...
+    def work_permissions(self, chat_id: str, *, window_id: str) -> Any: ...
+    def decide_work_permission(self, chat_id: str, payload: dict[str, Any], *, window_id: str) -> Any: ...
     def work_event_batch(
         self, chat_id: str, after: int, *, epoch: str | None,
         window_id: str, timeout: float = 10,
@@ -621,6 +623,18 @@ def make_handler(
                         window_id=context.get("history_id") or context.get("window_id") or "main",
                         after=int(values[0]), epoch=epochs[0] if epochs else None,
                     )
+            elif re.fullmatch(r"/api/chats/[^/]+/permissions", path):
+                context = self._request_capability_context()
+                if context is None or context.get("scope") != "dashboard":
+                    self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
+                else:
+                    try:
+                        self._json(app.work_permissions(
+                            path.split("/")[3],
+                            window_id=context.get("history_id") or context.get("window_id") or "main",
+                        ))
+                    except KeyError:
+                        self._json({"error": "work session not found"}, HTTPStatus.NOT_FOUND)
             elif re.fullmatch(r"/api/chats/[^/]+", path):
                 context = self._request_capability_context()
                 if context is None or context.get("scope") != "dashboard":
@@ -876,6 +890,10 @@ def make_handler(
                         parts[2], payload, window_id=window_id,
                         window_provider=window_provider,
                     ), HTTPStatus.ACCEPTED)
+                elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "permissions":
+                    self._json(app.decide_work_permission(
+                        parts[2], payload, window_id=window_id,
+                    ))
                 elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "context":
                     self._json(app.set_context_window(
                         parts[2], payload, window_id=window_id,
