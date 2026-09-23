@@ -144,7 +144,8 @@ class BrowserTestApp(web.PilferedParrotApp):
 class PilferedParrotBrowserFixture:
     """Own temporary config/state plus an ephemeral loopback HTTP server."""
 
-    def __init__(self, *, include_claude: bool = False) -> None:
+    def __init__(self, *, include_claude: bool = False,
+                 sqlite_preview: bool = False) -> None:
         self.include_claude = include_claude
         self._temporary = tempfile.TemporaryDirectory(prefix="pilferedparrot-browser-")
         # Windows may expose the temporary directory through an 8.3 alias;
@@ -155,6 +156,17 @@ class PilferedParrotBrowserFixture:
         self.project.mkdir()
         self.provider = FakeProvider()
         self.config = self._config()
+        self.sqlite_source_bytes = None
+        self.sqlite_database = None
+        if sqlite_preview:
+            source = Path(self.config["web"]["chat_store"])
+            source.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            self.sqlite_source_bytes = (
+                b'{"version":8,"chats":[],"preferences":'
+                b'{"future_secret":"synthetic-private-marker"}}\n'
+            )
+            source.write_bytes(self.sqlite_source_bytes)
+            self.sqlite_database = source.with_suffix(".sqlite3")
         self.config_path = self.root / "config.json"
         self.config_path.write_text(
             json.dumps(self.config, indent=2) + "\n", encoding="utf-8",
@@ -163,7 +175,9 @@ class PilferedParrotBrowserFixture:
         self._original_dispatch = web.capture_dispatch
         web.capture_dispatch = self.provider.dispatch
         try:
-            self.app = BrowserTestApp(self.config, self.project)
+            self.app = BrowserTestApp(
+                self.config, self.project, sqlite_state_path=self.sqlite_database,
+            )
             self.app.claude_browser_budget = (
                 FakeBudget(
                     "claude", available=True, window={

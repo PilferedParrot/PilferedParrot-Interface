@@ -51,7 +51,7 @@
     "web_events.py": "5abaa9ece2bfd26d2adfb5221dc2217bafe5695a9dc0364d76fbfcc19778b696",
     "web_harness.py": "2efb43b82eb115fe20749103f684b0be553d76a46c44e4a240e5d70e5114461f",
     "web_native.py": "8fb50f7f477ba0310cfef85a8bae0bb43216fc74b275735b2d6c209b89ffbeca",
-    "web_persistence.py": "1ba12bd8f3f7f95fce99e517535bdd142690c2e2ac4295d7bb06bd05e359501d",
+    "web_persistence.py": "40a2a8af35ddf8ae6ff21a84a42b2270a48bc863bb338f0f5c2bedf351f27674",
     "web_provider.py": "2a748b3abc5008e830f50f447663067277798c82aebbd71eac6d4d66632751fd",
     "web_server.py": "37f80d2ad099316093cd8fe1e62547d356c72493a4602028878013747742854a",
     "whiteboard.py": "b02b14836f8cc8b67e7a7711b0a18f447ebc2b23d66c4e2f84e6967635fc2d97",
