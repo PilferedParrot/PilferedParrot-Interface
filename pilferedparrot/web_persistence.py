@@ -40,6 +40,10 @@ APPEARANCE_OPTIONS = {
 }
 STALE_EMPTY_SESSION_SECONDS = 24 * 60 * 60
 WORK_CLEANUP_LAST_RUN = "work_cleanup_last_run"
+PROJECT_WORKROOMS = "project_workrooms"
+PROJECT_RECENT_LIMIT = 24
+PROJECT_PIN_LIMIT = 24
+PROJECT_LIST_LIMIT = 60
 
 
 def _atomic_json_write(
@@ -71,6 +75,17 @@ def _atomic_json_write(
             temporary.unlink()
         except FileNotFoundError:
             pass
+
+
+def _canonical_project_cwd(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return str(Path(value).expanduser().resolve(strict=False))
+    except (OSError, RuntimeError, ValueError):
+        # A historical workspace can disappear or become a broken symlink.
+        # Keep its session readable; selecting it still requires validation.
+        return value
 
 
 def chat_store_path(config: dict[str, Any]) -> Path:
@@ -374,11 +389,100 @@ class PersistentChatStore:
         if isinstance(cleanup_last_run, (int, float)) and not isinstance(cleanup_last_run, bool) \
                 and cleanup_last_run >= 0:
             self.data["preferences"][WORK_CLEANUP_LAST_RUN] = int(cleanup_last_run)
+        raw_workrooms = preferences.get(PROJECT_WORKROOMS)
+        workrooms: dict[str, dict[str, Any]] = {}
+        if isinstance(raw_workrooms, dict):
+            for window_id, value in raw_workrooms.items():
+                if not isinstance(window_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", window_id) \
+                        or not isinstance(value, dict):
+                    continue
+                def paths(field: str, limit: int) -> list[str]:
+                    raw = value.get(field)
+                    return list(dict.fromkeys(
+                        item for item in raw
+                        if isinstance(item, str) and os.path.isabs(item)
+                        and 0 < len(item) <= 4096 and "\x00" not in item
+                    ))[:limit] if isinstance(raw, list) else []
+                selected = value.get("selected")
+                workrooms[window_id] = {
+                    "recent": paths("recent", PROJECT_RECENT_LIMIT),
+                    "pinned": paths("pinned", PROJECT_PIN_LIMIT),
+                    "selected": selected if isinstance(selected, str)
+                    and os.path.isabs(selected) and len(selected) <= 4096
+                    and "\x00" not in selected else None,
+                }
+        self.data["preferences"][PROJECT_WORKROOMS] = workrooms
         self.data["version"] = 8
 
     def preferences_public(self) -> dict[str, Any]:
         with self.lock:
-            return deepcopy(self.data["preferences"])
+            return deepcopy({
+                key: value for key, value in self.data["preferences"].items()
+                if key != PROJECT_WORKROOMS
+            })
+
+    def _project_workroom(self, window_id: str) -> dict[str, Any]:
+        return self.data["preferences"][PROJECT_WORKROOMS].setdefault(
+            window_id, {"recent": [], "pinned": [], "selected": None},
+        )
+
+    def remember_project(self, cwd: Path, window_id: str, *, save: bool = True) -> None:
+        """Record a validated canonical workspace without changing any session."""
+        with self.lock:
+            path = str(cwd.expanduser().resolve(strict=False))
+            workroom = self._project_workroom(window_id)
+            workroom["selected"] = path
+            workroom["recent"] = [path, *(
+                item for item in workroom["recent"] if item != path
+            )][:PROJECT_RECENT_LIMIT]
+            if save:
+                self.save()
+
+    def pin_project(self, cwd: Path, window_id: str, pinned: bool) -> None:
+        with self.lock:
+            path = str(cwd.expanduser().resolve(strict=False))
+            workroom = self._project_workroom(window_id)
+            workroom["pinned"] = [item for item in workroom["pinned"] if item != path]
+            if pinned:
+                workroom["pinned"] = [path, *workroom["pinned"]][:PROJECT_PIN_LIMIT]
+            self.save()
+
+    def project_state(
+        self, window_id: str, provider: str, default_cwd: Path, *, aggregate: bool = False,
+    ) -> dict[str, Any]:
+        """Return project summaries only; provider windows see only their sessions."""
+        with self.lock:
+            workroom = self._project_workroom(window_id)
+            visible = [chat for chat in self.data["chats"] if aggregate or (
+                chat.get("window_id", "main") == window_id
+                and (chat.get("requested_provider") or chat.get("provider")) == provider
+            )]
+            counts: dict[str, int] = {}
+            latest: dict[str, int] = {}
+            for chat in visible:
+                cwd = _canonical_project_cwd(chat.get("cwd"))
+                if cwd is None:
+                    continue
+                counts[cwd] = counts.get(cwd, 0) + 1
+                updated = chat.get("updated_at")
+                if isinstance(updated, (int, float)) and not isinstance(updated, bool):
+                    latest[cwd] = max(latest.get(cwd, 0), int(updated))
+            selected = (workroom["selected"] or next(iter(workroom["recent"]), None)
+                        or (max(latest, key=latest.get) if latest else None)
+                        or str(default_cwd.resolve(strict=False)))
+            ordered = list(dict.fromkeys([
+                *workroom["pinned"], *workroom["recent"], selected,
+                *sorted(counts, key=lambda path: latest.get(path, 0), reverse=True),
+            ]))[:PROJECT_LIST_LIMIT]
+            return {
+                "selected_project": selected,
+                "projects": [{
+                    "cwd": cwd,
+                    "name": Path(cwd).name or cwd,
+                    "pinned": cwd in workroom["pinned"],
+                    "session_count": counts.get(cwd, 0),
+                } for cwd in ordered],
+            }
 
     @staticmethod
     def _is_strictly_empty_work_session(chat: dict[str, Any]) -> bool:
@@ -575,6 +679,7 @@ class PersistentChatStore:
                 "output_reservation_tokens",
             }
         })
+        result["project_cwd"] = _canonical_project_cwd(chat.get("cwd"))
         context_chars = sum(
             len(str(message.get("content") or "")) for message in chat.get("messages", [])
         )
@@ -728,7 +833,7 @@ class PersistentChatStore:
         context_limit_tokens: int | None = None, context_max_tokens: int | None = None,
         context_window_percent: int = 100, context_overhead_tokens: int = 0,
         output_reservation_tokens: int = 0, window_id: str = "main",
-        reasoning_effort: str | None = None,
+        reasoning_effort: str | None = None, remember_project: bool = False,
     ) -> dict[str, Any]:
         now = int(time.time())
         chat = {
@@ -758,6 +863,8 @@ class PersistentChatStore:
         with self.lock:
             self.data["chats"].append(chat)
             self.mark_used(chat)
+            if remember_project:
+                self.remember_project(cwd, window_id, save=False)
             self.save()
         return self.public(chat)
 

@@ -1264,6 +1264,9 @@ class PilferedParrotApp(HarnessWorkflow):
         return {
             **shared,
             "chats": self.store.list_public(window_id, provider),
+            **self.store.project_state(
+                window_id, provider, self.default_cwd, aggregate=window_id == "main",
+            ),
             "window_id": window_id,
             "window_provider": provider,
             "default_cwd": str(self.default_cwd),
@@ -1303,8 +1306,11 @@ class PilferedParrotApp(HarnessWorkflow):
         requested_model = self._normalize_model(payload.get("model")) \
             if explicit_model else self._normalize_model(latest_model) \
             or self._preferred_work_model(provider)
+        selected_project = self.store.project_state(
+            window_id, provider, self.default_cwd, aggregate=window_id == "main",
+        )["selected_project"]
         cwd = _project_directory(_migrate_renamed_project_path(
-            payload.get("cwd") or self.default_cwd, self.renamed_repository_root,
+            payload.get("cwd") or selected_project, self.renamed_repository_root,
         ))
         _validate_provider_workspace(provider, cwd, self.config)
         model = requested_model or effective_model(self.config, provider)
@@ -1335,7 +1341,39 @@ class PilferedParrotApp(HarnessWorkflow):
             return self.store.create(
                 cwd, provider, requested_model, context_limit, context_max, percent,
                 overhead, reservation, window_id, reasoning_effort,
+                remember_project=True,
             )
+
+    def _validated_project(self, payload: dict[str, Any], provider: str) -> Path:
+        raw_cwd = payload.get("cwd")
+        if not isinstance(raw_cwd, str) or not raw_cwd.strip():
+            raise ValueError("project folder is required")
+        cwd = _project_directory(raw_cwd)
+        _validate_provider_workspace(provider, cwd, self.config)
+        return cwd
+
+    def select_project(
+        self, payload: dict[str, Any], *, window_id: str, window_provider: str | None,
+    ) -> dict[str, Any]:
+        provider = window_provider or self.default_provider
+        cwd = self._validated_project(payload, provider)
+        self.store.remember_project(cwd, window_id)
+        return self.store.project_state(
+            window_id, provider, self.default_cwd, aggregate=window_id == "main",
+        )
+
+    def pin_project(
+        self, payload: dict[str, Any], *, window_id: str, window_provider: str | None,
+    ) -> dict[str, Any]:
+        pinned = payload.get("pinned")
+        if not isinstance(pinned, bool):
+            raise ValueError("pinned must be a boolean")
+        provider = window_provider or self.default_provider
+        cwd = self._validated_project(payload, provider)
+        self.store.pin_project(cwd, window_id, pinned)
+        return self.store.project_state(
+            window_id, provider, self.default_cwd, aggregate=window_id == "main",
+        )
 
     def _owned_chat(self, chat_id: str, window_id: str | None) -> dict[str, Any]:
         chat = self.store.get(chat_id)

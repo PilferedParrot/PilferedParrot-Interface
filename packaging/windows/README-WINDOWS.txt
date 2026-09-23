@@ -37,3 +37,7 @@ can enable individual categories, inspect a local report, then download it for
 voluntary sharing. Nothing is uploaded. This feature is not included in the
 published 0.7.1 ZIP. See docs/feedback.md for policy 1, local-change detection,
 retention, and turning all feedback off.
+
+The same unreleased source branch adds Project workrooms. The sidebar can pin and
+switch folders while keeping each session's draft and original workspace. Reopening
+the app restores the selected project; the published 0.7.1 ZIP does not include it.

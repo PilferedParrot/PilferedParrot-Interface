@@ -85,6 +85,10 @@ account limits, and usage charges belong to the provider you configure.
 
 The source branch includes changes beyond the published 0.7.1 assets:
 
+- Project workrooms remember recent and pinned folders, group the visible session list by
+  selected project, and restore that selection when the app reopens. Use **Project** in the
+  sidebar to switch folders; use **＋** to start a session in another folder. Existing
+  sessions keep their original folder. See [project workrooms](docs/project-workrooms.md).
 - New Codex Chat sessions default to GPT-6 Luna with low reasoning when no Chat selection is
   saved. An explicit saved model and reasoning selection takes precedence.
 - When work remains unfinished, providers receive continuation guidance to leave a copyable

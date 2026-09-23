@@ -2,6 +2,7 @@ const $ = (selector) => document.querySelector(selector);
 const { escapeHtml, render: renderMarkdown } = globalThis.PilferedParrotMarkdown;
 const state = {
   chats: [], budgets: {}, activeId: null, defaultCwd: "", draftCwd: "",
+  projects: [], selected_project: "",
   capability: "", models: {}, model_catalog: {}, default_provider: "codex",
   model_context_windows: {}, browser_theme: { active: false }, budgetsLoaded: false,
   windowId: "main", windowProvider: "codex", providerModels: {}, authPending: {},
@@ -55,6 +56,10 @@ let terminalTarget = null;
 let providerLogoutTarget = null;
 let pendingLaunchModel = null;
 let projectSubmitPending = false;
+let projectDialogCreate = false;
+let projectSwitchPending = false;
+let projectPinPending = false;
+let renderedProjectOptions = "";
 let createChatPending = false;
 let selectionSavePending = false;
 const pendingDrafts = new Map();
@@ -156,10 +161,15 @@ function latestUsedChat(chats) {
     || (Number(b.updated_at) || 0) - (Number(a.updated_at) || 0)
   )[0];
 }
-function visibleChats() {
+function windowChats() {
   return state.chats.filter((chat) =>
     (chat.window_id || "main") === state.windowId
     && (chat.requested_provider || chat.provider) === state.windowProvider);
+}
+function projectOfChat(chat) { return chat?.project_cwd || chat?.cwd || ""; }
+function visibleChats() {
+  const selected = state.selected_project || state.draftCwd;
+  return windowChats().filter((chat) => !selected || projectOfChat(chat) === selected);
 }
 function pendingMessage(chat = activeChat()) { return chat?.messages?.find((message) => message.pending); }
 function activeRunning() { return Boolean(pendingMessage()); }
@@ -649,19 +659,57 @@ function relativeTime(timestamp) {
   return `${Math.floor(seconds / 86400)}d`;
 }
 
+function renderProjects() {
+  const select = $("#projectSelect");
+  const selected = state.selected_project || state.draftCwd || state.defaultCwd;
+  const projects = Array.isArray(state.projects) ? [...state.projects] : [];
+  if (selected && !projects.some((project) => project.cwd === selected)) {
+    projects.unshift({ cwd: selected, name: projectFolderName(selected), session_count: 0 });
+  }
+  const signature = JSON.stringify(projects.map((project) =>
+    [project.cwd, project.name, Boolean(project.pinned), project.session_count]));
+  if (signature !== renderedProjectOptions) {
+    select.replaceChildren(...projects.map((project) => {
+      const option = document.createElement("option");
+      option.value = project.cwd;
+      option.textContent = `${project.pinned ? "★ " : ""}${project.name || projectFolderName(project.cwd)}${project.session_count ? ` · ${project.session_count}` : ""}`;
+      option.title = project.cwd;
+      return option;
+    }));
+    renderedProjectOptions = signature;
+  }
+  if (document.activeElement !== select || !select.value) select.value = selected;
+  select.title = selected;
+  select.disabled = !state.initialized || projectSwitchPending || projects.length === 0;
+  const project = projects.find((item) => item.cwd === selected);
+  const pin = $("#pinProject");
+  const pinned = Boolean(project?.pinned);
+  pin.textContent = pinned ? "★" : "☆";
+  pin.setAttribute("aria-pressed", String(pinned));
+  pin.setAttribute("aria-label", pinned ? "Unpin project" : "Pin project");
+  pin.title = pinned ? "Unpin project" : "Pin project";
+  pin.disabled = !state.initialized || !selected || projectPinPending;
+  $("#addProject").disabled = !state.initialized || projectSwitchPending;
+  const count = Number(project?.session_count) || visibleChats().length;
+  const summary = $("#projectSummary");
+  summary.textContent = `${count} ${count === 1 ? "session" : "sessions"} · ${selected || "Choose a folder"}`;
+  summary.title = selected;
+}
+
 function renderChats() {
   const list = $("#chatList");
-  list.innerHTML = visibleChats().map((chat) => `
+  const chats = visibleChats();
+  list.innerHTML = chats.length ? chats.map((chat) => `
     <button class="chat-item ${chat.id === state.activeId ? "active" : ""}" data-chat="${escapeHtml(chat.id)}">
       <div class="chat-item-title">${escapeHtml(chat.title)}</div>
       <div class="chat-item-meta"><span>${escapeHtml(providerLabel(chat.provider || chat.requested_provider))}</span><span>${chat.context_status !== "normal" ? '<i class="limit-dot" title="Near practical limit" aria-label="Near practical limit">!</i>' : ""}${relativeTime(chat.updated_at)}</span></div>
-    </button>`).join("");
+    </button>`).join("") : '<p class="project-empty">No sessions in this project yet.</p>';
   list.querySelectorAll("[data-chat]").forEach((button) => button.addEventListener("click", async () => {
     saveActiveDraft();
     const chatId = button.dataset.chat;
     state.activeId = chatId;
     try { sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, state.activeId); } catch (_error) {}
-    state.draftCwd = activeChat().cwd;
+    state.draftCwd = projectOfChat(activeChat());
     reportActiveSession();
     $("#prompt").value = cachedDraft(activeChat());
     resizePrompt();
@@ -1092,6 +1140,7 @@ function render() {
     );
   }
   document.body.dataset.windowProvider = state.windowProvider;
+  renderProjects();
   renderChats();
   renderProviders();
   renderMessages();
@@ -1106,7 +1155,7 @@ function render() {
     : harnessParentRunning
       ? "A saved task is running; you can continue here when it finishes"
       : DEFAULT_PROMPT_PLACEHOLDER;
-  $("#newWorkSession").disabled = !ready || createChatPending || selectionSavePending;
+  $("#newWorkSession").disabled = !ready || createChatPending || selectionSavePending || projectSwitchPending;
   const chatSupported = providerInfo(state.windowProvider).capabilities?.chat !== false;
   $("#openChat").disabled = !ready || !chatSupported;
   $("#openChat").title = chatSupported ? "Open Chat" : "This provider supports Work only; read-only Chat is not yet supported.";
@@ -1425,9 +1474,10 @@ async function createChat(requestedModel = "") {
     });
     state.chats.unshift(chat);
     state.activeId = chat.id;
+    state.selected_project = chat.project_cwd || chat.cwd;
     reportActiveSession();
     try { sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, chat.id); } catch (_error) {}
-    state.draftCwd = chat.cwd;
+    state.draftCwd = chat.project_cwd || chat.cwd;
     $("#prompt").value = "";
     resizePrompt();
     render();
@@ -1436,6 +1486,60 @@ async function createChat(requestedModel = "") {
   } finally {
     createChatPending = false;
     if (state.initialized) $("#newWorkSession").disabled = false;
+  }
+}
+
+async function selectProject(path, { newSession = false } = {}) {
+  if (projectSwitchPending || !path) return;
+  const previous = {
+    root: state.selected_project,
+    draftCwd: state.draftCwd,
+    activeId: state.activeId,
+    prompt: $("#prompt").value,
+  };
+  saveActiveDraft();
+  projectSwitchPending = true;
+  render();
+  try {
+    const selection = await api("/api/projects/select", {
+      method: "POST", body: JSON.stringify({ cwd: path }),
+    });
+    state.selected_project = selection.selected_project;
+    state.projects = selection.projects;
+    state.draftCwd = selection.selected_project;
+    const existing = newSession ? null : latestUsedChat(windowChats().filter((chat) =>
+      projectOfChat(chat) === selection.selected_project));
+    if (existing) {
+      state.activeId = existing.id;
+      try { sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, existing.id); } catch (_error) {}
+      $("#prompt").value = cachedDraft(existing);
+      resizePrompt();
+      reportActiveSession();
+      api(`/api/chats/${encodeURIComponent(existing.id)}/activate`, {
+        method: "POST", body: JSON.stringify({}),
+      }).catch(() => {});
+    } else {
+      state.activeId = null;
+      await createChat($("#modelSelect").value || preferredModel(state.windowProvider));
+    }
+    render();
+    setSidebarOpen(false);
+  } catch (error) {
+    state.selected_project = previous.root;
+    state.draftCwd = previous.draftCwd;
+    state.activeId = previous.activeId;
+    $("#prompt").value = previous.prompt;
+    resizePrompt();
+    if (previous.root && previous.root !== path) {
+      api("/api/projects/select", {
+        method: "POST", body: JSON.stringify({ cwd: previous.root }),
+      }).catch(() => {});
+    }
+    render();
+    throw error;
+  } finally {
+    projectSwitchPending = false;
+    render();
   }
 }
 
@@ -1545,19 +1649,25 @@ function resizePrompt() {
 function applyServerState(initial) {
   const activeId = state.activeId;
   const draftCwd = state.draftCwd;
+  const selectedProject = state.selected_project;
   const requestedProvider = activeChat()?.requested_provider;
   const requestedModel = activeChat()?.requested_model;
   Object.assign(state, initial);
   state.windowId = initial.window_id || state.windowId;
   state.windowProvider = initial.window_provider || state.windowProvider;
+  state.selected_project = initial.selected_project || selectedProject || "";
   const chats = visibleChats();
   chats.forEach((chat) => { chat.draft = cachedDraft(chat); });
   state.activeId = chats.some((chat) => chat.id === activeId)
-    ? activeId : chats[0]?.id || null;
+    ? activeId : latestUsedChat(chats)?.id || null;
   try {
     if (state.activeId) sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, state.activeId);
   } catch (_error) {}
-  state.draftCwd = draftCwd || activeChat()?.cwd || state.defaultCwd;
+  state.draftCwd = state.selected_project || draftCwd || projectOfChat(activeChat()) || state.defaultCwd;
+  if (state.activeId !== activeId) {
+    $("#prompt").value = activeChat() ? cachedDraft(activeChat()) : "";
+    resizePrompt();
+  }
   if (state.activeId === activeId && requestedProvider && !activeRunning()) {
     activeChat().requested_provider = requestedProvider;
     activeChat().requested_model = requestedModel || null;
@@ -1699,24 +1809,22 @@ async function init() {
     });
     await initializeNativeWindow();
     await refreshBrowserTheme(false).catch(() => {});
-    if (launchedFromApp) {
-      state.activeId = null;
-      state.draftCwd = fragmentCwd || state.defaultCwd;
-      if (fragmentPickProject) {
-        pendingLaunchModel = fragmentModel;
-        openProjectDialog(true);
-      } else {
-        await createChat(fragmentModel);
-      }
+    let savedActiveId = "";
+    try { savedActiveId = sessionStorage.getItem(ACTIVE_CHAT_SESSION_KEY) || ""; } catch (_error) {}
+    state.selected_project = fragmentCwd || initial.selected_project || state.defaultCwd;
+    state.draftCwd = state.selected_project;
+    const chats = visibleChats();
+    const explicitNewSession = launchedFromApp && Boolean(fragmentCwd || fragmentModel);
+    state.activeId = !explicitNewSession && chats.some((chat) => chat.id === savedActiveId)
+      ? savedActiveId : !explicitNewSession ? latestUsedChat(chats)?.id || null : null;
+    if (fragmentPickProject) {
+      pendingLaunchModel = fragmentModel;
+      openProjectDialog(true);
+    } else if (!state.activeId) {
+      await createChat(fragmentModel);
     } else {
-      let savedActiveId = "";
-      try { savedActiveId = sessionStorage.getItem(ACTIVE_CHAT_SESSION_KEY) || ""; } catch (_error) {}
-      const chats = visibleChats();
-      state.activeId = chats.some((chat) => chat.id === savedActiveId)
-        ? savedActiveId : latestUsedChat(chats)?.id || null;
-      state.draftCwd = activeChat()?.cwd || state.defaultCwd;
-      if (activeChat()) { $("#prompt").value = cachedDraft(activeChat()); resizePrompt(); }
-      if (!state.activeId) await createChat(fragmentModel);
+      $("#prompt").value = cachedDraft(activeChat());
+      resizePrompt();
     }
     state.initialized = true;
     reportActiveSession();
@@ -2028,9 +2136,14 @@ $("#refreshBudgets").addEventListener("click", async () => {
     button.removeAttribute("aria-busy");
   }
 });
-function openProjectDialog(needsChoice) {
-  $("#projectNotice").hidden = !needsChoice;
-  $("#projectInput").value = needsChoice ? "" : state.draftCwd;
+function openProjectDialog(needsChoice, createSession = false) {
+  projectDialogCreate = createSession;
+  const notice = $("#projectNotice");
+  notice.hidden = !needsChoice && !createSession;
+  notice.textContent = needsChoice
+    ? "This provider cannot work in the launching folder. Choose another folder before starting."
+    : "A project change starts a new session so this session keeps its original folder.";
+  $("#projectInput").value = needsChoice || createSession ? "" : state.draftCwd;
   updateProjectFolderName();
   $("#projectDialog").showModal();
 }
@@ -2074,11 +2187,32 @@ $("#browseProject").addEventListener("click", async () => {
   }
 });
 $("#projectButton").addEventListener("click", () => {
-  if (activeChat()?.messages?.length) {
-    toast("Start a new work session to change projects.");
-    return;
+  openProjectDialog(pendingLaunchModel !== null, Boolean(activeChat()?.messages?.length));
+});
+$("#addProject").addEventListener("click", () => openProjectDialog(false, true));
+$("#projectSelect").addEventListener("change", async (event) => {
+  const chosen = event.target.value;
+  try { await selectProject(chosen); }
+  catch (error) { toast(error.message); event.target.value = state.selected_project; }
+});
+$("#pinProject").addEventListener("click", async () => {
+  if (projectPinPending || !state.selected_project) return;
+  const project = state.projects.find((item) => item.cwd === state.selected_project);
+  projectPinPending = true;
+  renderProjects();
+  try {
+    const result = await api("/api/projects/pin", {
+      method: "POST",
+      body: JSON.stringify({ cwd: state.selected_project, pinned: !project?.pinned }),
+    });
+    state.projects = result.projects;
+    state.selected_project = result.selected_project;
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    projectPinPending = false;
+    renderProjects();
   }
-  openProjectDialog(pendingLaunchModel !== null);
 });
 $("#projectForm").addEventListener("submit", async (event) => {
   if (projectSubmitPending) {
@@ -2090,12 +2224,12 @@ $("#projectForm").addEventListener("submit", async (event) => {
   const chosen = $("#projectInput").value.trim();
   // A launch that is still waiting for a folder has no default worth falling
   // back to: the inherited one is precisely what this provider refused.
-  if (pendingLaunchModel !== null && !chosen) {
-    toast("Enter a project folder for this provider.");
+  if ((pendingLaunchModel !== null || projectDialogCreate) && !chosen) {
+    toast("Choose a project folder before starting a session.");
     return;
   }
-  state.draftCwd = chosen || state.defaultCwd;
   if (pendingLaunchModel !== null) {
+    state.draftCwd = chosen;
     const model = pendingLaunchModel;
     const saveButton = $("#saveProject");
     const launchDraft = $("#prompt").value;
@@ -2115,6 +2249,16 @@ $("#projectForm").addEventListener("submit", async (event) => {
     } finally {
       projectSubmitPending = false;
       saveButton.disabled = false;
+    }
+  } else {
+    projectSubmitPending = true;
+    try {
+      await selectProject(chosen || state.defaultCwd, { newSession: projectDialogCreate });
+    } catch (error) {
+      toast(error.message);
+      return;
+    } finally {
+      projectSubmitPending = false;
     }
   }
   $("#projectDialog").close();

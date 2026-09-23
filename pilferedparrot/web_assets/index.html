@@ -38,6 +38,17 @@
 
       <div class="sidebar-content">
         <div class="sidebar-group workspace-group">
+          <div class="project-switcher" aria-labelledby="projectSwitcherHeading">
+            <div class="project-switcher-heading">
+              <span id="projectSwitcherHeading">Project</span>
+              <div class="project-switcher-actions">
+                <button type="button" id="pinProject" aria-label="Pin project" aria-pressed="false" title="Pin project" disabled>☆</button>
+                <button type="button" id="addProject" aria-label="Choose another project" title="Choose another project" disabled>＋</button>
+              </div>
+            </div>
+            <select id="projectSelect" aria-label="Selected project" disabled></select>
+            <span id="projectSummary" class="project-summary"></span>
+          </div>
           <nav class="sidebar-actions" aria-label="Workspace actions">
             <button class="new-work-session" id="newWorkSession" disabled
                     title="Start a new work session"
