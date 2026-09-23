@@ -56,8 +56,9 @@ def _safe(value: Any) -> Any:
 class ACPClient:
     """One agent process with concurrent requests and ordered update callbacks.
 
-    ``on_update(session_id, update)`` must be thread-safe. It runs on one
-    dispatcher thread, in wire order. ``on_permission(params)`` returns an
+    ``on_update(session_id, update)`` runs on one dispatcher thread, in wire
+    order. If it fails, the client fails pending work and stops the agent.
+    ``on_permission(params)`` returns an
     optionId from the offered options; without it, the client rejects. A
     callback error also rejects. Client fs/terminal methods are not advertised
     or served.
@@ -84,8 +85,10 @@ class ACPClient:
         )
         self._write_lock = threading.Lock()
         self._state_lock = threading.RLock()
+        self._stop_lock = threading.Lock()
         self._stderr_lock = threading.Lock()
         self._pending: dict[int, Future[Any]] = {}
+        self._pending_methods: dict[int, str] = {}
         self._permissions: dict[int | str, str] = {}
         self._next_id = 0
         self._failure: ACPClosed | None = None
@@ -98,7 +101,7 @@ class ACPClient:
         self._on_permission = on_permission
         self._capabilities: dict[str, Any] = {}
         self._initialized = False
-        self._updates: queue.Queue[tuple[str, dict[str, Any]] | None] = queue.Queue(maxsize=2048)
+        self._updates: queue.Queue[tuple[Any, ...] | None] = queue.Queue(maxsize=2048)
         self._permission_slots = threading.BoundedSemaphore(16)
         self._reader = threading.Thread(target=self._read_stdout, daemon=True, name="ppi-acp-reader")
         self._stderr_reader = threading.Thread(target=self._read_stderr, daemon=True,
@@ -140,6 +143,7 @@ class ACPClient:
                 self._failure = ACPClosed(detail)
             pending = list(self._pending.values())
             self._pending.clear()
+            self._pending_methods.clear()
         for future in pending:
             if not future.done():
                 try:
@@ -161,9 +165,7 @@ class ACPClient:
                 self._fail("ACP agent stdin closed")
                 raise ACPClosed("ACP agent stdin closed") from error
 
-    def request(self, method: str, params: dict[str, Any], *, timeout: float = 120) -> dict[str, Any]:
-        if timeout <= 0:
-            raise ValueError("timeout must be positive")
+    def _start_request(self, method: str, params: dict[str, Any]) -> tuple[int, Future[Any]]:
         with self._state_lock:
             if self._closed or self._failure is not None:
                 raise self._failure or ACPClosed("ACP client is closed")
@@ -171,14 +173,29 @@ class ACPClient:
             request_id = self._next_id
             future: Future[Any] = Future()
             self._pending[request_id] = future
+            self._pending_methods[request_id] = method
         try:
             self._send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+        except Exception:
+            self._forget_request(request_id)
+            raise
+        return request_id, future
+
+    def _forget_request(self, request_id: int) -> None:
+        with self._state_lock:
+            self._pending.pop(request_id, None)
+            self._pending_methods.pop(request_id, None)
+
+    def request(self, method: str, params: dict[str, Any], *, timeout: float = 120) -> dict[str, Any]:
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
+        request_id, future = self._start_request(method, params)
+        try:
             result = future.result(timeout=timeout)
         except FutureTimeout as error:
             raise TimeoutError(f"ACP {method} timed out") from error
         finally:
-            with self._state_lock:
-                self._pending.pop(request_id, None)
+            self._forget_request(request_id)
         if not isinstance(result, dict):
             raise ACPError(f"ACP {method} returned a non-object result")
         return result
@@ -193,21 +210,24 @@ class ACPClient:
                     return
                 if len(line) > self._max_line_chars or not line.endswith("\n"):
                     self._fail("ACP agent sent an oversized or incomplete JSON-RPC line")
-                    self._proc.terminate()
+                    self._stop_process()
                     return
                 try:
                     message = json.loads(line)
                 except json.JSONDecodeError:
                     self._fail("ACP agent sent invalid JSON-RPC")
-                    self._proc.terminate()
+                    self._stop_process()
                     return
                 if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
                     self._fail("ACP agent sent invalid JSON-RPC")
-                    self._proc.terminate()
+                    self._stop_process()
                     return
                 self._ingest(message)
-        except (OSError, ValueError) as error:
-            self._fail(f"ACP agent stdout failed: {type(error).__name__}")
+        except Exception as error:
+            # Never include the exception text: an agent may embed account data
+            # in malformed payloads or callback-path errors.
+            self._fail(f"ACP ingress failed: {type(error).__name__}")
+            self._stop_process()
 
     def _ingest(self, message: dict[str, Any]) -> None:
         method = message.get("method")
@@ -224,10 +244,11 @@ class ACPClient:
                 session_id = params.get("sessionId")
                 if isinstance(session_id, str) and self._on_update is not None:
                     try:
-                        self._updates.put((str(_safe(session_id)), _safe(update)), timeout=1)
+                        self._updates.put(("update", str(_safe(session_id)), _safe(update)),
+                                          timeout=1)
                     except queue.Full:
                         self._fail("ACP update consumer fell behind")
-                        self._proc.terminate()
+                        self._stop_process()
                 return
             if "id" in message:
                 request_id = message["id"]
@@ -256,17 +277,31 @@ class ACPClient:
             return
         with self._state_lock:
             future = self._pending.get(request_id)
+            pending_method = self._pending_methods.get(request_id)
         if future is None or future.done():
             return
-        if "error" in message:
-            error = _safe(message["error"])
+        safe_message = _safe(message)
+        if pending_method == "session/prompt" and self._on_update is not None:
             try:
-                future.set_exception(ACPError(f"ACP request failed: {error}"))
+                self._updates.put(("complete", future, safe_message), timeout=1)
+            except queue.Full:
+                self._fail("ACP update consumer fell behind")
+                self._stop_process()
+            return
+        self._finish_future(future, safe_message)
+
+    @staticmethod
+    def _finish_future(future: Future[Any], message: dict[str, Any]) -> None:
+        if future.done():
+            return
+        if "error" in message:
+            try:
+                future.set_exception(ACPError(f"ACP request failed: {message['error']}"))
             except InvalidStateError:
                 pass
         else:
             try:
-                future.set_result(_safe(message.get("result")))
+                future.set_result(message.get("result"))
             except InvalidStateError:
                 pass
 
@@ -276,12 +311,17 @@ class ACPClient:
             try:
                 if item is None:
                     return
-                if self._on_update is not None:
+                if item[0] == "complete":
+                    self._finish_future(item[1], item[2])
+                elif item[0] == "update" and self._on_update is not None:
                     try:
-                        self._on_update(*item)
-                    except Exception:
-                        # An observer cannot break protocol response handling.
-                        pass
+                        self._on_update(item[1], item[2])
+                    except Exception as error:
+                        self._fail(f"ACP update callback failed: {type(error).__name__}")
+                        self._stop_process()
+            except Exception as error:
+                self._fail(f"ACP update dispatch failed: {type(error).__name__}")
+                self._stop_process()
             finally:
                 self._updates.task_done()
 
@@ -390,17 +430,35 @@ class ACPClient:
                             timeout=timeout)
 
     def prompt(self, session_id: str, content: str | list[dict[str, Any]],
-               *, timeout: float = 600) -> dict[str, Any]:
+               *, timeout: float = 600, cancel_grace: float = 2.0) -> dict[str, Any]:
         self._require_initialized()
         blocks = [{"type": "text", "text": content}] if isinstance(content, str) else content
         if not isinstance(blocks, list) or not blocks:
             raise ValueError("prompt needs at least one content block")
+        if timeout <= 0 or not 0 < cancel_grace <= 30:
+            raise ValueError("prompt timeout and cancel grace must be positive and bounded")
+        request_id, future = self._start_request(
+            "session/prompt", {"sessionId": session_id, "prompt": blocks},
+        )
         try:
-            result = self.request("session/prompt", {"sessionId": session_id, "prompt": blocks},
-                                  timeout=timeout)
-        except TimeoutError:
-            self.cancel(session_id)
-            raise
+            result = future.result(timeout=timeout)
+        except FutureTimeout as error:
+            try:
+                self.cancel(session_id)
+            except ACPClosed:
+                pass
+            try:
+                future.result(timeout=cancel_grace)
+            except FutureTimeout:
+                self._fail("ACP agent ignored prompt cancellation")
+                self._stop_process()
+            except ACPError:
+                raise
+            raise TimeoutError("ACP session/prompt timed out") from error
+        finally:
+            self._forget_request(request_id)
+        if not isinstance(result, dict):
+            raise ACPError("ACP session/prompt returned a non-object result")
         if not isinstance(result.get("stopReason"), str):
             raise ACPError("ACP session/prompt omitted stopReason")
         return result
@@ -440,34 +498,35 @@ class ACPClient:
         self._dispatcher.join(timeout=2)
 
     def _stop_process(self) -> None:
-        if self._proc.poll() is not None:
-            return
-        pid = self._proc.pid
-        if not isinstance(pid, int) or pid <= 1 or pid == os.getpid():
-            return
-        if sys.platform == "win32":
-            try:
-                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               timeout=2, check=False)
-            except (OSError, subprocess.TimeoutExpired):
-                self._proc.terminate()
-        else:
-            try:
-                os.killpg(pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-        try:
-            self._proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
+        with self._stop_lock:
+            if self._proc.poll() is not None:
+                return
+            pid = self._proc.pid
+            if not isinstance(pid, int) or pid <= 1 or pid == os.getpid():
+                return
             if sys.platform == "win32":
-                self._proc.kill()
+                try:
+                    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   timeout=2, check=False)
+                except (OSError, subprocess.TimeoutExpired):
+                    self._proc.terminate()
             else:
                 try:
-                    os.killpg(pid, signal.SIGKILL)
+                    os.killpg(pid, signal.SIGTERM)
                 except ProcessLookupError:
+                    pass
+            try:
+                self._proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                if sys.platform == "win32":
                     self._proc.kill()
-            self._proc.wait(timeout=2)
+                else:
+                    try:
+                        os.killpg(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        self._proc.kill()
+                self._proc.wait(timeout=2)
 
     def __enter__(self) -> ACPClient:
         return self

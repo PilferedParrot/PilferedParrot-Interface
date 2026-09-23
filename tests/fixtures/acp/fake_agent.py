@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -13,6 +14,7 @@ record = root / "fake-agent-requests.jsonl"
 session_file = root / "fake-agent-session.json"
 pending_prompt = None
 pending_permission = None
+pending_content = None
 session_id = "fake-session"
 sentinel = os.environ.get("FAKE_ACP_SECRET", "private.person@example.test")
 
@@ -72,13 +74,24 @@ for raw in sys.stdin:
             send({"id": message["id"], "error": {"code": -32000,
                   "message": f"agent failed for {sentinel}", "accountEmail": sentinel}})
             continue
+        if content == "invalid-json":
+            sys.stdout.write("{invalid-json}\n")
+            sys.stdout.flush()
+            time.sleep(60)
+            continue
+        if content == "oversized-line":
+            sys.stdout.write("x" * 5000 + "\n")
+            sys.stdout.flush()
+            time.sleep(60)
+            continue
         pending_prompt = message
+        pending_content = content
         update({"sessionUpdate": "_auth/status_update", "accountEmail": sentinel})
         send({"method": "_auth/status_update", "params": {"email": sentinel}})
         update({"sessionUpdate": "agent_message_chunk",
                 "content": {"type": "text", "text": f"working on {content}"},
                 "account": {"email": sentinel}})
-        if content == "wait-cancel":
+        if content in {"wait-cancel", "ignore-cancel"}:
             continue
         pending_permission = "permission-1"
         permission = {"sessionId": session_id,
@@ -92,7 +105,7 @@ for raw in sys.stdin:
         send({"id": pending_permission, "method": "session/request_permission",
               "params": permission})
     elif method == "session/cancel":
-        if pending_prompt is not None:
+        if pending_prompt is not None and pending_content != "ignore-cancel":
             result(pending_prompt, {"stopReason": "cancelled"})
             pending_prompt = None
     elif pending_permission is not None and message.get("id") == pending_permission:

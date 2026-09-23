@@ -31,6 +31,12 @@ def transcript(root: Path) -> list[dict]:
 
 
 class ACPClientTests(unittest.TestCase):
+    def assert_agent_stopped(self, client: ACPClient) -> None:
+        deadline = time.monotonic() + 2
+        while client._proc.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertIsNotNone(client._proc.poll())
+
     def test_contract_shapes_default_deny_and_identity_filter(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -113,6 +119,62 @@ class ACPClientTests(unittest.TestCase):
                 with self.assertRaises(ACPClosed):
                     client.prompt("fake-session", "exit", timeout=10)
                 self.assertLess(time.monotonic() - start, 2)
+
+    def test_update_callback_failure_fails_prompt_and_stops_agent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            def broken_callback(_session, _update):
+                # The fake agent can finish the turn before this fails; the
+                # completion barrier must still prevent a successful prompt.
+                time.sleep(0.05)
+                raise RuntimeError(f"callback could not persist event: {SENTINEL}")
+            with client_for(root, on_update=broken_callback) as client:
+                client.initialize()
+                client.new_session(root)
+                with self.assertRaisesRegex(ACPClosed, "ACP update callback failed") as captured:
+                    client.prompt("fake-session", "write a file", timeout=2)
+                self.assertNotIn(SENTINEL, str(captured.exception))
+                self.assert_agent_stopped(client)
+            self.assertFalse((root / "allowed.txt").exists())
+
+    def test_ingress_exception_fails_request_without_payload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with client_for(root) as client:
+                client.initialize()
+                def broken_ingress(_message):
+                    raise ACPClosed("sensitive payload")
+                client._ingest = broken_ingress
+                with self.assertRaises(ACPClosed) as captured:
+                    client.new_session(root, timeout=2)
+                self.assertNotIn("sensitive payload", str(captured.exception))
+                self.assert_agent_stopped(client)
+
+    def test_invalid_and_oversized_lines_stop_live_agent(self):
+        for content in ("invalid-json", "oversized-line"):
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with client_for(root, max_line_chars=1024) as client:
+                    client.initialize()
+                    client.new_session(root)
+                    with self.assertRaises(ACPClosed):
+                        client.prompt("fake-session", content, timeout=2)
+                    self.assert_agent_stopped(client)
+
+    def test_prompt_timeout_forces_agent_that_ignores_cancel_to_stop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with client_for(root) as client:
+                client.initialize()
+                client.new_session(root)
+                start = time.monotonic()
+                with self.assertRaises(TimeoutError):
+                    client.prompt("fake-session", "ignore-cancel", timeout=0.05,
+                                  cancel_grace=0.05)
+                self.assertLess(time.monotonic() - start, 2)
+                self.assert_agent_stopped(client)
+            self.assertTrue(any(message.get("method") == "session/cancel"
+                                for message in transcript(root)))
 
     def test_malformed_permission_defaults_to_reject_and_close_reaps_agent(self):
         with tempfile.TemporaryDirectory() as directory:
