@@ -29,7 +29,7 @@ existing model list and does not launch an ACP probe.
 
 When an ACP agent advertises modes, Work shows a mode selector. A choice is saved
 with that Work session and reapplied before each turn; the agent must advertise
-and confirm it on the actual session. **Agent default** sends no explicit mode,
+and confirm it on the actual session. **No override** sends no explicit mode,
 leaving the ACP session and provider configuration unchanged. Modes are agent
 settings and do not grant or change PPI permission decisions.
 

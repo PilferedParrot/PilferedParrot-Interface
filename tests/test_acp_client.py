@@ -460,7 +460,7 @@ class ACPClientTests(unittest.TestCase):
                 with ThreadPoolExecutor(max_workers=2) as executor:
                     mode = executor.submit(client.set_mode, session, "plan")
                     model = executor.submit(client.set_config_option, session, "model", "sol")
-                    self.assertEqual(mode.result(timeout=2), {})
+                    self.assertEqual(mode.result(timeout=2), {"currentModeId": "plan"})
                     self.assertEqual(model.result(timeout=2)["configOptions"][0]["currentValue"], "sol")
                 self.assertEqual(client.prompt(session, "resumed")["stopReason"], "end_turn")
                 client.load_session(session, root)

@@ -498,7 +498,8 @@ function providerModelFeedback(provider, message) {
     node.textContent = message;
     node.hidden = !message;
   }
-  if (!$("#providerDialog").open && message !== "Checking models…") toast(message);
+  if (!$("#providerDialog").open && message !== "Checking models…"
+      && message !== "Models refreshed.") toast(message);
 }
 
 function modelRefreshFailure(provider) {
@@ -714,7 +715,7 @@ function renderACPModeSelect(provider, mode, disabled) {
   const select = $("#acpModeSelect");
   if (!isACPProvider(provider)) {
     control.hidden = true;
-    select.innerHTML = '<option value="">Agent default</option>';
+    select.innerHTML = '<option value="">No override</option>';
     select.disabled = true;
     return;
   }
@@ -724,13 +725,13 @@ function renderACPModeSelect(provider, mode, disabled) {
     item && typeof item.value === "string" && item.value.length <= 128) : [];
   const savedUnavailable = savedMode && !choices.some((item) => item.value === savedMode);
   control.hidden = choices.length === 0 && !savedUnavailable;
-  select.innerHTML = '<option value="">Agent default</option>' + choices.map((item) =>
+  select.innerHTML = '<option value="">No override</option>' + choices.map((item) =>
     `<option value="${escapeHtml(item.value)}" title="${escapeHtml(item.description || "")}">${escapeHtml(item.label || item.value)}</option>`).join("")
     + (savedUnavailable ? `<option value="${escapeHtml(savedMode)}" disabled>${escapeHtml(savedMode)} · unavailable</option>` : "");
   select.value = savedMode && (savedUnavailable || choices.some((item) => item.value === savedMode))
     ? savedMode : "";
   select.disabled = disabled || (choices.length === 0 && !savedUnavailable);
-  select.title = "Applies to each turn in this Work session. Agent default leaves the configured mode unchanged. Permissions still require your approval.";
+  select.title = "Applies to each turn in this Work session. No override leaves the agent or configured mode unchanged. Permissions still require your approval.";
 }
 function renderContextSummary(usage, status) {
   const summary = $("#contextSummary");
