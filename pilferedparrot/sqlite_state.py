@@ -125,22 +125,66 @@ def _tree_hash(document: dict[str, Any]) -> str:
     return hashlib.sha256(_canonical_bytes(document)).hexdigest()
 
 
-def _is_link_or_reparse(path: Path) -> bool:
-    """Reject path redirection, including Windows directory junctions."""
-    info = path.lstat()
-    return stat.S_ISLNK(info.st_mode) or bool(
-        getattr(info, "st_file_attributes", 0)
-        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    )
+def _open_export_parent(parent: Path) -> int:
+    """Walk from the root with directory descriptors, refusing every symlink."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    descriptor = os.open(parent.anchor, flags)
+    try:
+        for component in parent.parts[1:]:
+            next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+        info = os.fstat(descriptor)
+        if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
+            raise StateStoreError("export directory must be owner-only")
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
 
 
-def _export_parent(destination: Path) -> Path:
-    """Check every path component before opening the export directory."""
-    parent = destination.parent
-    for component in (*reversed(parent.parents), parent):
-        if _is_link_or_reparse(component) or not component.is_dir():
-            raise StateStoreError("export directory must be a real directory")
-    return parent
+def _same_export_parent(parent: Path, descriptor: int) -> bool:
+    fresh = _open_export_parent(parent)
+    try:
+        original = os.fstat(descriptor)
+        named = os.fstat(fresh)
+        return (original.st_dev, original.st_ino) == (named.st_dev, named.st_ino)
+    finally:
+        os.close(fresh)
+
+
+def _same_file_at(directory_fd: int, name: str, descriptor: int) -> bool:
+    try:
+        named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    opened = os.fstat(descriptor)
+    return stat.S_ISREG(named.st_mode) and (
+        named.st_dev, named.st_ino
+    ) == (opened.st_dev, opened.st_ino)
+
+
+def _verify_export_at(directory_fd: int, name: str, stage_fd: int,
+                      expected_digest: str, expected_size: int) -> None:
+    """Check the published name and bytes against the still-open stage inode."""
+    flags = os.O_RDONLY | os.O_NOFOLLOW
+    with os.fdopen(os.open(name, flags, dir_fd=directory_fd), "rb") as handle:
+        before = os.fstat(handle.fileno())
+        stage = os.fstat(stage_fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid() \
+                or stat.S_IMODE(before.st_mode) != 0o600 \
+                or (before.st_dev, before.st_ino) != (stage.st_dev, stage.st_ino) \
+                or before.st_size != expected_size:
+            raise StateStoreError("export destination changed during publication")
+        digest = hashlib.sha256()
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+        after = os.fstat(handle.fileno())
+    if digest.hexdigest() != expected_digest or (
+        before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns
+    ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) \
+            or not _same_file_at(directory_fd, name, stage_fd):
+        raise StateStoreError("export destination changed during publication")
 
 
 def _sanitize_event(value: Any) -> Any:
@@ -502,51 +546,63 @@ class SQLiteStateStore:
                 raise StateStoreError("state document tree hash does not match")
             stage_name = f".{destination.name}.export-{uuid.uuid4().hex}.tmp"
             directory_fd: int | None = None
+            stage_fd: int | None = None
             stage_created = False
             published = False
             try:
-                parent = _export_parent(destination)
+                parent = destination.parent
                 database = Path(os.path.abspath(os.fspath(self.path)))
                 protected = (database, self._source_path,
                              *(Path(str(database) + suffix) for suffix in ("-wal", "-shm")))
-                if destination in protected or os.path.lexists(destination):
+                if destination in protected:
                     raise StateStoreError("export destination must be a new path")
-                directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-                opened = os.fstat(directory_fd)
-                named = parent.stat()
-                if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
-                    raise StateStoreError("export directory changed")
-                descriptor = os.open(
-                    stage_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                directory_fd = _open_export_parent(parent)
+                try:
+                    os.stat(destination.name, dir_fd=directory_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise StateStoreError("export destination must be a new path")
+                stage_fd = os.open(
+                    stage_name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                     0o600, dir_fd=directory_fd,
                 )
                 stage_created = True
-                with os.fdopen(descriptor, "wb") as handle:
+                with os.fdopen(os.dup(stage_fd), "wb") as handle:
                     handle.write(raw)
                     handle.flush()
-                    os.fsync(handle.fileno())
+                os.fsync(stage_fd)
+                if not _same_file_at(directory_fd, stage_name, stage_fd) \
+                        or not _same_export_parent(parent, directory_fd):
+                    raise StateStoreError("export path changed before publication")
                 os.link(stage_name, destination.name, src_dir_fd=directory_fd,
                         dst_dir_fd=directory_fd, follow_symlinks=False)
                 published = True
+                _verify_export_at(directory_fd, destination.name, stage_fd, digest, len(raw))
+                if not _same_file_at(directory_fd, stage_name, stage_fd):
+                    raise StateStoreError("export staging path changed during publication")
                 os.unlink(stage_name, dir_fd=directory_fd)
                 stage_created = False
-                if directory_fd is not None:
-                    os.fsync(directory_fd)
+                os.fsync(directory_fd)
+                if not _same_export_parent(parent, directory_fd):
+                    raise StateStoreError("export directory changed during publication")
+                _verify_export_at(directory_fd, destination.name, stage_fd, digest, len(raw))
                 return ExportResult(snapshot.revision, digest, snapshot.tree_hash)
             except OSError:
                 if published:
-                    try:
-                        os.unlink(destination.name, dir_fd=directory_fd)
-                        os.fsync(directory_fd)
-                    except OSError:
-                        pass
+                    raise StateStoreError(
+                        "export publication could not be confirmed; destination may exist"
+                    ) from None
                 raise StateStoreError("could not safely export state document") from None
             finally:
-                if stage_created:
+                if stage_created and directory_fd is not None and stage_fd is not None:
                     try:
-                        os.unlink(stage_name, dir_fd=directory_fd)
+                        if _same_file_at(directory_fd, stage_name, stage_fd):
+                            os.unlink(stage_name, dir_fd=directory_fd)
                     except OSError:
                         pass
+                if stage_fd is not None:
+                    os.close(stage_fd)
                 if directory_fd is not None:
                     os.close(directory_fd)
 

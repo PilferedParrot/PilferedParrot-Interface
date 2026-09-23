@@ -210,6 +210,11 @@ class SQLiteStateTests(unittest.TestCase):
                     with self.assertRaises(StateStoreError):
                         store.export_json(destination)
                 self.assertEqual(existing.read_text(encoding="utf-8"), "keep")
+                public = root / "public"
+                public.mkdir(mode=0o755)
+                public.chmod(0o755)
+                with self.assertRaises(StateStoreError):
+                    store.export_json(public / "new.json")
                 alias = root / "alias.json"
                 alias.symlink_to(source)
                 redirected = root / "redirected"
@@ -240,6 +245,72 @@ class SQLiteStateTests(unittest.TestCase):
                 self.assertEqual(list(root.glob(f".{destination.name}.export-*.tmp")), [])
                 self.assertEqual(store.load(), snapshot)
             self.assertEqual(source.read_bytes(), RAW)
+
+    @unittest.skipUnless(os.name == "posix", "private export requires POSIX file permissions")
+    def test_export_ancestor_swap_does_not_redirect_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, database = paths(root)
+            parent = root / "private"
+            parent.mkdir(mode=0o700)
+            redirected = root / "redirected"
+            redirected.mkdir(mode=0o700)
+            destination = parent / "export.json"
+            original = sqlite_state._same_export_parent
+            with SQLiteStateStore(database) as store:
+                store.import_json(source)
+                def swap_ancestor(path, descriptor):
+                    parent.rename(root / "moved-private")
+                    parent.symlink_to(redirected, target_is_directory=True)
+                    return original(path, descriptor)
+                with patch.object(sqlite_state, "_same_export_parent",
+                                  side_effect=swap_ancestor):
+                    with self.assertRaises(StateStoreError):
+                        store.export_json(destination)
+            self.assertFalse((redirected / "export.json").exists())
+            self.assertFalse((root / "moved-private" / "export.json").exists())
+
+    @unittest.skipUnless(os.name == "posix", "private export requires POSIX file permissions")
+    def test_export_rejects_stage_replacement_at_link(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, database = paths(root)
+            destination = root / "export.json"
+            original_link = sqlite_state.os.link
+            with SQLiteStateStore(database) as store:
+                store.import_json(source)
+                def swap_stage(src, dst, **kwargs):
+                    stage = next(root.glob(".export.json.export-*.tmp"))
+                    stage.rename(root / "saved-stage")
+                    stage.write_bytes(b"different private content")
+                    return original_link(src, dst, **kwargs)
+                with patch.object(sqlite_state.os, "link", side_effect=swap_stage):
+                    with self.assertRaises(StateStoreError):
+                        store.export_json(destination)
+            self.assertEqual(destination.read_bytes(), b"different private content")
+            self.assertEqual(source.read_bytes(), RAW)
+
+    @unittest.skipUnless(os.name == "posix", "private export requires POSIX file permissions")
+    def test_export_fsync_failure_preserves_other_writers_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, database = paths(root)
+            destination = root / "export.json"
+            original_fsync = sqlite_state.os.fsync
+            with SQLiteStateStore(database) as store:
+                store.import_json(source)
+                def replace_then_fail(descriptor):
+                    if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                        replacement = root / "other.json"
+                        replacement.write_bytes(b"another writer")
+                        os.replace(replacement, destination)
+                        raise OSError("directory fsync failed")
+                    return original_fsync(descriptor)
+                with patch.object(sqlite_state.os, "fsync", side_effect=replace_then_fail):
+                    with self.assertRaises(StateStoreError) as caught:
+                        store.export_json(destination)
+                self.assertIn("may exist", str(caught.exception))
+            self.assertEqual(destination.read_bytes(), b"another writer")
 
     def test_event_and_state_fault_roll_back_together_across_reopen(self):
         with tempfile.TemporaryDirectory() as directory:
