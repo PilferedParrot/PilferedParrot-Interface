@@ -24,6 +24,7 @@
     "model.py": "edea6328938ecb59d3bc884cccd65d2bab23a04cb5070f36270a0c83b1a9e244",
     "native_window.py": "a43761010b668216c0b5b34a20abdabf35b32c38be496c712f2b021ce200d01a",
     "observed_turn.py": "a855e049a957dcb35fdb4b82a27e6caea49779e3be61dd00ed5aab747673b024",
+    "private_workspace.py": "2bfc09cb77b69294813fd8cce3a3e646a5624b1b7da797550ff4eee01f141129",
     "processes.py": "280c767b40fc8d838ffa49983aba4350d16ba772b8c105bdd278e9f214d172fb",
     "provider_updates.py": "7c48a73be9a73625708b0d652b112ab13e5f4f02ceefdafe46d1657a9e675cc7",
     "qwen.py": "c11db2e86bcf23457d6efe2f6e521fd30dd69e822af47b3955afd24fbe052033",
