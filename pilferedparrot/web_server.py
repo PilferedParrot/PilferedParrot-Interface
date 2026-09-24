@@ -1061,6 +1061,7 @@ def serve(
     http_server: Callable[..., Any] = BrowserHTTPServer,
     ipv6_http_server: Callable[..., Any] = IPv6ThreadingHTTPServer,
     timer_factory: Callable[..., Any] = threading.Timer,
+    require_fresh: bool = False,
 ) -> int:
     web = config["web"]
     host, port = str(web["host"]), int(web["port"])
@@ -1073,6 +1074,9 @@ def serve(
         web.get("open_browser", True) if open_browser is None else open_browser
     )
     current = status(url) if port != 0 else "unavailable"
+
+    if require_fresh and current != "unavailable":
+        raise RuntimeError("SQLite start requires the previous app to be stopped")
 
     def attach() -> int:
         print(f"PilferedParrot is already running at {url}")
@@ -1100,6 +1104,9 @@ def serve(
             url = f"http://{web_authority(host, server.server_address[1])}"
     except OSError as error:
         current = status(url)
+        if require_fresh:
+            app.shutdown()
+            raise RuntimeError("SQLite start requires an unused app port") from error
         if error.errno != errno.EADDRINUSE or current == "other":
             raise
         if current == "stale":

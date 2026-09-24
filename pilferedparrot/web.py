@@ -3453,16 +3453,26 @@ def make_handler(app: PilferedParrotApp) -> type[Any]:
     )
 
 
-def serve(config: dict[str, Any], cwd: Path, *, open_browser: bool | None = None) -> int:
+def serve(config: dict[str, Any], cwd: Path, *, open_browser: bool | None = None,
+          sqlite_state_path: Path | None = None) -> int:
     """Wire the composition root into the transport-owned server lifecycle."""
+    if sqlite_state_path is not None:
+        if os.name != "posix":
+            raise RuntimeError("SQLite cutover needs a supported private rollback export")
+        from .sqlite_cutover import validate_paths
+        validate_paths(chat_store_path(config), sqlite_state_path)
     return _server.serve(
-        config, cwd, open_browser=open_browser, create_app=PilferedParrotApp,
+        config, cwd, open_browser=open_browser,
+        create_app=(lambda app_config, app_cwd: PilferedParrotApp(
+            app_config, app_cwd, sqlite_state_path=sqlite_state_path,
+        )),
         make_handler=make_handler,
         read_capability=_pilferedparrot_dashboard_capability,
         browser_url=_browser_url, browser_open=webbrowser.open,
         status=_pilferedparrot_status, terminate=_terminate_stale_pilferedparrot,
         http_server=ThreadingHTTPServer, ipv6_http_server=_IPv6ThreadingHTTPServer,
         timer_factory=threading.Timer,
+        require_fresh=sqlite_state_path is not None,
     )
 
 
@@ -3473,11 +3483,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config")
     parser.add_argument("--cwd", default=str(Path.cwd()))
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--sqlite-state", type=Path,
+                        help="explicit POSIX SQLite authority; requires a stopped app")
     args = parser.parse_args(argv)
     cwd = Path(args.cwd).expanduser().resolve()
     if not cwd.is_dir():
         raise SystemExit(f"not a directory: {cwd}")
-    return serve(load_config(args.config), cwd, open_browser=not args.no_browser)
+    return serve(load_config(args.config), cwd, open_browser=not args.no_browser,
+                 sqlite_state_path=args.sqlite_state)
 
 
 if __name__ == "__main__":

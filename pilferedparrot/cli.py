@@ -189,6 +189,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
     gui = sub.add_parser("gui", help="start the browser interface")
     gui.add_argument("--no-browser", action="store_true")
+    gui.add_argument("--sqlite-state", type=Path,
+                     help="explicit POSIX SQLite authority; requires a stopped app")
     gui.add_argument("--window-closed", metavar="URL", help=argparse.SUPPRESS)
     sub.add_parser("repl", help="start the terminal interface")
     sub.add_parser("budget", help="show local status and Codex included usage")
@@ -232,7 +234,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command in (None, "gui"):
         from .web import serve
         no_browser = bool(getattr(args, "no_browser", False))
-        return serve(config, cwd, open_browser=not no_browser)
+        return serve(config, cwd, open_browser=not no_browser,
+                     sqlite_state_path=getattr(args, "sqlite_state", None))
     if args.command == "repl":
         return repl(config, cwd)
     if args.command == "budget":
