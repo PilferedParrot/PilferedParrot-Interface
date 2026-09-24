@@ -6,7 +6,7 @@ and an untrusted launcher environment could run code before Bubblewrap started. 
 closes those paths and restricts the worker's host access. The preparation primitive has no
 provider or UI call path; this patch does not enable isolated provider sessions, workspace
 publication, discard, or rewind. The [0.8.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.8.1)
-lists the verified assets and checksums. Version 0.8.0 remains available for rollback.
+lists the verified assets and checksums. Earlier release archives remain immutable.
 
 Finish active jobs before closing the old app. Download the new source archive or unsigned
 Windows preview ZIP, verify it against `SHA256SUMS`, and update the launcher or shortcut to the

@@ -1,6 +1,6 @@
 {
   "files": {
-    "__init__.py": "85c0c25e744f171413ef3e4d9eec1621e56f3c42b468e2117ea13596c65c3e08",
+    "__init__.py": "adb2a09294f423dcd699f4008ed4e7ab155e7d85f8d53cf72af328180be97521",
     "__main__.py": "b49142cacf810926320a87e16cf39101d3573b3487d17cbb750b60330fb54c89",
     "acp_adapters.py": "9650f103cb688414e96bf0216d4f1713699c5aae044242507142bff66c455a0e",
     "acp_catalog.py": "0c2a5028765dd685c91e9f4b6a7ce6ec40fc67d6d61858e891cefdc98859bd1e",
@@ -24,7 +24,7 @@
     "model.py": "edea6328938ecb59d3bc884cccd65d2bab23a04cb5070f36270a0c83b1a9e244",
     "native_window.py": "a43761010b668216c0b5b34a20abdabf35b32c38be496c712f2b021ce200d01a",
     "observed_turn.py": "a855e049a957dcb35fdb4b82a27e6caea49779e3be61dd00ed5aab747673b024",
-    "private_workspace.py": "56297465eb6063b5ecc34ea42fe7a15cf7cbfad1e8ae91d09a223560443bca8b",
+    "private_workspace.py": "e77c92d6fa85fd8425a5bdc4b7edb77183308890f3055e6ca8149ef8b091f0dc",
     "processes.py": "280c767b40fc8d838ffa49983aba4350d16ba772b8c105bdd278e9f214d172fb",
     "provider_updates.py": "7c48a73be9a73625708b0d652b112ab13e5f4f02ceefdafe46d1657a9e675cc7",
     "qwen.py": "c11db2e86bcf23457d6efe2f6e521fd30dd69e822af47b3955afd24fbe052033",
@@ -65,5 +65,5 @@
     "windows.py": "49a354ca0ccfaa7d7a24f4222551c3f5b6e2f134b5733f2eafd361a86de34dce",
     "workspace_checkpoints.py": "b9abf0176390fa3016f470ef63b718c116928aee98a0e24b8fe1e5c6f0cc5227"
   },
-  "version": "0.8.0"
+  "version": "0.8.1"
 }
