@@ -3,6 +3,7 @@
 import json
 import os
 import runpy
+import shlex
 import shutil
 import stat
 import subprocess
@@ -94,6 +95,139 @@ class PrivateWorkspaceTests(unittest.TestCase):
         with self.assertRaisesRegex(manager.PreparationError, "different filesystem"):
             manager.prepare_private_workspace(self.source, local)
         self.assertEqual(list(local.iterdir()), [])
+
+    def test_source_path_cannot_supply_bubblewrap_executable(self):
+        self.seed()
+        marker = self.source / "fake-bwrap-marker"
+        fake = self.source / "bwrap"
+        fake.write_text(f"#!/bin/sh\nprintf fake >> {shlex.quote(str(marker))}\nexit 99\n")
+        fake.chmod(0o755)
+        with patch.dict(os.environ, {"PATH": f"{self.source}:/usr/bin:/bin"}):
+            result = manager.prepare_private_workspace(self.source, self.parent)
+        self.assertTrue(result.workspace.is_dir())
+        self.assertFalse(marker.exists())
+
+    def test_ambient_preload_cannot_run_before_sandbox(self):
+        compiler = shutil.which("gcc")
+        if compiler is None:
+            self.skipTest("gcc is unavailable")
+        self.seed()
+        marker = self.source / "preload-marker"
+        marker.write_bytes(b"unchanged\n")
+        preload = self.source / "preload.so"
+        code = ("#include <fcntl.h>\n#include <unistd.h>\n"
+                "__attribute__((constructor)) static void mark(void) {\n"
+                "  int fd = open(" + json.dumps(str(marker)) + ", O_WRONLY|O_APPEND);\n"
+                "  if (fd >= 0) { write(fd, \"x\", 1); close(fd); }\n}\n")
+        subprocess.run([compiler, "-shared", "-fPIC", "-x", "c", "-o", str(preload), "-"],
+                       input=code.encode(), check=True, stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE)
+        with patch.dict(os.environ, {"LD_PRELOAD": str(preload)}):
+            result = manager.prepare_private_workspace(self.source, self.parent)
+        self.assertTrue(result.workspace.is_dir())
+        self.assertEqual(marker.read_bytes(), b"unchanged\n")
+
+    def test_worker_mount_does_not_inherit_writable_host_directory_fd(self):
+        # A ro-bind of / does not protect host paths reached by walking upward
+        # through an inherited directory fd under /proc/self/fd.
+        marker = self.source / "fd-escape-marker"
+        marker.write_bytes(b"unchanged\n")
+        mounted_marker = self.parent / "mounted-marker"
+        parent_fd = os.open(self.parent, manager._DIR)
+        try:
+            escape = f"/proc/self/fd/{parent_fd}/{os.path.relpath(marker, self.parent)}"
+            probe = """
+import json
+import os
+import sys
+
+results = {}
+for label, path in (("direct", sys.argv[1]), ("fd_escape", sys.argv[2]),
+                    ("mounted", sys.argv[3])):
+    try:
+        with open(path, "ab") as output:
+            output.write(label.encode() + b"\\n")
+        results[label] = "writable"
+    except OSError as error:
+        results[label] = error.errno
+print(json.dumps(results))
+"""
+            result = manager._run_worker_sandbox(
+                parent_fd, [sys.executable, "-c", probe, str(marker), escape,
+                            "/mnt/mounted-marker"], timeout=30,
+            )
+        finally:
+            os.close(parent_fd)
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+        outcomes = json.loads(result.stdout)
+        self.assertNotEqual(outcomes["direct"], "writable")
+        self.assertNotEqual(outcomes["fd_escape"], "writable")
+        self.assertEqual(outcomes["mounted"], "writable")
+        self.assertEqual(marker.read_bytes(), b"unchanged\n")
+        self.assertEqual(mounted_marker.read_bytes(), b"mounted\n")
+
+    def test_worker_does_not_inherit_writable_caller_stdin(self):
+        marker = self.source / "stdin-escape-marker"
+        marker.write_bytes(b"unchanged\n")
+        mounted_marker = self.parent / "stdin-mounted-marker"
+        probe = """
+import json
+import os
+import sys
+
+results = {"fd0_target": os.readlink("/proc/self/fd/0")}
+try:
+    os.write(0, b"fd0 escape\\n")
+    results["fd0_write"] = "writable"
+except OSError as error:
+    results["fd0_write"] = error.errno
+try:
+    with open("/proc/self/fd/0", "ab") as output:
+        output.write(b"proc fd0 escape\\n")
+    results["proc_fd0_write"] = "writable"
+except OSError as error:
+    results["proc_fd0_write"] = error.errno
+for label, path in (("direct", sys.argv[1]), ("mounted", sys.argv[2])):
+    try:
+        with open(path, "ab") as output:
+            output.write(label.encode() + b"\\n")
+        results[label] = "writable"
+    except OSError as error:
+        results[label] = error.errno
+print(json.dumps(results))
+"""
+        launcher = """
+import os
+import sys
+from pilferedparrot import private_workspace as manager
+
+parent_fd = os.open(sys.argv[1], manager._DIR)
+try:
+    result = manager._run_worker_sandbox(
+        parent_fd, [sys.executable, "-c", sys.argv[2], sys.argv[3],
+                    "/mnt/stdin-mounted-marker"], timeout=30,
+    )
+finally:
+    os.close(parent_fd)
+sys.stdout.buffer.write(result.stdout)
+sys.stderr.buffer.write(result.stderr)
+sys.exit(result.returncode)
+"""
+        with marker.open("r+b") as writable_stdin:
+            result = subprocess.run(
+                [sys.executable, "-c", launcher, str(self.parent), probe, str(marker)],
+                stdin=writable_stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=30,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+        outcomes = json.loads(result.stdout)
+        self.assertEqual(outcomes["fd0_target"], "/dev/null")
+        # subprocess.DEVNULL may open /dev/null read-write; writing fd 0 can
+        # succeed there, but it must no longer point at the caller's marker.
+        self.assertNotEqual(outcomes["direct"], "writable")
+        self.assertEqual(outcomes["mounted"], "writable")
+        self.assertEqual(marker.read_bytes(), b"unchanged\n")
+        self.assertEqual(mounted_marker.read_bytes(), b"mounted\n")
 
     def test_symlink_git_substitution_cannot_write_source(self):
         self.seed()

@@ -12,14 +12,21 @@ attributes, external object stores, oversized objects, and unsafe paths. It
 imports only the pinned tree and its raw subtrees and blobs. The source commit
 is recorded in the journal but not imported into the private repository.
 
-On Linux the function requires `bwrap` and a private (`0700`) destination parent
-on another filesystem. The worker sees the host filesystem read only and the
-pinned destination directory at `/mnt`. Its private repository and blob writes
-therefore cannot reach source paths through a swapped `.git` directory. The
-different filesystem also makes a same-UID rename of the writable destination
-into the source fail with `EXDEV`. A destination filesystem mounted inside the
-source is refused. The host receives normal paths to a standalone repository;
-Git metadata contains no sandbox-only absolute paths.
+On Linux the function requires `bwrap` with `--bind-fd` and a private (`0700`)
+destination parent on another filesystem. It executes a resolved root-owned
+Bubblewrap binary beneath root-owned directories that are not group or world
+writable. The launcher and Git workers receive a minimal environment. Bubblewrap
+consumes the destination directory descriptor before starting the worker. An
+inherited descriptor would allow `/proc/self/fd/<fd>/..` to reach writable host
+paths despite a read-only root bind. The launcher also replaces caller stdin
+with `/dev/null`, because a writable inherited stdin descriptor would bypass
+that bind. The worker sees a fresh `/proc`, the host filesystem read only, and
+the pinned destination directory at `/mnt`. Its private repository and blob
+writes therefore cannot reach source paths through a swapped `.git` directory.
+The different filesystem also makes a same-UID rename of the writable
+destination into the source fail with `EXDEV`. A destination filesystem mounted
+inside the source is refused. The host receives normal paths to a standalone
+repository; Git metadata contains no sandbox-only absolute paths.
 
 The append-only `journal.jsonl` is inside the opaque workspace directory. The
 worker writes through one retained descriptor and checks that both the stage

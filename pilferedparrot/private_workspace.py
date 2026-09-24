@@ -31,6 +31,7 @@ _GIT_OPTIONS = (
     "-c", "core.eol=lf", "-c", "core.quotePath=false",
     "-c", "maintenance.auto=false", "-c", "gc.auto=0",
 )
+_PROCESS_ENV = {"PATH": "/usr/bin:/bin", "LC_ALL": "C.UTF-8", "PYTHONNOUSERSITE": "1"}
 
 
 class PreparationError(RuntimeError):
@@ -72,7 +73,7 @@ class _Entry:
 
 
 def _environment() -> dict[str, str]:
-    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env = dict(_PROCESS_ENV)
     env.update({
         "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_SYSTEM": os.devnull, "GIT_ATTR_NOSYSTEM": "1",
@@ -478,6 +479,38 @@ def _prepare_worker(source: Path, private_parent: Path, limits: Limits) -> dict:
         os.close(parent_fd)
 
 
+def _trusted_bwrap() -> str:
+    """Resolve a system bubblewrap binary whose entire path is root controlled."""
+    for candidate in ("/usr/bin/bwrap", "/bin/bwrap", "/usr/local/bin/bwrap"):
+        try:
+            resolved = Path(candidate).resolve(strict=True)
+            executable = resolved.stat()
+            if not stat.S_ISREG(executable.st_mode) or not os.access(resolved, os.X_OK):
+                continue
+            if any(info.st_uid != 0 or stat.S_IMODE(info.st_mode) & 0o022
+                   for info in (path.stat() for path in (resolved, *resolved.parents))):
+                continue
+            return str(resolved)
+        except (OSError, RuntimeError):
+            continue
+    raise PreparationError("trusted Linux bubblewrap is required")
+
+
+def _worker_sandbox_command(parent_fd: int) -> list[str]:
+    """Mount the held destination inode without leaking its host-path fd."""
+    return [_trusted_bwrap(), "--die-with-parent", "--unshare-user", "--unshare-pid",
+            "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
+            "--bind-fd", str(parent_fd), "/mnt", "--"]
+
+
+def _run_worker_sandbox(parent_fd: int, argv: list[str], timeout: int) -> subprocess.CompletedProcess[bytes]:
+    """Give bubblewrap only the mount fd; never inherit a writable caller stdin."""
+    return subprocess.run([*_worker_sandbox_command(parent_fd), *argv],
+                          pass_fds=(parent_fd,), stdin=subprocess.DEVNULL,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          env=dict(_PROCESS_ENV), timeout=timeout)
+
+
 def prepare_private_workspace(source: os.PathLike | str, private_parent: os.PathLike | str,
                               limits: Limits = Limits()) -> PreparedWorkspace:
     """Prepare a private copy, refusing same-filesystem and unsandboxed writes.
@@ -486,8 +519,9 @@ def prepare_private_workspace(source: os.PathLike | str, private_parent: os.Path
     This prevents a same-UID host process from renaming an open writable stage
     into the source while the worker writes. Failed stages remain for review.
     """
-    if sys.platform != "linux" or not shutil.which("bwrap"):
+    if sys.platform != "linux":
         raise PreparationError("Linux bubblewrap is required")
+    _trusted_bwrap()
     if not all(hasattr(os, name) for name in
                ("O_DIRECTORY", "O_NOFOLLOW", "O_TMPFILE", "memfd_create")):
         raise PreparationError("Linux descriptor operations are unavailable")
@@ -528,13 +562,9 @@ def prepare_private_workspace(source: os.PathLike | str, private_parent: os.Path
         if (os.fstat(parent_fd).st_dev, os.fstat(parent_fd).st_ino) != \
                 (parent_info.st_dev, parent_info.st_ino):
             raise PreparationError("destination parent changed")
-        command = ["bwrap", "--die-with-parent", "--unshare-user", "--unshare-pid",
-                   "--ro-bind", "/", "/", "--dev", "/dev",
-                   "--bind", f"/proc/self/fd/{parent_fd}", "/mnt",
-                   "--", sys.executable, str(Path(__file__).resolve()), "--worker",
-                   str(source), json.dumps(asdict(limits))]
-        proc = subprocess.run(command, pass_fds=(parent_fd,), stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE, timeout=900)
+        proc = _run_worker_sandbox(parent_fd, [sys.executable, str(Path(__file__).resolve()),
+                                               "--worker", str(source), json.dumps(asdict(limits))],
+                                   timeout=900)
         if proc.returncode:
             raise PreparationError("sandboxed preparation failed: " +
                                    proc.stderr.decode(errors="replace")[-1000:])
