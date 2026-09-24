@@ -31,6 +31,12 @@ Windows provider accounts and CLIs are not live-certified by this package.
   surfaces permission choices in the Work window. The Provider dashboard can install its
   adapters on demand, choose transport per provider, and show an on-demand GPU snapshot.
   The legacy engine remains the default.
+- Opt-in Work file observation reports bounded changes and scan gaps without claiming
+  which process made them. There is no automatic rewind.
+- POSIX SQLite authority has an explicit stopped-source cutover and new-file JSON rollback
+  procedure. Normal startup uses JSON.
+- Local skill metadata preview scans only configured folders when requested in Preferences.
+  It does not change prompts, models, providers, or permissions.
 - New Codex Chat sessions default to GPT-6 Luna with low reasoning when no Chat selection is
   saved; an explicit saved model and reasoning selection takes precedence.
 - Optional product feedback remains off by default. Users can review and download local reports

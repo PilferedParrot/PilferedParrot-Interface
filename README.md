@@ -103,6 +103,11 @@ The source branch includes changes beyond the published 0.7.1 assets:
   [file change summary](docs/observed-files.md) to a Work response. It reports
   observed paths and scan gaps without attributing edits to the agent. Private
   captured bytes stay outside the project; this version offers no rewind.
+- An explicit POSIX [SQLite cutover procedure](docs/sqlite-cutover.md) can retain
+  the original JSON bytes, verify a stopped source, and export a new JSON rollback
+  file. Normal startup still uses JSON.
+- [Local skill discovery](docs/skills.md) is an opt-in metadata preview. Configure
+  explicit folders and request a scan in Preferences; skills are not added to prompts.
 - New Codex Chat sessions default to GPT-6 Luna with low reasoning when no Chat selection is
   saved. An explicit saved model and reasoning selection takes precedence.
 - When work remains unfinished, providers receive continuation guidance to leave a copyable
@@ -113,9 +118,6 @@ The source branch includes changes beyond the published 0.7.1 assets:
   [feedback policy](docs/feedback.md).
 
 These source changes are not included in the published 0.7.1 release archives.
-
-Local skill discovery is an opt-in metadata preview. Configure explicit folders
-and request a scan in Preferences; see [Local skill metadata preview](docs/skills.md).
 
 The source project requires Python 3.12 or newer. Chrome or Chromium is preferred on Linux; the
 Windows preview also detects Microsoft Edge. The Python application has no third-party package

@@ -1,9 +1,10 @@
 # Explicit SQLite cutover and JSON rollback (POSIX preview)
 
 SQLite authority is opt-in. The normal launcher still writes JSON. This procedure
-must run from the same verified source tree that will run the app. It has been
-rehearsed with synthetic and copied histories; it has not switched Chris's live
-history. Windows export is unavailable, so this cutover is disabled there.
+must run from the same verified source tree that will run the app. As of
+2026-09-23, it has been rehearsed with synthetic and copied histories; it has
+not switched Chris's live history. Windows export is unavailable, so this
+cutover is disabled there.
 
 ## Prepare while the app is stopped
 
