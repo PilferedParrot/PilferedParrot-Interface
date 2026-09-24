@@ -45,6 +45,8 @@ DEFAULTS: dict[str, Any] = {
     # OpenAI-compatible coding-agent adapter and names an environment variable
     # for credentials, so secrets never enter the dashboard store.
     "provider_definitions": {},
+    # Local skill metadata is read only after explicit enablement and request.
+    "skills": {"enabled": False, "roots": []},
     # Opt-in packages use explicit presets and preserve ordinary Work selection.
     "harness": {"preset": "manual", "presets": {}},
     "qwen": {

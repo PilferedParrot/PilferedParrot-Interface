@@ -114,6 +114,9 @@ The source branch includes changes beyond the published 0.7.1 assets:
 
 These source changes are not included in the published 0.7.1 release archives.
 
+Local skill discovery is an opt-in metadata preview. Configure explicit folders
+and request a scan in Preferences; see [Local skill metadata preview](docs/skills.md).
+
 The source project requires Python 3.12 or newer. Chrome or Chromium is preferred on Linux; the
 Windows preview also detects Microsoft Edge. The Python application has no third-party package
 dependencies. Bubblewrap is used for Qwen's Linux shell tools and is disabled on Windows.

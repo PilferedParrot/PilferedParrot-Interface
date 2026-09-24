@@ -25,6 +25,7 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlparse
 from urllib.request import urlopen
 
+from . import skills as skill_discovery
 
 ASSET_ROOT = Path(__file__).resolve().parent / "web_assets"
 RUNTIME_ROOT = Path(__file__).resolve().parent
@@ -32,7 +33,7 @@ ASSET_NAMES = (
     "index.html", "chat.html", "app.css", "expanded-content.css", "code-actions.css", "markdown.js", "usage.js", "code-actions.js", "expanded-content.js", "identity.js", "provider-updates.js", "app.js", "chat.js", "icon.svg",
     "pilferedparrot-icon.png", "company-logo.png", "company-logo-dark.png", "whiteboard-ui.js", "appearance.js", "appearance-sync.js", "feedback.js",
 )
-API_GENERATION = 23
+API_GENERATION = 24
 
 
 class EngineSwitchConflict(RuntimeError):
@@ -618,6 +619,11 @@ def make_handler(
                     self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
                 else:
                     self._json(app.gpu_snapshot())
+            elif path == "/api/skills/status":
+                if self._request_capability_scope() != "dashboard":
+                    self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
+                else:
+                    self._json(skill_discovery.discovery_status(app.config))
             elif path == "/api/state":
                 context = self._request_capability_context()
                 if context is None:
@@ -853,6 +859,8 @@ def make_handler(
                         self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
                     else:
                         self._json(app.install_acp_adapters(provider=provider))
+                elif path == "/api/skills/discover":
+                    self._json({"skills": skill_discovery.discover(app.config)})
                 elif len(parts) == 5 and parts[:3] == ["api", "acp", "providers"] \
                         and parts[4] == "engine":
                     provider = parts[3]

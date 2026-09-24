@@ -10,6 +10,7 @@ const state = {
   providerDraft: null, preferences: {}, modelPolls: {}, modelProbeSequence: {}, modelFeedback: {},
   acpSetup: null, acpSetupMessage: "", gpuInventory: null, gpuMessage: "",
   initialized: false,
+  skillDiscovery: { enabled: false, roots: 0 },
 };
 let draftACPMode = null;
 const CAPABILITY_SESSION_KEY = "pilferedparrot-dashboard-capability";
@@ -301,6 +302,48 @@ async function api(path, options = {}) {
     throw error;
   }
   return data;
+}
+
+async function loadSkillDiscoveryStatus() {
+  const status = await api("/api/skills/status");
+  state.skillDiscovery = status;
+  const button = $("#discoverSkills");
+  button.disabled = !status.enabled || status.roots < 1;
+  $("#skillsStatus").textContent = status.enabled && status.roots > 0
+    ? `${status.roots} local folder${status.roots === 1 ? "" : "s"} configured. Preview runs only when you click the button.`
+    : "Discovery is off. To enable it, set skills.enabled to true and add explicit folder paths under skills.roots in config.json.";
+}
+
+async function previewLocalSkills() {
+  const button = $("#discoverSkills");
+  const status = $("#skillsStatus");
+  const results = $("#skillsResults");
+  button.disabled = true;
+  status.textContent = "Reading skill metadata…";
+  results.replaceChildren();
+  try {
+    const data = await api("/api/skills/discover", {
+      method: "POST", body: "{}",
+    });
+    for (const skill of data.skills || []) {
+      const item = document.createElement("li");
+      const title = document.createElement("strong");
+      title.textContent = skill.name;
+      const description = document.createElement("span");
+      description.textContent = skill.description;
+      const source = document.createElement("small");
+      source.textContent = skill.source;
+      item.append(title, description, source);
+      results.append(item);
+    }
+    status.textContent = data.skills?.length
+      ? `Found ${data.skills.length} local skill${data.skills.length === 1 ? "" : "s"}. This is metadata only; nothing was added to a prompt.`
+      : "No readable SKILL.md metadata found in the configured folders.";
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = !state.skillDiscovery.enabled || state.skillDiscovery.roots < 1;
+  }
 }
 
 async function nativeWindowAction(action, details = {}) {
@@ -2898,7 +2941,15 @@ $("#openChat").addEventListener("click", openChatWindow);
 $("#notificationPreferences").addEventListener("click", () => {
   manageNotificationPermission().catch((error) => toast(error.message, "error"));
 });
-$("#preferencesButton").addEventListener("click", () => $("#preferencesDialog").showModal());
+$("#preferencesButton").addEventListener("click", () => {
+  $("#preferencesDialog").showModal();
+  loadSkillDiscoveryStatus().catch((error) => {
+    $("#skillsStatus").textContent = error.message;
+  });
+});
+$("#discoverSkills").addEventListener("click", () => {
+  previewLocalSkills();
+});
 $("#chromeTheme").addEventListener("click", openChromeThemeGallery);
 setupPaneResizer("#sidebarResizer", "sidebar");
 $("#messages").addEventListener("click", async (event) => {

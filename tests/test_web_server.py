@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from http import HTTPStatus
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from pilferedparrot import web_server
 
@@ -135,6 +135,49 @@ class WebServerHTTPTests(unittest.TestCase):
         handler._binary(b"theme", "image/png")
 
         self.assertEqual(headers["Cache-Control"], "no-store")
+
+    def test_skills_status_requires_dashboard_capability_and_does_not_scan(self):
+        app = FakeApp()
+        handler = bare_handler(web_server.make_handler(app), path="/api/skills/status")
+        handler._request_capability_scope = MagicMock(return_value="chat")
+        handler._json = MagicMock()
+        with patch.object(web_server.skill_discovery, "discovery_status") as status:
+            handler.do_GET()
+        status.assert_not_called()
+        handler._json.assert_called_once_with(
+            {"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN,
+        )
+
+    def test_skills_discovery_is_user_triggered_dashboard_post(self):
+        app = FakeApp()
+        app.config["skills"] = {"enabled": True, "roots": ["/configured"]}
+        handler = bare_handler(web_server.make_handler(app), path="/api/skills/discover")
+        handler._control_allowed = MagicMock(return_value=True)
+        handler._request_capability_context = MagicMock(return_value={
+            "scope": "dashboard", "window_id": "main", "provider": "codex",
+        })
+        handler._read_json = MagicMock(return_value={})
+        handler._json = MagicMock()
+        preview = [{"name": "Example", "description": "Metadata only", "source": "Root 1"}]
+        with patch.object(web_server.skill_discovery, "discover", return_value=preview) as discover:
+            handler.do_POST()
+        discover.assert_called_once_with(app.config)
+        handler._json.assert_called_once_with({"skills": preview})
+
+    def test_skills_discovery_rejects_unauthorized_post_before_scan(self):
+        app = FakeApp()
+        handler = bare_handler(web_server.make_handler(app), path="/api/skills/discover")
+        handler._control_allowed = MagicMock(return_value=False)
+        handler._request_capability_context = MagicMock(return_value=None)
+        handler._read_json = MagicMock()
+        handler._json = MagicMock()
+        with patch.object(web_server.skill_discovery, "discover") as discover:
+            handler.do_POST()
+        discover.assert_not_called()
+        handler._read_json.assert_not_called()
+        handler._json.assert_called_once_with(
+            {"error": "local control authorization failed"}, HTTPStatus.FORBIDDEN,
+        )
 
     def test_theme_image_binds_request_to_version(self):
         app = FakeApp()

@@ -194,6 +194,13 @@
             <label><input type="radio" name="appearanceReadability" value="stronger"> <span>Stronger</span></label>
           </div>
         </fieldset>
+        <section class="appearance-preferences" aria-labelledby="skillDiscoveryTitle">
+          <h3 id="skillDiscoveryTitle">Local skills</h3>
+          <p class="appearance-help">Preview names and descriptions from configured local skill folders. No skill text is added to a prompt.</p>
+          <button class="secondary" id="discoverSkills" type="button" disabled>Preview local skills</button>
+          <p id="skillsStatus" class="appearance-help" role="status" aria-live="polite">Skill discovery is disabled.</p>
+          <ul id="skillsResults" class="skill-preview-list" aria-label="Discovered skill metadata"></ul>
+        </section>
         <button class="chrome-theme-button secondary" id="notificationPreferences" type="button" disabled title="Manage desktop notifications">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
           <span id="notificationPreferencesLabel">Desktop notifications</span>
