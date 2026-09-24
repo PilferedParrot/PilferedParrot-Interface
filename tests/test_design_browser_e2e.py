@@ -204,6 +204,10 @@ class DesignBrowserEndToEndTests(unittest.TestCase):
                 status=200, content_type="application/json", body='{"ok":true,"submitted":true}',
             ),
         )
+        self.page.wait_for_function(
+            "() => state.initialized === true && state.budgetsLoaded === true && budgetRefresh === null",
+            timeout=10_000,
+        )
         self.page.get_by_role("button", name="Provider dashboard").click()
         dialog = self.page.locator("#providerDialog")
         expect(dialog).to_be_visible()
