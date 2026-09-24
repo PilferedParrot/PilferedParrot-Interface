@@ -21,28 +21,49 @@ See the [Actions runs](https://github.com/PilferedParrot/PilferedParrot-Interfac
 release body for completed validation results.
 Windows provider accounts and CLIs are not live-certified by this package.
 
-## Unreleased
+## PilferedParrot Interface 0.8.0 — release preparation
+
+This release candidate gathers the changes listed below for the stable Linux/source channel and
+unsigned Windows 10/11 x64 preview. Publication, platform checks, CodeQL, and release assets are
+pending; see the [0.8.0 readiness record](docs/release-readiness.md). The 0.7.1 release and its
+archives remain immutable at the [0.7.1 release page](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.1).
 
 - Project workrooms add recent and pinned folders, a project-filtered session list, and
   selection that survives reopening. Existing sessions retain their original workspace.
-- Work history loads compact summaries before the selected transcript. Live progress uses
-  an authenticated event stream with polling fallback; a reconnect can reload a snapshot.
+- Work history loads compact summaries before the selected transcript. Live progress uses an
+  authenticated event stream with polling fallback; a reconnect can reload a snapshot.
 - An opt-in ACP Work preview for Codex and Claude streams text, tool details and diffs, and
-  surfaces permission choices in the Work window. The Provider dashboard can install its
-  adapters on demand, choose transport per provider, and show an on-demand GPU snapshot.
-  The legacy engine remains the default.
+  surfaces permission choices in the Work window. Its dashboard can install pinned adapters on
+  demand, choose transport per provider, show an on-demand GPU snapshot, and read advertised
+  model, effort, and mode choices. The legacy engine remains the default. Windows runtime
+  behavior and provider permission UI still require Windows evidence; Windows provider accounts
+  and CLIs are not certified.
 - Opt-in Work file observation reports bounded changes and scan gaps without claiming
-  which process made them. There is no automatic rewind.
+  which process made them. It is POSIX-only and provides no restore or rewind control.
 - POSIX SQLite authority has an explicit stopped-source cutover and new-file JSON rollback
-  procedure. Normal startup uses JSON.
+  procedure. The normal app startup still uses JSON; cutover is opt-in and Windows export
+  is unavailable.
 - Local skill metadata preview scans only configured folders when requested in Preferences.
   It does not change prompts, models, providers, or permissions.
+- Private workspace preparation is an internal Linux core primitive that copies a pinned Git
+  tree into a separate repository. It has no UI or provider/session isolation, and does not
+  publish files, rewind changes, or discard a workspace.
 - New Codex Chat sessions default to GPT-6 Luna with low reasoning when no Chat selection is
   saved; an explicit saved model and reasoning selection takes precedence.
 - Optional product feedback remains off by default. Users can review and download local reports
   for voluntary sharing; PPI does not upload them.
 - Unfinished work can include a copyable next-session prompt and, when writing is allowed, a
   whiteboard handoff. Continuation guidance does not change provider permissions or retry work.
+
+### Planned install and upgrade
+
+After verification and publication, download the source archive or Windows x64 ZIP and verify it
+against `SHA256SUMS`. Finish active jobs before closing the old app. On Linux, run
+`bin/install-pilferedparrot-desktop` from the extracted directory to update the launcher. On
+Windows, extract the complete ZIP and update shortcuts to its `PilferedParrot.exe`. Keep existing
+configuration, browser profiles, conversations, and local state. Provider CLIs, accounts, and
+local model servers are installed separately. Windows remains an unsigned preview; provider
+accounts and CLIs are not live-certified.
 
 ## PilferedParrot Interface 0.7.0
 

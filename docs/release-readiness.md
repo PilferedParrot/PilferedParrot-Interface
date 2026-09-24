@@ -1,3 +1,40 @@
+# PilferedParrot Interface 0.8.0 release readiness — 2026-09-23
+
+This is a release preparation record for the candidate source tree. It does not claim that 0.8.0
+has been released or that any gate below has passed. The previous 0.7.1 release, assets, checksums,
+and CI links remain immutable; see the [0.7.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.1).
+
+The candidate adds project workrooms, live Work events, opt-in ACP Work for Codex and Claude,
+POSIX file observation, explicit opt-in SQLite cutover, local skill metadata preview, continuation
+handoffs, opt-in local feedback, and an internal private workspace preparation primitive. ACP,
+SQLite, observation, and skills are opt-in. ACP retains the legacy engine as default and Windows
+runtime/permission UI needs platform evidence. SQLite is not normal startup behavior and Windows
+export is unavailable. Observation is POSIX-only, bounded, cannot attribute edits, and has no rewind.
+Skill instructions are not inserted into prompts. Private workspace preparation is internal core
+only: it has no UI or provider/session isolation, and does not publish files, rewind changes, or
+discard workspaces.
+
+## Required verification — pending
+
+- As of 2026-09-23, the lead reports the candidate commit passed CI on Python 3.12, 3.13, and
+  3.14, and CodeQL is green. The lead also reports Windows focused checks, package build, and
+  executable smoke test passed. The Windows production browser step is still running, so the
+  Windows gate remains pending. These results must be rechecked on the final integrated tree.
+- Linux Chromium passed 144/144 locally before the latest backend-only fixes; rerun it on the final
+  integrated tree. Local Python 3.13 and 3.14 suites each ran 1,042 cases with 149 expected skips.
+- Focused version, Windows package, release documentation, feedback-baseline, and source hygiene
+  checks remain required on the final integrated tree. Checks in this preparation worktree do not
+  replace release-branch verification.
+- After required checks pass, build the source archive and Windows ZIP from the verified release
+  tree, create a combined `SHA256SUMS`, and verify their hashes before publishing under `v0.8.0`.
+- Keep Windows unsigned and retain the existing scope statement: no Windows provider-account or
+  CLI certification is claimed.
+
+The 0.8.0 links and package names in the README are planned paths, not evidence of published
+assets. The 0.7.1 section below records its own prior evidence and does not validate 0.8.0.
+
+---
+
 # PilferedParrot Interface 0.7.1 release verification
 
 0.7.1 is a reliability and security patch for source/Linux and the unsigned Windows
