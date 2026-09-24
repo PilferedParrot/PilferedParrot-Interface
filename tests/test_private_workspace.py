@@ -2,9 +2,11 @@
 
 import json
 import os
+import runpy
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +18,10 @@ from pilferedparrot import private_workspace as manager
 @unittest.skipUnless(os.name == "posix" and shutil.which("bwrap") and Path("/dev/shm").exists(),
                      "Linux bubblewrap and a separate temporary filesystem required")
 class PrivateWorkspaceTests(unittest.TestCase):
+    @staticmethod
+    def journal_records(path):
+        return [json.loads(line) for line in path.read_text().splitlines()]
+
     def setUp(self):
         self.source_temp = tempfile.TemporaryDirectory()
         self.parent_temp = tempfile.TemporaryDirectory(dir="/dev/shm")
@@ -65,7 +71,8 @@ class PrivateWorkspaceTests(unittest.TestCase):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertNotEqual(source_commit_lookup.returncode, 0)
         self.assertFalse((result.repository / "objects" / "info" / "alternates").exists())
-        self.assertEqual(json.loads(result.journal.read_text())["state"], "ready")
+        self.assertEqual([entry["state"] for entry in self.journal_records(result.journal)],
+                         ["preparing", "ready"])
         after = {p.relative_to(self.source / ".git"): (p.read_bytes(), p.stat().st_mtime_ns)
                  for p in (self.source / ".git").rglob("*") if p.is_file()}
         self.assertEqual(before, after)
@@ -133,7 +140,7 @@ class PrivateWorkspaceTests(unittest.TestCase):
                 manager._prepare_worker(self.source, self.parent, manager.Limits())
         self.assertEqual((next(p for p in self.parent.iterdir()
                                if p.name.startswith("private-workspace-")) / "unique").read_text(), "retain")
-        self.assertTrue((moved / "journal.json").exists())
+        self.assertTrue((moved / "journal.jsonl").exists())
 
     def test_private_index_attributes_resist_source_local_masking(self):
         (self.source / ".gitattributes").write_text("tracked text\n")
@@ -146,7 +153,60 @@ class PrivateWorkspaceTests(unittest.TestCase):
             manager.prepare_private_workspace(self.source, self.parent)
         stages = list(self.parent.glob("private-workspace-*"))
         self.assertEqual(len(stages), 1)
-        self.assertEqual(json.loads((stages[0] / "journal.json").read_text())["state"], "failed")
+        self.assertEqual(self.journal_records(stages[0] / "journal.jsonl")[-1]["state"], "failed")
+
+    def test_unique_file_preserved_when_journal_name_swapped_before_or_after_append(self):
+        self.seed()
+        for timing in ("before", "after"):
+            with self.subTest(timing=timing):
+                unique = self.parent / f"unique-{timing}"
+                unique.write_bytes(b"unique data; never delete or overwrite")
+                real_append = manager._append_journal
+
+                def swap():
+                    stage = next(p for p in self.parent.iterdir()
+                                 if p.name.startswith("private-workspace-"))
+                    (stage / "journal.jsonl").rename(stage / "held-journal.jsonl")
+                    unique.rename(stage / "journal.jsonl")
+
+                def swapped_append(fd, data):
+                    if data["state"] == "ready" and timing == "before":
+                        swap()
+                    real_append(fd, data)
+                    if data["state"] == "ready" and timing == "after":
+                        swap()
+
+                with patch.object(manager, "_append_journal", side_effect=swapped_append):
+                    with self.assertRaisesRegex(manager.PreparationError, "journal path changed"):
+                        manager._prepare_worker(self.source, self.parent, manager.Limits())
+                stage = next(p for p in self.parent.iterdir()
+                             if p.name.startswith("private-workspace-"))
+                self.assertEqual((stage / "journal.jsonl").read_bytes(),
+                                 b"unique data; never delete or overwrite")
+                self.assertEqual(self.journal_records(stage / "held-journal.jsonl")[-1]["state"],
+                                 "failed")
+                shutil.rmtree(stage)
+
+    def test_preexisting_journal_name_is_never_overwritten(self):
+        self.seed()
+        real_open = os.open
+        marker = b"preexisting unique data"
+
+        def occupy_before_create(path, flags, *args, **kwargs):
+            if path == "journal.jsonl":
+                fd = real_open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                               0o600, dir_fd=kwargs["dir_fd"])
+                try:
+                    os.write(fd, marker)
+                finally:
+                    os.close(fd)
+            return real_open(path, flags, *args, **kwargs)
+
+        with patch.object(manager.os, "open", side_effect=occupy_before_create):
+            with self.assertRaises(FileExistsError):
+                manager._prepare_worker(self.source, self.parent, manager.Limits())
+        stage = next(self.parent.glob("private-workspace-*"))
+        self.assertEqual((stage / "journal.jsonl").read_bytes(), marker)
 
     def test_symlink_committed_path_refused(self):
         (self.source / "tracked").write_text("x")
@@ -165,6 +225,20 @@ class PrivateWorkspaceTests(unittest.TestCase):
         self.assertEqual(self.git("rev-parse", "--show-object-format=storage",
                                   cwd=result.workspace).strip(), b"sha256")
         self.assertEqual(self.git("status", "--porcelain", cwd=result.workspace), b"")
+
+    def test_import_without_linux_open_flags_and_fail_closed_on_windows(self):
+        flags = {name: getattr(os, name) for name in ("O_DIRECTORY", "O_NOFOLLOW")}
+        try:
+            for name in flags:
+                delattr(os, name)
+            namespace = runpy.run_path(str(Path(manager.__file__)),
+                                       run_name="private_workspace_windows_probe")
+            with patch.object(sys, "platform", "win32"):
+                with self.assertRaisesRegex(namespace["PreparationError"], "Linux bubblewrap"):
+                    namespace["prepare_private_workspace"]("unused", "unused")
+        finally:
+            for name, value in flags.items():
+                setattr(os, name, value)
 
 
 if __name__ == "__main__":

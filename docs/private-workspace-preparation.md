@@ -21,13 +21,17 @@ into the source fail with `EXDEV`. A destination filesystem mounted inside the
 source is refused. The host receives normal paths to a standalone repository;
 Git metadata contains no sandbox-only absolute paths.
 
-The preparation journal is inside the opaque workspace directory. The worker
-uses directory descriptors to check that the stage name still points to its
-opened directory before reporting success or changing its state. A failed stage
-is marked `failed` when still reachable, then retained for review. Recursive
+The append-only `journal.jsonl` is inside the opaque workspace directory. The
+worker writes through one retained descriptor and checks that both the stage
+and journal names still point to their opened inodes before reporting success.
+It never replaces or unlinks a journal pathname. A failed stage is marked
+`failed` through the held journal descriptor when that descriptor and its stage
+remain reachable,
+then retained for review. Recursive
 automatic cleanup is deliberately absent: a same-UID process could swap an
 unrelated directory into the tree during deletion. The caller must treat the
 failed stage as data and must not prune it based on Git status or age.
+Journal records are evidence for review, not authority to delete or publish.
 
 This is a first preparation slice. Provider process boundaries, durable private
 storage provisioning, candidate sealing, publication, and user-directed discard

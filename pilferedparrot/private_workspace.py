@@ -21,8 +21,9 @@ from pathlib import Path
 
 
 MIB = 1024 * 1024
-_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-_NEW = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_DIR = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | _NOFOLLOW
+_NEW = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW
 _ATTRS = ("filter", "working-tree-encoding", "text", "eol", "ident", "crlf")
 _GIT_OPTIONS = (
     "-c", "core.hooksPath=/dev/null", "-c", "core.attributesFile=/dev/null",
@@ -246,7 +247,7 @@ def _verify_repository(stage_fd: int, expected: tuple[int, int] | None = None) -
             identity = (info.st_dev, info.st_ino)
             if expected is not None and identity != expected:
                 raise PreparationError("private Git directory changed")
-            config_fd = os.open("config", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=repo_fd)
+            config_fd = os.open("config", os.O_RDONLY | _NOFOLLOW, dir_fd=repo_fd)
             os.close(config_fd)
             return identity
         finally:
@@ -255,20 +256,23 @@ def _verify_repository(stage_fd: int, expected: tuple[int, int] | None = None) -
         os.close(workspace_fd)
 
 
-def _journal(stage_fd: int, data: dict) -> None:
-    fd = os.open("journal.tmp", _NEW, 0o600, dir_fd=stage_fd)
-    try:
-        with os.fdopen(fd, "wb") as out:
-            out.write(json.dumps(data, sort_keys=True).encode() + b"\n")
-            out.flush()
-            os.fsync(out.fileno())
-        os.replace("journal.tmp", "journal.json", src_dir_fd=stage_fd, dst_dir_fd=stage_fd)
-        os.fsync(stage_fd)
-    finally:
-        try:
-            os.unlink("journal.tmp", dir_fd=stage_fd)
-        except FileNotFoundError:
-            pass
+def _append_journal(journal_fd: int, data: dict) -> None:
+    """Append through a held inode; never remove or replace a mutable name."""
+    line = json.dumps(data, sort_keys=True).encode() + b"\n"
+    remaining = memoryview(line)
+    while remaining:
+        written = os.write(journal_fd, remaining)
+        if written <= 0:
+            raise PreparationError("journal append stopped")
+        remaining = remaining[written:]
+    os.fsync(journal_fd)
+
+
+def _verify_journal(stage_fd: int, journal_fd: int) -> None:
+    linked = os.stat("journal.jsonl", dir_fd=stage_fd, follow_symlinks=False)
+    held = os.fstat(journal_fd)
+    if not stat.S_ISREG(linked.st_mode) or (linked.st_dev, linked.st_ino) != (held.st_dev, held.st_ino):
+        raise PreparationError("private journal path changed")
 
 
 def _transfer(source: Path, repository: Path, stage_fd: int, props: dict,
@@ -390,7 +394,7 @@ def _materialize(repo: Path, workspace: Path, entries: list[_Entry], props: dict
                     os.fsync(fd)
                 finally:
                     os.close(fd)
-                check_fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+                check_fd = os.open(parts[-1], os.O_RDONLY | _NOFOLLOW, dir_fd=parent_fd)
                 try:
                     info = os.fstat(check_fd)
                     verify = hashlib.new(fmt, b"blob " + str(size).encode() + b"\0")
@@ -412,15 +416,20 @@ def _prepare_worker(source: Path, private_parent: Path, limits: Limits) -> dict:
     fmt, commit, tree, entries, props, materialized = _inventory(source, limits)
     stage_name = "private-workspace-" + uuid.uuid4().hex
     parent_fd = os.open(private_parent, _DIR)
-    os.mkdir(stage_name, 0o700, dir_fd=parent_fd)
-    stage_fd = os.open(stage_name, _DIR, dir_fd=parent_fd)
-    stage = private_parent / stage_name
-    journal = {"schema": 1, "state": "preparing", "identity": stage_name,
-               "source_commit": commit.decode(), "source_tree": tree.decode(),
-               "object_format": fmt, "materialized_bytes": materialized}
+    stage_fd = journal_fd = None
+    journal = None
     try:
-        _journal(stage_fd, journal)
+        os.mkdir(stage_name, 0o700, dir_fd=parent_fd)
+        stage_fd = os.open(stage_name, _DIR, dir_fd=parent_fd)
+        journal_fd = os.open("journal.jsonl", _NEW | os.O_APPEND, 0o600, dir_fd=stage_fd)
+        os.fsync(stage_fd)
+        stage = private_parent / stage_name
+        journal = {"schema": 1, "state": "preparing", "identity": stage_name,
+                   "source_commit": commit.decode(), "source_tree": tree.decode(),
+                   "object_format": fmt, "materialized_bytes": materialized}
+        _append_journal(journal_fd, journal)
         _verify_link(parent_fd, stage_name, stage_fd)
+        _verify_journal(stage_fd, journal_fd)
         workspace = stage / "worktree"
         _git(stage, "init", "--template=/dev/null", f"--object-format={fmt}", str(workspace))
         _verify_link(parent_fd, stage_name, stage_fd)
@@ -440,8 +449,10 @@ def _prepare_worker(source: Path, private_parent: Path, limits: Limits) -> dict:
         if _oid(_git(workspace, "write-tree"), len(tree)) != tree:
             raise PreparationError("private index tree differs from source")
         journal.update(state="ready", baseline_commit=baseline.decode())
-        _journal(stage_fd, journal)
+        _verify_journal(stage_fd, journal_fd)
+        _append_journal(journal_fd, journal)
         _verify_link(parent_fd, stage_name, stage_fd)
+        _verify_journal(stage_fd, journal_fd)
         stage_info = os.fstat(stage_fd)
         return {"stage": stage_name, "source_commit": commit.decode(),
                 "source_tree": tree.decode(), "baseline_commit": baseline.decode(),
@@ -451,14 +462,18 @@ def _prepare_worker(source: Path, private_parent: Path, limits: Limits) -> dict:
         # Failed stages may contain unique data. Never recursively delete a path
         # whose name can be replaced by another same-UID process.
         try:
-            _verify_link(parent_fd, stage_name, stage_fd)
-            journal["state"] = "failed"
-            _journal(stage_fd, journal)
+            if stage_fd is not None and journal_fd is not None and journal is not None:
+                _verify_link(parent_fd, stage_name, stage_fd)
+                journal["state"] = "failed"
+                _append_journal(journal_fd, journal)
         except (OSError, PreparationError):
             pass
         raise
     finally:
-        os.close(stage_fd)
+        if journal_fd is not None:
+            os.close(journal_fd)
+        if stage_fd is not None:
+            os.close(stage_fd)
         os.close(parent_fd)
 
 
@@ -472,6 +487,9 @@ def prepare_private_workspace(source: os.PathLike | str, private_parent: os.Path
     """
     if sys.platform != "linux" or not shutil.which("bwrap"):
         raise PreparationError("Linux bubblewrap is required")
+    if not all(hasattr(os, name) for name in
+               ("O_DIRECTORY", "O_NOFOLLOW", "O_TMPFILE", "memfd_create")):
+        raise PreparationError("Linux descriptor operations are unavailable")
     source = Path(os.path.abspath(source))
     private_parent = Path(os.path.abspath(private_parent))
     source_real = source.resolve()
@@ -532,7 +550,7 @@ def prepare_private_workspace(source: os.PathLike | str, private_parent: os.Path
         if not stat.S_ISDIR(stage_info.st_mode) or \
                 (stage_info.st_dev, stage_info.st_ino) != (result["stage_device"], result["stage_inode"]):
             raise PreparationError("prepared staging directory changed")
-        return PreparedWorkspace(stage / "worktree", stage / "worktree" / ".git", stage / "journal.json",
+        return PreparedWorkspace(stage / "worktree", stage / "worktree" / ".git", stage / "journal.jsonl",
                                  result["source_commit"], result["source_tree"],
                                  result["baseline_commit"], result["materialized_bytes"])
     finally:
