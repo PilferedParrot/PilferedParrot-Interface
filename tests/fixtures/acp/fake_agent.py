@@ -47,7 +47,9 @@ def options(model="luna"):
              "options": choices}]
 
 
-print(f"fake agent boot {sentinel}", file=sys.stderr, flush=True)
+# Exercise stderr email redaction with fixed synthetic text. Never log the
+# caller-provided FAKE_ACP_SECRET, even in a test adapter.
+print("fake agent boot private.person@example.test", file=sys.stderr, flush=True)
 for raw in sys.stdin:
     message = json.loads(raw)
     with record.open("a", encoding="utf-8") as handle:
