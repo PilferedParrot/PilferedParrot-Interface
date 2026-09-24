@@ -371,6 +371,68 @@ class ACPWorkBrowserEndToEndTests(unittest.TestCase):
         self.assertEqual(self.page.locator(".acp-streamed-text").count(), 0)
         self.assertNotIn("Updated <img", self.page.locator("#messages").inner_text())
 
+    def test_incoming_tool_and_permission_updates_preserve_disclosure_keyboard_focus(self):
+        card = self._send_and_wait_for_permission("browser-e2e-deny")
+        summary = self.page.locator(".acp-tool-card summary").first
+        expect(summary).to_be_visible()
+        summary.focus()
+        summary.press("Enter")
+        expect(summary.locator("..")).not_to_have_attribute("open", "")
+        expect(summary).to_be_focused()
+
+        self.page.evaluate("""() => {
+          const chat = state.chats.find(item => item.id === state.activeId);
+          const message = chat.messages.find(item => item.pending);
+          applyAcpUpdate({chatId: chat.id}, {
+            message_id: message.id,
+            entry: {id: 'focus-tool-update', update: {
+              sessionUpdate: 'tool_call_update', toolCallId: 'focus-new-tool',
+              title: 'Another agent action', status: 'in_progress',
+            }},
+          });
+        }""")
+        expect(self.page.locator(".acp-tool-card")).to_have_count(2)
+        expect(summary).to_be_focused()
+        expect(summary.locator("..")).not_to_have_attribute("open", "")
+
+        self.page.evaluate("""() => {
+          const chat = state.chats.find(item => item.id === state.activeId);
+          const message = chat.messages.find(item => item.pending);
+          applyAcpPermission({chatId: chat.id}, {message_id: message.id, request: {
+            requestId: 'focus-permission-probe',
+            toolCall: {title: 'Additional permission'}, options: [],
+          }});
+        }""")
+        expect(self.page.get_by_role("group", name="Permission requested")).to_have_count(2)
+        expect(summary).to_be_focused()
+        self.page.evaluate("""() => {
+          const chat = state.chats.find(item => item.id === state.activeId);
+          const message = chat.messages.find(item => item.pending);
+          applyAcpPermissionClosed({chatId: chat.id}, {
+            message_id: message.id, request_id: 'focus-permission-probe',
+          });
+        }""")
+        expect(self.page.get_by_role("group", name="Permission requested")).to_have_count(1)
+        expect(summary).to_be_focused()
+
+        prompt = self.page.get_by_role("textbox", name="Message")
+        prompt.focus()
+        self.page.evaluate("""() => {
+          const chat = state.chats.find(item => item.id === state.activeId);
+          const message = chat.messages.find(item => item.pending);
+          applyAcpUpdate({chatId: chat.id}, {
+            message_id: message.id,
+            entry: {id: 'focus-later-tool-update', update: {
+              sessionUpdate: 'tool_call_update', toolCallId: 'focus-new-tool',
+              status: 'completed',
+            }},
+          });
+        }""")
+        expect(self.page.locator(".acp-tool-card").last).to_contain_text("completed")
+        expect(prompt).to_be_focused()
+        card.get_by_role("button", name="Reject once").click()
+        expect(card).to_have_count(0, timeout=5_000)
+
     def test_mobile_permission_choice_scrolls_above_fixed_composer(self):
         self.page.set_viewport_size({"width": 390, "height": 844})
         card = self._send_and_wait_for_permission("browser-e2e-deny")

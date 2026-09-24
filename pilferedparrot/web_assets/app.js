@@ -1343,9 +1343,41 @@ function restoreWorkScroll(positions) {
   });
 }
 
+function captureTranscriptDisclosureFocus() {
+  const summary = document.activeElement;
+  const details = summary?.parentElement;
+  const article = details?.closest?.("article.message[data-message-id]");
+  if (details?.tagName !== "DETAILS" || summary !== details.querySelector(":scope > summary")
+      || !details.matches(".acp-tool-card[data-tool-key], .work-log[data-work-key]")
+      || !article || !$("#messages").contains(article)) return null;
+  const key = details.dataset.toolKey || details.dataset.workKey || "";
+  return {
+    messageId: article.dataset.messageId,
+    kind: details.dataset.toolKey ? "tool" : "work",
+    key,
+    open: details.open,
+  };
+}
+
+function restoreTranscriptDisclosureFocus(focused) {
+  if (!focused) return;
+  const article = [...$("#messages").querySelectorAll("article.message[data-message-id]")]
+    .find((node) => node.dataset.messageId === focused.messageId);
+  if (!article) return;
+  const details = focused.kind === "tool"
+    ? [...article.querySelectorAll(".acp-tool-card[data-tool-key]")]
+      .find((node) => node.dataset.toolKey === focused.key)
+    : [...article.querySelectorAll(".work-log[data-work-key]")]
+      .find((node) => node.dataset.workKey === focused.key);
+  if (!details) return;
+  details.open = focused.open;
+  details.querySelector(":scope > summary")?.focus({ preventScroll: true });
+}
+
 function renderMessages() {
   const chat = activeChat();
   const messages = chat?.messages || [];
+  const focusedDisclosure = captureTranscriptDisclosureFocus();
   const focusedPermission = document.activeElement?.closest?.("[data-acp-permission][data-acp-option]");
   const focusedChoice = focusedPermission ? {
     requestId: focusedPermission.dataset.acpPermission,
@@ -1396,6 +1428,7 @@ function renderMessages() {
   }
   restoreWorkScroll(workScroll);
   globalThis.PilferedParrotIdentity.restoreState($("#messages"), identityState);
+  restoreTranscriptDisclosureFocus(focusedDisclosure);
 }
 
 function renderObservedFiles(observed) {

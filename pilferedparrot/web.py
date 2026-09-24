@@ -2524,11 +2524,27 @@ class PilferedParrotApp(HarnessWorkflow):
 
             setattr(active.cancel_event, "_pilferedparrot_usage", report_usage)
             if engine == "acp":
-                result = self._run_acp_message(
-                    chat_id, pending_id, provider, prompt, cwd,
-                    conversation.provider_session_id, selected_model,
-                    reasoning_effort, pending_snapshot.get("acp_mode"), active,
+                from .whiteboard import whiteboard_discovery
+                from .whiteboard_native import (
+                    cleanup_native_whiteboard_discovery, native_whiteboard_discovery,
                 )
+                acp_mode = pending_snapshot.get("acp_mode")
+                prompt_config = run_config
+                if acp_mode in {"plan", "read-only"}:
+                    prompt_config = deepcopy(run_config)
+                    prompt_config[provider]["read_only"] = True
+                try:
+                    acp_prompt = prompt + whiteboard_discovery(conversation, prompt_config)
+                    acp_prompt += native_whiteboard_discovery(conversation, prompt_config)
+                    from .continuation import continuation_rule
+                    acp_prompt += continuation_rule(provider, prompt_config)
+                    result = self._run_acp_message(
+                        chat_id, pending_id, provider, acp_prompt, cwd,
+                        conversation.provider_session_id, selected_model,
+                        reasoning_effort, acp_mode, active,
+                    )
+                finally:
+                    cleanup_native_whiteboard_discovery(conversation)
             else:
                 result = capture_dispatch(
                     provider, prompt, cwd, conversation, run_config, active.cancel_event,

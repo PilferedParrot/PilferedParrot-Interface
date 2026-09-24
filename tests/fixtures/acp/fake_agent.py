@@ -97,6 +97,16 @@ for raw in sys.stdin:
         with record.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps({"fixture": "prompt"}) + "\n")
         content = message["params"]["prompt"][0]["text"]
+        # Browser fixtures use reserved task names. Recognize those names when
+        # the app appends its instructions without rewriting arbitrary prompts.
+        if os.environ.get("FAKE_ACP_BROWSER_E2E") == "1":
+            for task in ("browser-e2e-deny", "browser-e2e-allow", "browser-e2e-split"):
+                suffix = content[len(task):] if content.startswith(task) else ""
+                if suffix.startswith(("\n\n[Shared model whiteboard]",
+                                      "\n\n[Native whiteboard posting]",
+                                      "\n\n[Incomplete work handoff]")):
+                    content = task
+                    break
         if content == "exit":
             sys.exit(0)
         if content == "error":

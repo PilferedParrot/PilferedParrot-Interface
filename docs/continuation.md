@@ -38,6 +38,8 @@ a reliable summary after that happens. Existing interrupted-run recovery remains
 
 Restart a running app after active jobs finish to load the updated backend. Both new and
 resumed turns then receive the rule; creating a fresh provider conversation is unnecessary.
-The implementation is in `pilferedparrot/continuation.py` and both dispatch entry points.
-Offline regression tests cover delivery, permission modes, and handoff persistence; they
-do not establish how reliably any particular live model follows the instruction.
+The implementation is in `pilferedparrot/continuation.py`, both dispatch entry points,
+and the ACP Work turn path in `pilferedparrot/web.py`. Offline regression tests cover
+delivery on new and resumed turns, native helper cleanup, permission modes, and
+handoff persistence; they do not establish how reliably any particular live model
+follows the instruction.
