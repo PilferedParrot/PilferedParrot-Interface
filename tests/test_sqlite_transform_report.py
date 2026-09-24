@@ -22,7 +22,7 @@ class SQLiteTransformReportTests(unittest.TestCase):
                 "draft": "private prompt text",
                 "qwen_messages": [],
                 "future_secret_key_901": "PRIVATE UNKNOWN VALUE",
-                "cwd": "/private/home/alice/worktree",
+                "cwd": "/private/projects/alice/worktree",
             }],
             "preferences": {
                 "future_preference": {"account_email": "alice@example.invalid"},
@@ -36,7 +36,7 @@ class SQLiteTransformReportTests(unittest.TestCase):
                 "draft": "private prompt text",
                 "provider_messages": [],
                 "window_id": "main",
-                "cwd": "/private/home/alice/worktree",
+                "cwd": "/private/projects/alice/worktree",
             }],
             "preferences": {},
         }
@@ -49,7 +49,7 @@ class SQLiteTransformReportTests(unittest.TestCase):
             "SECRET-SESSION-ID-8327", "GENERATED-SESSION-ID-9911",
             "private prompt text", "PRIVATE UNKNOWN VALUE",
             "future_secret_key_901", "alice@example.invalid",
-            "/private/home/alice/worktree", "account_email",
+            "/private/projects/alice/worktree", "account_email",
         ):
             self.assertNotIn(secret, encoded)
         counts = {(row["path"], row["operation"]): row["count"]
