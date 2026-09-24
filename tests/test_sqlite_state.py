@@ -38,6 +38,26 @@ def paths(root: Path) -> tuple[Path, Path]:
 
 
 class SQLiteStateTests(unittest.TestCase):
+    def test_schema_initialization_syncs_a_writable_staged_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "chats.sqlite3"
+            original_fsync = os.fsync
+            synced_files = []
+
+            def check_file_descriptor(descriptor):
+                if stat.S_ISREG(os.fstat(descriptor).st_mode):
+                    synced_files.append(descriptor)
+                    if os.name == "posix":
+                        import fcntl
+                        access = fcntl.fcntl(descriptor, fcntl.F_GETFL) & os.O_ACCMODE
+                        self.assertNotEqual(access, os.O_RDONLY)
+                return original_fsync(descriptor)
+
+            with patch.object(sqlite_state.os, "fsync", side_effect=check_file_descriptor):
+                with SQLiteStateStore(database):
+                    pass
+            self.assertEqual(len(synced_files), 1)
+
     def test_schema_initialization_fault_never_publishes_partial_final_db(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

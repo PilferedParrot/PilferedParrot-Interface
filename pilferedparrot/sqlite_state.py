@@ -330,7 +330,8 @@ class SQLiteStateStore:
             finally:
                 stage_db.close()
                 del self._db
-            with stage.open("rb") as handle:
+            # Windows requires a writable descriptor for os.fsync/_commit.
+            with stage.open("rb+") as handle:
                 os.fsync(handle.fileno())
             try:
                 # A hard link provides no-replace publication on Linux and
