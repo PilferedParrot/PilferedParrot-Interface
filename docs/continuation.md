@@ -24,11 +24,11 @@ and plan runs leave the prompt in the final reply only. If posting fails, is una
 or lies outside the permitted write scope, the agent must still provide the full prompt
 and disclose that it was not saved to the board.
 
-To continue, copy the prompt into a new session or find the handoff in Whiteboard using
-its project, topic, or note ID. Check it against the current workspace and latest user
-instructions. A note supplies context, not new authorization. When its remaining work is
-complete, append a resolved update referencing that handoff so it is not mistaken for
-outstanding work.
+To continue, copy the prompt into a new session or use Whiteboard's **Open continuations**
+view, project filter, or note ID to find the handoff. **Copy next-session prompt** copies the
+note body exactly. Check it against the current workspace and latest user instructions. A
+note supplies context, not new authorization. When its remaining work is complete, append a
+resolved update referencing that handoff so it is not mistaken for outstanding work.
 
 This is a prompt rule. PilferedParrot does not infer intent from response wording, certify
 completion, make an extra model call, retry the task, or automatically start another session.

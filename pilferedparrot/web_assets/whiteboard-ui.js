@@ -150,6 +150,11 @@
   function noteLabel(note) {
     return note.title || note.kind || "note";
   }
+  function hasContinuationTopic(topics) {
+    return Array.isArray(topics) && topics.some(
+      (topic) => typeof topic === "string" && topic.toLowerCase() === "continuation",
+    );
+  }
   function copyBrief(note) {
     const brief = [
       `Whiteboard ${note.kind || "note"}: ${noteLabel(note)}`,
@@ -175,6 +180,19 @@
       () => setStatus("Task brief copied. Paste it into Work when ready."),
       () => setStatus("Could not copy the task brief.", true),
     );
+  }
+  async function copyNextSessionPrompt(note) {
+    if (!navigator.clipboard?.writeText) {
+      setStatus("Clipboard access is unavailable. Select and copy the note manually.", true);
+      return;
+    }
+    // The handoff body is already the prompt; copied metadata could change its meaning.
+    try {
+      await navigator.clipboard.writeText(note.text);
+      setStatus("Next-session prompt copied. Review it before using it in a new session.");
+    } catch (_error) {
+      setStatus("Could not copy the next-session prompt.", true);
+    }
   }
   function setReply(note) {
     fields.replyTo.value = note.id;
@@ -205,7 +223,7 @@
       });
       await loadNotes(threadQuery(note));
     } catch (error) {
-      setStatus(error.message || "Could not update the request.", true);
+      setStatus(error.message || "Could not update the note.", true);
     } finally {
       post.disabled = false;
     }
@@ -319,7 +337,14 @@
     if (["request", "experiment"].includes(note.kind)) {
       actions.append(button("Copy task brief", () => copyBrief(note)));
     }
+    const continuation = note.kind === "handoff" && hasContinuationTopic(note.topics);
+    if (continuation) {
+      actions.append(button("Copy next-session prompt", () => copyNextSessionPrompt(note)));
+    }
     const effectiveStatus = note.effective_status || note.status || "";
+    if (continuation && effectiveStatus === "open") {
+      actions.append(button("Resolve", () => postStatusUpdate(note, "resolved")));
+    }
     if (note.kind === "request" && effectiveStatus === "open") {
       for (
         const [label, state] of [
@@ -424,6 +449,37 @@
     fields.text.focus();
   }
   function template(kind) {
+    if (kind === "continuation") {
+      const topics = fields.topics.value.split(",").map(trim).filter(Boolean);
+      if (topics.length > 8 || (topics.length === 8 && !hasContinuationTopic(topics))) {
+        setStatus("A continuation needs the continuation topic. Use at most eight topics.", true);
+        return;
+      }
+      const nextTopics = hasContinuationTopic(topics) ? topics : [...topics, "continuation"];
+      const topicValue = nextTopics.join(", ");
+      if (topicValue.length > fields.topics.maxLength) {
+        setStatus("Shorten the topics before adding continuation.", true);
+        return;
+      }
+      const starter =
+        "Next session prompt\nOriginal objective:\nWorkspace and artifact paths:\nCompleted work and checks actually run:\nRemaining steps, in order:\nBlockers or decisions needed:\nUser constraints:\nCompletion check:\n";
+      const existing = fields.text.value;
+      const text = existing.startsWith(starter)
+        ? existing
+        : `${starter}${existing ? `\nExisting draft:\n${existing}` : ""}`;
+      if (text.length > fields.text.maxLength) {
+        setStatus("Shorten the draft before adding the continuation starter.", true);
+        return;
+      }
+      fields.kind.value = "handoff";
+      fields.topics.value = topicValue;
+      fields.topics.closest("details").open = true;
+      fields.text.value = text;
+      fields.text.focus();
+      scheduleDraftSave();
+      setStatus("Continuation starter added. Fill in the prompt before posting.");
+      return;
+    }
     const starters = {
       experiment:
         "Hypothesis:\nSmallest test:\nBudget / stop condition:\nArtifact:\nResult:\n",
@@ -455,6 +511,9 @@
       ]
     ) if (item) payload[name] = item;
     const topics = fields.topics.value.split(",").map(trim).filter(Boolean);
+    if (kind === "handoff" && hasContinuationTopic(topics)) {
+      payload.status = "open";
+    }
     if (topics.length) payload.topics = topics;
     if (kind === "request") {
       payload.status = "open";
@@ -482,6 +541,13 @@
   });
   $("#whiteboardClose").addEventListener("click", () => dialog.close());
   $("#whiteboardBrowse").addEventListener("click", chooseBrowse);
+  $("#whiteboardOpenContinuations").addEventListener("click", () => {
+    filters.search.value = "";
+    filters.topic.value = "continuation";
+    filters.kind.value = "handoff";
+    filters.status.value = "open";
+    loadNotes(currentFilters());
+  });
   $("#whiteboardIndependent").addEventListener("click", chooseIndependent);
   $("#whiteboardRefresh").addEventListener(
     "click",

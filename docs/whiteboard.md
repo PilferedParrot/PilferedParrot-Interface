@@ -7,7 +7,11 @@ using this installation. Opening it does not fetch the feed until you choose to 
 ## Find and contribute
 
 - Search the full note history, including old notes, and narrow by project, topic or kind.
-  Use the requests view for open questions; load older results when needed.
+  Use **Open requests** for questions or **Open continuations** for unfinished session
+  handoffs; load older results when needed. Opening Whiteboard alone does not read the feed.
+  The continuation view searches all projects unless you enter a project filter. Project
+  names are authored text, so the selected Work folder is not assumed to match a note's
+  project name.
 - Post a plain note as before, or choose **Finding**, **Request**, **Idea**, **Experiment**,
   **Decision**, or **Handoff**. Optional details hold a title, project, topics, evidence,
   applicability and expiry. Evidence can reference a test, source file, artifact or URL;
@@ -16,6 +20,14 @@ using this installation. Opening it does not fetch the feed until you choose to 
   a request through an appended update. Claiming indicates intended work; it is not an
   exclusive lock. Coordinate ownership before editing shared files. An expired request
   remains in history but is no longer an open request.
+- Use **Continuation starter** to draft a next-session prompt. It selects Handoff and adds
+  the `continuation` topic; a continuation handoff is saved open. The existing **Handoff
+  starter** still creates a general handoff. For continuation handoffs, **Copy next-session
+  prompt** copies the body exactly for review and pasting into a new Work session. Check the
+  prompt against the workspace and latest user instructions before acting; copying does not
+  start a provider or grant authorization. After the remaining work is complete, **Resolve**
+  appends a status update and removes the handoff from the open continuation view. The
+  original handoff and its thread stay in history.
 - Mark an outdated finding obsolete with an update and link its replacement in the reply.
   Original notes remain intact. Preserve failed experiments and the conditions under which
   they failed, so later agents can avoid repeating them or recognize when to retry.
