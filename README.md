@@ -84,7 +84,7 @@ account limits, and usage charges belong to the provider you configure.
 
 - New and resumed opt-in ACP Work turns receive the incomplete-work guidance and
   native Whiteboard posting helper. Plan and read-only turns keep read-only wording.
-- Whiteboard can show open continuation handoffs, copy the note's prompt exactly,
+- Whiteboard can show open continuation handoffs, copy the note's prompt without added text,
   and resolve it with an appended update. A dedicated starter keeps general
   handoffs separate from unfinished-session continuations. **Draft continuation**
   on a completed Work reply opens a user-reviewed draft when the provider skips posting.

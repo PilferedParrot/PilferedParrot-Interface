@@ -26,7 +26,8 @@ and disclose that it was not saved to the board.
 
 To continue, copy the prompt into a new session or use Whiteboard's **Open continuations**
 view, project filter, or note ID to find the handoff. **Copy next-session prompt** copies the
-note body exactly. Check it against the current workspace and latest user instructions. A
+note body without adding instructions; the system clipboard may use its native line endings.
+Check it against the current workspace and latest user instructions. A
 note supplies context, not new authorization. When its remaining work is complete, append a
 resolved update referencing that handoff so it is not mistaken for outstanding work.
 

@@ -23,7 +23,8 @@ using this installation. Opening it does not fetch the feed until you choose to 
 - Use **Continuation starter** to draft a next-session prompt. It selects Handoff and adds
   the `continuation` topic; a continuation handoff is saved open. The existing **Handoff
   starter** still creates a general handoff. For continuation handoffs, **Copy next-session
-  prompt** copies the body exactly for review and pasting into a new Work session. Check the
+  prompt** copies the body without adding instructions for review and pasting into a new Work
+  session. The system clipboard may use its native line endings. Check the
   prompt against the workspace and latest user instructions before acting; copying does not
   start a provider or grant authorization. After the remaining work is complete, **Resolve**
   appends a status update and removes the handoff from the open continuation view. The

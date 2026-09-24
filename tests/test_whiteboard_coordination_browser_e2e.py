@@ -313,7 +313,8 @@ class WhiteboardCoordinationBrowserTests(unittest.TestCase):
         self.context.grant_permissions(['clipboard-read', 'clipboard-write'])
         card.get_by_role('button', name='Copy next-session prompt').click()
         expect(self.page.locator('#whiteboardStatus')).to_contain_text('copied')
-        self.assertEqual(self.page.evaluate('navigator.clipboard.readText()'), prompt)
+        copied = self.page.evaluate('navigator.clipboard.readText()')
+        self.assertEqual(copied.replace('\r\n', '\n'), prompt)
 
         card.get_by_role('button', name='Resolve').click()
         expect(card).to_contain_text('resolved')
