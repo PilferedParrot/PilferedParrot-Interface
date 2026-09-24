@@ -3459,6 +3459,8 @@ def serve(config: dict[str, Any], cwd: Path, *, open_browser: bool | None = None
     if sqlite_state_path is not None:
         if os.name != "posix":
             raise RuntimeError("SQLite cutover needs a supported private rollback export")
+        if int(config["web"]["port"]) == 0:
+            raise RuntimeError("SQLite cutover requires a fixed app port")
         from .sqlite_cutover import validate_paths
         validate_paths(chat_store_path(config), sqlite_state_path)
     return _server.serve(

@@ -17,6 +17,8 @@ from pilferedparrot import sqlite_cutover
 from pilferedparrot.sqlite_cutover import inspect, validate_paths
 from pilferedparrot.sqlite_state import SourceChanged, StateStoreError
 from pilferedparrot.web import ChatStore
+from pilferedparrot.config import load_config
+from pilferedparrot import web
 from pilferedparrot import web_server
 
 
@@ -107,6 +109,24 @@ class CutoverRunbookTests(unittest.TestCase):
 
 
 class FreshServerTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "posix", "SQLite cutover is POSIX-only")
+    def test_sqlite_start_refuses_ephemeral_port_before_opening_store(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "chats.json"
+            source.write_bytes(b'{"version":8,"chats":[]}')
+            source.chmod(0o600)
+            private = root / "private"
+            private.mkdir(mode=0o700)
+            config = load_config(root / "missing-config.json")
+            config["web"]["chat_store"] = str(source)
+            config["web"]["port"] = 0
+            with patch.object(web._server, "serve") as server:
+                with self.assertRaisesRegex(RuntimeError, "fixed app port"):
+                    web.serve(config, root, sqlite_state_path=private / "state.sqlite3")
+            server.assert_not_called()
+            self.assertFalse((private / "state.sqlite3").exists())
+
     def test_sqlite_start_never_attaches_or_replaces_existing_server(self) -> None:
         config = {"web": {"host": "127.0.0.1", "port": 8765,
                           "open_browser": False}}
