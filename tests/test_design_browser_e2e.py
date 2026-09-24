@@ -211,7 +211,14 @@ class DesignBrowserEndToEndTests(unittest.TestCase):
         self.page.get_by_role("button", name="Provider dashboard").click()
         dialog = self.page.locator("#providerDialog")
         expect(dialog).to_be_visible()
+        expect(dialog.locator("[data-acp-feedback]")).to_contain_text(
+            "Provider setup checked.", timeout=10_000,
+        )
         self.page.evaluate("""() => {
+            state.providers = [...state.providers.filter(provider => provider.id !== 'claude'), {
+              id: 'claude', label: 'Claude', auth_mode: 'cli',
+              description: 'Synthetic confirmation-code fixture',
+            }];
             state.authPending.claude = true;
             state.authConfirmation.claude = true;
             state.authCodes.claude = '';
@@ -219,9 +226,7 @@ class DesignBrowserEndToEndTests(unittest.TestCase):
               auth_status: 'signed_out', status: 'signed_out', reachability: 'reachable',
             };
             state.budgetsLoaded = true;
-            document.querySelector('#providerConnectionList').innerHTML =
-              '<div class="provider-auth-code"><input data-provider-auth-code="claude">' +
-              '<button type="button" data-provider-code="claude" disabled>Confirm sign-in</button></div>';
+            renderProviderConnections();
         }""")
         code = dialog.locator('[data-provider-auth-code="claude"]')
         expect(code).to_be_visible()
