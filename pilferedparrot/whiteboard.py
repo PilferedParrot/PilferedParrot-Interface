@@ -8,10 +8,11 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import re
 import stat
 import tempfile
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,18 @@ KINDS = frozenset({"note", "finding", "request", "idea", "experiment", "decision
 STATUSES = frozenset({"", "open", "claimed", "resolved", "obsolete"})
 BASIS = frozenset({"", "independent", "informed"})
 METADATA_FIELDS = frozenset({"kind", "title", "project", "topics", "evidence", "applies_to", "status", "reply_to", "expires_at", "basis"})
+_POSTED_ID = re.compile(r"^(\d{8}T\d{6}\.\d{6}Z)-[0-9a-f]{32}$")
+
+
+def _posted_at(note_id: str) -> datetime | None:
+    """Get the time from an app-generated name, independent of editable headers."""
+    match = _POSTED_ID.fullmatch(note_id)
+    if match is None:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%Y%m%dT%H%M%S.%fZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 def whiteboard_directory(config: dict[str, Any]) -> Path:
@@ -188,7 +201,7 @@ class Whiteboard:
             # older notes into CRLF. Parse either form without losing the
             # original bytes needed to verify an identity receipt.
             content = raw.replace("\r\n", "\n")
-            author, workspace, text, values = "Model", "", raw, {}
+            author, workspace, text, values = "Model", "", content, {}
             supplied_identity = None
             identity = normalize_identity()
             created = datetime.fromtimestamp(info.st_mtime, timezone.utc)
@@ -380,7 +393,8 @@ class Whiteboard:
             workspace.encode("utf-8")
         except UnicodeEncodeError:
             raise ValueError("whiteboard author and workspace must not contain invalid Unicode") from None
-        if values["reply_to"] not in {"", *[note["id"] for note in self._notes()]}:
+        existing = self._notes()
+        if values["reply_to"] not in {"", *[note["id"] for note in existing]}:
             raise ValueError("whiteboard reply_to must reference an existing safe note")
         if values["kind"] == "update":
             if not values["reply_to"]:
@@ -389,6 +403,14 @@ class Whiteboard:
                 raise ValueError("whiteboard updates must include a status")
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         now = datetime.now(timezone.utc)
+        previous = max((created for note in existing
+                        if (created := _posted_at(note["id"])) is not None
+                        and created - now < timedelta(seconds=1)), default=None)
+        if previous is not None and now <= previous:
+            # Windows clocks can return the same instant for sequential posts.
+            # Keep their file names and pagination in posting order, without
+            # letting a manually named far-future file control new posts.
+            now = previous + timedelta(microseconds=1)
         target = self.directory / f"{now.strftime('%Y%m%dT%H%M%S.%fZ')}-{uuid.uuid4().hex}.txt"
         body = (f"Author: {author}\nCreated: {now.isoformat()}\nWorkspace: {workspace}\n"
                 f"Identity: {json.dumps(identity, ensure_ascii=False, separators=(',', ':'))}\n"

@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 import json
 import tempfile
@@ -87,6 +88,23 @@ class WhiteboardTests(unittest.TestCase):
         self.assertFalse(third['has_more'])
         self.assertIsNone(third['next_before'])
 
+    def test_pagination_keeps_post_order_when_clock_repeats(self):
+        instant = datetime(2026, 9, 24, 0, 41, 26, 825711, tzinfo=timezone.utc)
+
+        class RepeatingClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return instant
+
+        with patch('pilferedparrot.whiteboard.datetime', RepeatingClock):
+            posted = [self.board.post(f'note {index}', 'model')['id'] for index in range(5)]
+        self.assertEqual([note['id'] for note in self.board.read()['messages']], posted)
+        self.assertEqual([note['id'] for note in self.board.read(limit=2)['messages']], posted[-2:])
+        (self.board.directory / ('99991231T235959.999999Z-' + 'f' * 32 + '.txt')).write_text('future')
+        with patch('pilferedparrot.whiteboard.datetime', RepeatingClock):
+            next_post = self.board.post('next note', 'model')
+        self.assertTrue(next_post['id'].startswith('20260924T004126.825716Z-'))
+
     def test_replies_updates_expiry_and_validation(self):
         request = self.board.post(
             'please investigate', 'owner', kind='request', expires_at='2000-01-01T00:00:00Z',
@@ -139,7 +157,7 @@ class WhiteboardTests(unittest.TestCase):
             'Author: native\nCreated: 2020-01-01T00:00:00+00:00\n---\ndated', encoding='utf-8')
         self.assertEqual(self.board.read(since='2019-12-31T18:00:00-05:00')['count'], 1)
         self.assertEqual(self.board.read(since='2020-01-01T01:00:00+01:00')['count'], 0)
-        (native / 'plain.txt').write_text('ordinary text\n---\nnot a header', encoding='utf-8')
+        (native / 'plain.txt').write_bytes(b'ordinary text\r\n---\r\nnot a header')
         plain = next(note for note in self.board.read(query='ordinary text')['messages'] if note['id'] == 'plain')
         self.assertEqual(plain['text'], 'ordinary text\n---\nnot a header')
 
