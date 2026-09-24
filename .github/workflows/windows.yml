@@ -32,7 +32,7 @@ jobs:
       - name: Run Windows focused checks
         shell: pwsh
         run: |
-          python -m compileall -q pilferedparrot tests/test_windows_package.py
+          python -m compileall -q pilferedparrot tests/test_windows_package.py tests/test_acp_client.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest tests.test_terminal_launch -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -41,6 +41,8 @@ jobs:
           python -m unittest discover -s tests -p 'test_whiteboard*.py' -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest tests.test_process_cleanup -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest tests.test_acp_client -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pilferedparrot.windows --help
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

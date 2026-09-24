@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import signal
@@ -14,6 +15,9 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+if sys.platform == "win32":
+    from ctypes import wintypes
 
 from pilferedparrot import acp_client
 from pilferedparrot.acp_client import ACPClient, ACPClosed, ACPError
@@ -437,6 +441,103 @@ class ACPClientTests(unittest.TestCase):
                     os.killpg(client.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows taskkill process-tree test")
+    def test_close_stops_live_adapter_and_descendant_process_tree(self):
+        with tempfile.TemporaryDirectory(prefix="ppi-acp-tree-") as directory:
+            root = Path(directory)
+            descendant_pid_file = root / "descendant.pid"
+            script = root / "tree_adapter.py"
+            script.write_text(
+                "import json, pathlib, subprocess, sys, time\n"
+                "request = json.loads(sys.stdin.readline())\n"
+                "child = subprocess.Popen([sys.executable, '-c', "
+                "'import time; time.sleep(60)'], stdin=subprocess.DEVNULL, "
+                "stdout=sys.stdout, stderr=sys.stderr)\n"
+                "pathlib.Path(sys.argv[1]).write_text(str(child.pid), encoding='ascii')\n"
+                "response = {'jsonrpc': '2.0', 'id': request['id'], 'result': "
+                "{'protocolVersion': 1, 'agentCapabilities': {}}}\n"
+                "sys.stdout.write(json.dumps(response) + '\\n')\n"
+                "sys.stdout.flush()\n"
+                "time.sleep(60)\n",
+                encoding="utf-8",
+            )
+            client = ACPClient([sys.executable, str(script), str(descendant_pid_file)], cwd=root)
+            closed = None
+            descendant_pid = None
+            handles = []
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            kernel32.WaitForSingleObject.restype = wintypes.DWORD
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+
+            def process_handle(pid: int):
+                handle = kernel32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+                if not handle:
+                    raise ctypes.WinError(ctypes.get_last_error())
+                handles.append(handle)
+                return handle
+
+            try:
+                self.assertEqual(client.initialize(timeout=3)["protocolVersion"], 1)
+                deadline = time.monotonic() + 5
+                while not descendant_pid_file.is_file() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(descendant_pid_file.is_file(), "adapter did not start its child")
+                descendant_pid = int(descendant_pid_file.read_text(encoding="ascii"))
+                self.assertNotEqual(descendant_pid, client.pid)
+
+                # Hold synchronization handles to both processes before close;
+                # signaled handles prove that each process exited, independent
+                # of PID-table timing or localized `tasklist` output.
+                parent_handle = process_handle(client.pid)
+                descendant_handle = process_handle(descendant_pid)
+                closed = threading.Thread(target=client.close, daemon=True)
+                closed.start()
+                closed.join(timeout=8)
+                self.assertFalse(closed.is_alive(), "ACP close blocked on an inherited pipe")
+                self.assertEqual(kernel32.WaitForSingleObject(parent_handle, 3000), 0,
+                                 "adapter parent remained alive after close")
+                self.assertEqual(kernel32.WaitForSingleObject(descendant_handle, 3000), 0,
+                                 "adapter descendant remained alive after close")
+            finally:
+                # This fixture owns both PIDs. If the code under test regresses,
+                # stop only those processes so a failed test cannot leak them.
+                if closed is not None and closed.is_alive():
+                    if client._proc.poll() is None:
+                        client._proc.kill()
+                    try:
+                        client._proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    if descendant_pid is not None:
+                        try:
+                            subprocess.run(["taskkill", "/PID", str(descendant_pid), "/F"],
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                           timeout=3, check=False)
+                        except subprocess.TimeoutExpired:
+                            pass
+                    closed.join(timeout=3)
+                else:
+                    if client._proc.poll() is None:
+                        client._proc.kill()
+                    try:
+                        client._proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    if descendant_pid is not None:
+                        try:
+                            subprocess.run(["taskkill", "/PID", str(descendant_pid), "/F"],
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                           timeout=3, check=False)
+                        except subprocess.TimeoutExpired:
+                            pass
+                    client.close()
+                for handle in handles:
+                    kernel32.CloseHandle(handle)
 
     def test_agent_error_does_not_expose_account_identity(self):
         with tempfile.TemporaryDirectory() as directory:
