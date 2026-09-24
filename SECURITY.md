@@ -7,8 +7,17 @@ release lines are not supported.
 
 | Version | Supported |
 | --- | --- |
-| 0.6.0 (Linux and Windows preview) and the current default branch | Yes |
-| 0.5.x and older releases | No; upgrade to the latest release |
+| 0.8.1 (Linux/source and Windows preview) and the current default branch | Yes |
+| 0.8.0 and older releases | No; upgrade to the latest release |
+
+### Internal private preparation fixes in 0.8.1
+
+The 0.8.0 internal private workspace preparation worker could reach writable
+host paths through inherited descriptors and caller stdin, and its read-only
+root view exposed host IPC. Version 0.8.1 narrows that worker's mount and IPC
+view, restricts writes, and validates its returned stage path. There is no
+provider or UI path to this primitive; isolated provider sessions and rewind
+are still unavailable. Historical tags and archives remain unchanged.
 
 ### Execution fixes in 0.7.1
 
