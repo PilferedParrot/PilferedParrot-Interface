@@ -382,6 +382,52 @@ class OnboardingBrowserEndToEndTests(unittest.TestCase):
         expect(select).to_have_value("saved-large")
         expect(select).to_be_focused()
 
+    def test_provider_list_rerender_keeps_focused_model_select(self):
+        dialog = self._open_dashboard()
+        select = dialog.locator('[data-provider-model="codex"]')
+        select.select_option("saved-large")
+        select.focus()
+
+        # Setup and budget responses rerender this entire list asynchronously.
+        self.page.evaluate("renderProviderConnections()")
+
+        expect(select).to_have_value("saved-large")
+        expect(select).to_be_focused()
+
+        refresh = dialog.locator("#refreshProviderDashboard")
+        refresh.focus()
+        self.page.evaluate("renderProviderConnections()")
+        expect(refresh).to_be_focused()
+
+    def test_model_probe_updates_visible_picker_after_provider_list_rerender(self):
+        dialog = self._open_dashboard()
+        select = dialog.locator('[data-provider-model="codex"]')
+        self.fixture.app.model_poll_payload = {
+            "default": "saved-model",
+            "options": [
+                {"value": "saved-model", "label": "Saved model"},
+                {"value": "fresh-model", "label": "Fresh model"},
+            ],
+        }
+        self.page.evaluate('''() => {
+          const original = api;
+          window.__releaseModelProbe = null;
+          api = async (path, options) => {
+            if (path === '/api/providers/codex/models') {
+              await new Promise(resolve => { window.__releaseModelProbe = resolve; });
+            }
+            return original(path, options);
+          };
+        }''')
+        select.focus()
+        select.dispatch_event("pointerdown")
+        self.page.wait_for_function("() => typeof window.__releaseModelProbe === 'function'")
+        self.page.evaluate("renderProviderConnections()")
+        expect(select).to_be_focused()
+        self.page.evaluate("window.__releaseModelProbe()")
+        expect(select.locator('option[value="fresh-model"]')).to_have_count(1)
+        expect(select).to_be_focused()
+
     def test_escape_closes_dashboard_and_returns_focus_to_its_opener(self):
         opener = self.page.get_by_role("button", name="Provider dashboard")
         dialog = self._open_dashboard()

@@ -607,8 +607,16 @@ async function pollProviderModels(provider, select = null, requestedModel = "") 
       const selected = select?.matches("#modelSelect")
         ? selectedModel : providerModelChoice(provider);
       if (select?.matches("[data-provider-model]")) {
-        select.innerHTML = providerModelOptions(provider);
-        select.value = selected;
+        // A setup or budget update may replace the dashboard list while the
+        // probe is in flight. Apply its result to the visible picker then.
+        const picker = select.isConnected ? select
+          : $("#providerConnectionList")?.querySelector(
+            `[data-provider-model="${CSS.escape(provider)}"]`,
+          );
+        if (picker) {
+          picker.innerHTML = providerModelOptions(provider);
+          picker.value = selected;
+        }
       } else if (provider === state.windowProvider) {
         renderModelSelect(provider, state.workModelSelections[provider]
           || activeChat()?.requested_model || selected);
@@ -989,6 +997,9 @@ function renderProviders() {
 function renderProviderConnections() {
   const list = $("#providerConnectionList");
   if (!list) return;
+  const focusedModel = list.contains(document.activeElement)
+    && document.activeElement.matches("[data-provider-model]")
+    ? document.activeElement.dataset.providerModel : null;
   const draft = state.providerDraft ? providerDraftMarkup() : "";
   const visibleProviders = state.windowId === "main" ? providerIds()
     : providerIds().filter((provider) => provider === state.windowProvider);
@@ -1044,6 +1055,9 @@ function renderProviderConnections() {
       </div>
     </section>`;
   }).join("");
+  if (focusedModel) {
+    list.querySelector(`[data-provider-model="${CSS.escape(focusedModel)}"]`)?.focus({ preventScroll: true });
+  }
 }
 
 function acpSetupMarkup(providers) {

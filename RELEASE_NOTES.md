@@ -19,7 +19,9 @@ does not start a provider or authorize new work. After active jobs finish, resta
 load the updated backend and browser assets.
 
 Live transcript updates retain keyboard focus on an expanded tool or work-log disclosure, so
-incoming events do not interrupt keyboard inspection. The release does not add isolated provider
+incoming events do not interrupt keyboard inspection. The provider dashboard's model picker
+also retains focus when a background status refresh rebuilds its controls. The release does
+not add isolated provider
 sessions, rewind, or live JSON-to-SQLite cutover. Existing configuration and local JSON state
 remain in place. Windows remains an unsigned preview; provider accounts and CLIs are not
 live-certified by the package checks.
