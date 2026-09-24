@@ -1,8 +1,8 @@
-# PilferedParrot Interface 0.8.0 release readiness — 2026-09-23
+# PilferedParrot Interface 0.8.0 release verification — 2026-09-23
 
-This is a release preparation record for the candidate source tree. It does not claim that 0.8.0
-has been released or that the final tree has passed its gates. The previous 0.7.1 release, assets, checksums,
-and CI links remain immutable; see the [0.7.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.1).
+The [0.8.0 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.8.0)
+lists the verified source commit, final CI and CodeQL runs, archives, and combined checksums.
+The previous 0.7.1 release, assets, checksums, and CI links remain immutable.
 
 The candidate adds project workrooms, live Work events, opt-in ACP Work for Codex and Claude,
 POSIX file observation, explicit opt-in SQLite cutover, local skill metadata preview, continuation
@@ -14,26 +14,20 @@ Skill instructions are not inserted into prompts. Private workspace preparation 
 only: it has no UI or provider/session isolation, and does not publish files, rewind changes, or
 discard workspaces.
 
-## Required verification — pending
+## Required verification
 
-- As of 2026-09-23, the earlier candidate at `5e7db9a` passed CI on Python 3.12, 3.13, and
-  3.14, Linux Chromium, and CodeQL. Its Windows focused checks, package build, and executable
-  smoke test passed. The Windows browser gate found a staged SQLite database `fsync` error;
-  the candidate now includes the fix, but the native Windows rerun is pending. All gates must
-  be rechecked on the final 0.8.0 tree.
-- Linux Chromium passed 144/144 locally before the latest backend-only fixes; rerun it on the final
-  integrated tree. Local Python 3.13 and 3.14 suites each ran 1,042 cases with 149 expected skips.
-- Focused version, Windows package, release documentation, feedback-baseline, and source hygiene
-  checks remain required on the final integrated tree. Checks in this preparation worktree do not
-  replace release-branch verification.
-- After required checks pass, build the source archive and Windows ZIP from the verified release
-  tree, create a combined `SHA256SUMS`, and verify their hashes before publishing under `v0.8.0`.
+- Run the full Python 3.12, 3.13, and 3.14 matrix, Chromium browser suite, Windows focused and
+  browser checks, portable package build and executable smoke test, and CodeQL on the integrated
+  release tree. The release page records the exact successful runs.
+- Check the feedback source baseline, compile Python and JavaScript, inspect release docs and
+  source hygiene, and verify the source archive and Windows ZIP against the combined `SHA256SUMS`.
+- The last local pre-release suites before version metadata changed ran 1,042 Python cases on
+  each of 3.13 and 3.14 (149 expected browser skips), and 144 Chromium cases. CI on the final
+  versioned tree is the release gate, not these earlier local numbers.
 - Keep Windows unsigned and retain the existing scope statement: no Windows provider-account or
   CLI certification is claimed.
 
-The 0.8.0 package names are planned paths, not evidence of published assets. README download
-links continue to point to 0.7.1 until publication. The 0.7.1 section below records its own
-prior evidence and does not validate 0.8.0.
+The 0.7.1 section below records its own prior evidence and does not validate 0.8.0.
 
 ---
 

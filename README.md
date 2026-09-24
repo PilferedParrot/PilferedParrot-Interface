@@ -4,17 +4,15 @@ PilferedParrot Interface (PPI) is a local browser interface for coding CLIs and 
 model APIs. Choose the provider for a work session, keep its project and history together, and
 open a separate read-only Chat window when you need a quick question.
 
-**0.8.0 release preparation** collects the source changes described below for the stable
-Linux/source channel and unsigned Windows 10/11 x64 preview. This candidate is not published:
-the release assets and verification are pending. The [0.7.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.1)
-and its immutable archives remain available; see the [0.8.0 readiness record](docs/release-readiness.md)
-for required checks.
+**0.8.0** brings project workrooms and optional live Work features to the stable Linux/source
+channel and unsigned Windows 10/11 x64 preview. The [0.8.0 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.8.0)
+lists its assets and verification. Earlier release archives remain unchanged.
 
 [Project site](https://pilferedparrot.github.io/PilferedParrot-Interface/) ·
-[Latest published 0.7.1 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.1/pilferedparrot-0.7.1-source.tar.gz) ·
-[0.7.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.1) ·
+[Linux 0.8.0 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.8.0/pilferedparrot-0.8.0-source.tar.gz) ·
+[0.8.0 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.8.0) ·
 [Release notes](RELEASE_NOTES.md) ·
-[Latest published Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.1/PilferedParrot-0.7.1-windows-x64.zip) ·
+[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.8.0/PilferedParrot-0.8.0-windows-x64.zip) ·
 [Report a bug](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new?template=bug_report.yml) ·
 [Share feedback](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new/choose)
 
@@ -82,9 +80,9 @@ Harness UI has been retired. The existing Harness backend and API remain availab
 records. See [the Harness review](docs/harness-review.md). Provider access, model availability,
 account limits, and usage charges belong to the provider you configure.
 
-## 0.8.0 candidate changes
+## 0.8.0 changes
 
-This candidate contains the following changes beyond the published 0.7.1 assets:
+This release contains the following changes beyond 0.7.1:
 
 - Project workrooms remember recent and pinned folders, group the visible session list by
   selected project, and restore that selection when the app reopens. Use **Project** in the
@@ -122,8 +120,7 @@ This candidate contains the following changes beyond the published 0.7.1 assets:
   report, and download it for voluntary sharing; PPI does not upload it. See the
   [feedback policy](docs/feedback.md).
 
-The 0.8.0 candidate is not published. Until its checks and assets are complete, use
-the immutable [0.7.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.1).
+The 0.7.1 release and its archives remain available for rollback.
 
 The source project requires Python 3.12 or newer. Chrome or Chromium is preferred on Linux; the
 Windows preview also detects Microsoft Edge. The Python application has no third-party package
