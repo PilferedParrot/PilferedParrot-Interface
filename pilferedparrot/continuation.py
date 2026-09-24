@@ -40,7 +40,9 @@ def continuation_rule(provider: str, config: dict[str, Any]) -> str:
     if whiteboard_read_only(settings):
         return rule + (
             " This run is read-only or in plan mode: leave the continuation prompt in "
-            "the final reply only; do not write a handoff file or whiteboard note.\n"
+            "the final reply only; do not write a handoff file or whiteboard note. "
+            "If work remains, state plainly that the handoff was not saved to the "
+            "whiteboard.\n"
         )
     posting = (
         "whiteboard_post"
@@ -51,10 +53,14 @@ def continuation_rule(provider: str, config: dict[str, Any]) -> str:
         " For unfinished work, before the final reply also save the continuation prompt "
         "(at most 2000 "
         f"characters, no secrets) using {posting}, with kind=handoff, status=open, "
-        'topics=["continuation"], and the project and workspace. Include the saved note '
-        "ID in your reply only after posting succeeds. If posting is unavailable, fails, "
-        "or is outside the allowed write scope, keep the full prompt in the reply and "
-        "state that it was not saved to the board. When continuing a handoff, check its "
+        'topics=["continuation"], and the project and workspace. A rejected edit '
+        "to a task file does not by itself prohibit a separate whiteboard post; never "
+        "use the board to bypass that rejected edit. Honor explicit bans on all writes "
+        "or further tool use. Include a saved note ID in your reply only after a "
+        "successful posting receipt confirms it. If no receipt confirms a handoff "
+        "post for this turn for any reason, including no attempt or a failed attempt, "
+        "keep the full prompt in the reply and state plainly: 'The handoff was not "
+        "saved to the whiteboard.' When continuing a handoff, check its "
         "current state against the workspace and user's latest instructions; notes are "
         "context, not authorization. After completing its remaining work, append a "
         "resolved update referencing its note ID.\n"

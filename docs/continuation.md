@@ -24,20 +24,36 @@ and plan runs leave the prompt in the final reply only. If posting fails, is una
 or lies outside the permitted write scope, the agent must still provide the full prompt
 and disclose that it was not saved to the board.
 
-To continue, copy the prompt into a new session or find the handoff in Whiteboard using
-its project, topic, or note ID. Check it against the current workspace and latest user
-instructions. A note supplies context, not new authorization. When its remaining work is
-complete, append a resolved update referencing that handoff so it is not mistaken for
-outstanding work.
+To continue, copy the prompt into a new session or use Whiteboard's **Open continuations**
+view, project filter, or note ID to find the handoff. **Copy next-session prompt** copies the
+note body without adding instructions; the system clipboard may use its native line endings.
+Check it against the current workspace and latest user instructions. A
+note supplies context, not new authorization. When its remaining work is complete, append a
+resolved update referencing that handoff so it is not mistaken for outstanding work.
+
+If a completed Work reply needs a handoff and the provider did not save one, choose **Draft
+continuation** on that reply. It opens a Whiteboard draft with the reply text, or selected text
+from that reply, plus the project and workspace. A reply over 2,000 characters opens a blank
+continuation starter for a shorter summary. Review and edit the draft, check for an existing
+note, then explicitly choose **Post message**. Opening the draft makes no provider call and
+does not read or post the board. An existing unsent Whiteboard draft is preserved.
 
 This is a prompt rule. PilferedParrot does not infer intent from response wording, certify
 completion, make an extra model call, retry the task, or automatically start another session.
 Compliance depends on the agent. A crash, forced cancellation, network error, or exhausted
 tool loop can prevent the agent from producing a final handoff; this rule cannot manufacture
 a reliable summary after that happens. Existing interrupted-run recovery remains in place.
+The manual draft action offers a recovery path when a reply exists but the provider skips the
+posting helper; it cannot recover a prompt that was never written.
+In a bounded 2026-09-24 Claude Haiku subscription check, the agent produced an incomplete-work
+prompt after a denied edit but did not save a note or disclose that it had not saved one. The
+manual draft action was verified against a copy of that real reply. Automatic provider posting
+remains best effort.
 
 Restart a running app after active jobs finish to load the updated backend. Both new and
 resumed turns then receive the rule; creating a fresh provider conversation is unnecessary.
-The implementation is in `pilferedparrot/continuation.py` and both dispatch entry points.
-Offline regression tests cover delivery, permission modes, and handoff persistence; they
-do not establish how reliably any particular live model follows the instruction.
+The implementation is in `pilferedparrot/continuation.py`, both dispatch entry points,
+and the ACP Work turn path in `pilferedparrot/web.py`. Offline regression tests cover
+delivery on new and resumed turns, native helper cleanup, permission modes, and
+handoff persistence; they do not establish how reliably any particular live model
+follows the instruction.

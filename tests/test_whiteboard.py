@@ -232,6 +232,15 @@ class WhiteboardTests(unittest.TestCase):
         self.assertNotIn('Shared model whiteboard', followup)
         self.assertIn('Native whiteboard posting', followup)
 
+    def test_read_only_native_discovery_does_not_create_board(self):
+        config = deepcopy(self.config)
+        directory = self.root / 'missing-parent' / 'board'
+        config['whiteboard'] = {'directory': str(directory)}
+        config['codex']['sandbox'] = 'read-only'
+        discovery = whiteboard_discovery(Conversation(provider='codex'), config)
+        self.assertIn('Read only; do not write notes.', discovery)
+        self.assertFalse(directory.parent.exists())
+
     def test_web_discovery_survives_reload_and_model_change(self):
         import io, json
         from pilferedparrot.web import PilferedParrotApp

@@ -1,3 +1,33 @@
+## PilferedParrot Interface 0.8.2
+
+0.8.2 improves continuation after unfinished Work sessions. New and resumed ACP Work turns
+receive the same incomplete-work handoff guidance as the legacy provider path. Writable turns
+can save an open whiteboard handoff with the `continuation` topic; ACP `plan` and `read-only`
+turns receive read-only guidance and do not create a whiteboard directory during discovery.
+Agent compliance still depends on the provider, and a crash or forced cancellation may prevent
+any handoff from being written. In a bounded real Claude subscription check, a denied edit
+produced a usable next-session prompt but no Whiteboard post or unsaved disclosure. The
+user-reviewed Draft continuation action provides a verified manual path for that case.
+
+Whiteboard now has **Open continuations** to find unfinished handoffs across projects while
+preserving a project filter entered by the user. A continuation handoff can copy its body as a
+next-session prompt and receive an append-only resolved update. **Continuation starter** drafts
+this specific handoff type; generic handoffs keep their previous behavior. A completed Work
+reply also offers **Draft continuation** as a user-reviewed fallback if the provider did not
+save a handoff. It opens a draft and never posts automatically. Copying or drafting a prompt
+does not start a provider or authorize new work. After active jobs finish, restart the app to
+load the updated backend and browser assets.
+
+Live transcript updates retain keyboard focus on an expanded tool or work-log disclosure, so
+incoming events do not interrupt keyboard inspection. The release does not add isolated provider
+sessions, rewind, or live JSON-to-SQLite cutover. Existing configuration and local JSON state
+remain in place. Windows remains an unsigned preview; provider accounts and CLIs are not
+live-certified by the package checks.
+
+Download the source archive or Windows x64 ZIP for this version and verify it against the
+release `SHA256SUMS` before updating the launcher or shortcut. Earlier release archives remain
+immutable.
+
 ## PilferedParrot Interface 0.8.1
 
 0.8.1 repairs the internal Linux private workspace preparation boundary. The 0.8.0 worker

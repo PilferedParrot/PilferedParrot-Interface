@@ -221,7 +221,8 @@ class BrowserEndToEndTests(unittest.TestCase):
         expect(chat_page.get_by_role("textbox", name="Message Chat")).to_be_enabled()
         chat_formatted = chat_page.locator("article.chat-message.assistant .chat-message-body").first
         expect(chat_formatted.get_by_role("heading", name="Shared heading")).to_be_visible()
-        self.assertEqual(work_formatted.inner_html(), chat_formatted.inner_html())
+        self.assertEqual(work_formatted.locator(".work-reply").inner_html(),
+                         chat_formatted.inner_html())
 
         command_message = self.page.locator("article.message.assistant").nth(1)
         buttons = command_message.locator("[data-run-command]")

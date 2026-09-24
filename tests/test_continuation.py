@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from copy import deepcopy
@@ -12,10 +14,12 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from pilferedparrot.config import DEFAULTS
+from pilferedparrot.acp_engine import ACPWorkResult
 from pilferedparrot.continuation import continuation_rule
 from pilferedparrot.dispatch import RunResult, capture_dispatch, dispatch
 from pilferedparrot.model import Conversation
 from pilferedparrot.whiteboard import Whiteboard
+from pilferedparrot.web import PilferedParrotApp
 
 
 MARKER = "[Incomplete work handoff]"
@@ -187,6 +191,96 @@ class ContinuationTests(unittest.TestCase):
                 adapter.assert_not_called()
                 self.assertFalse(hasattr(conversation, "_native_whiteboard_descriptor"))
                 self.assertEqual(list((self.root / "board" / ".native-contexts").glob("*.json")), [])
+
+    def test_acp_work_delivers_discovery_helper_and_rule_on_new_and_resumed_turns(self) -> None:
+        config = deepcopy(self.config)
+        config["web"]["chat_store"] = str(self.root / "acp-chats.json")
+        config["web"]["model_catalog_store"] = str(self.root / "acp-models.json")
+        config["ledger"] = str(self.root / "acp-runs.jsonl")
+        config["codex"]["engine"] = "acp"
+        app = PilferedParrotApp(config, self.root)
+        self.addCleanup(app.shutdown)
+        app.acp_adapters.locate = lambda _provider: ["fake-acp"]
+        chat = app.create_chat({"cwd": str(self.root)}, window_id="main",
+                               window_provider="codex")
+        context_dir = self.root / "board" / ".native-contexts"
+        calls: list[tuple[str | None, str, int]] = []
+
+        def fake_turn(_argv, **kwargs):
+            prompt = kwargs["prompt"]
+            calls.append((kwargs["session_id"], prompt,
+                          len(list(context_dir.glob("*.json")))))
+            return ACPWorkResult("done", False, "acp-session", "end_turn")
+
+        def wait_done() -> None:
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                with app.runs_lock:
+                    if chat["id"] not in app.runs:
+                        return
+                time.sleep(.01)
+            self.fail("fake ACP turn did not finish")
+
+        with patch("pilferedparrot.web.run_acp_turn", side_effect=fake_turn):
+            for message in ("first", "second"):
+                app.send_message(chat["id"], {"content": message}, window_id="main")
+                wait_done()
+                self.assertEqual(list(context_dir.glob("*.json")), [])
+        self.assertEqual([session for session, _, _ in calls], [None, "acp-session"])
+        self.assertEqual([count for _, _, count in calls], [1, 1])
+        for _, sent_prompt, _ in calls:
+            self.assert_rule_is_last(sent_prompt)
+            self.assertEqual(sent_prompt.count(MARKER), 1)
+            self.assertIn("[Native whiteboard posting]", sent_prompt)
+        self.assertIn("[Shared model whiteboard]", calls[0][1])
+        self.assertNotIn("[Shared model whiteboard]", calls[1][1])
+        records = [json.loads(line) for line in (self.root / "acp-runs.jsonl").read_text().splitlines()]
+        self.assertEqual([record["prompt_sha256"] for record in records], [
+            hashlib.sha256(message.encode()).hexdigest() for message in ("first", "second")
+        ])
+        with app.store.lock:
+            self.assertTrue(app.store.get(chat["id"])["whiteboard_discovered"])
+
+        failure_context_counts: list[int] = []
+        def fail_turn(_argv, **_kwargs):
+            failure_context_counts.append(len(list(context_dir.glob("*.json"))))
+            raise RuntimeError("fake failure")
+
+        with patch("pilferedparrot.web.run_acp_turn", side_effect=fail_turn):
+            app.send_message(chat["id"], {"content": "third"}, window_id="main")
+            wait_done()
+        self.assertEqual(failure_context_counts, [1])
+        self.assertEqual(list(context_dir.glob("*.json")), [])
+
+        with patch("pilferedparrot.continuation.continuation_rule",
+                   side_effect=RuntimeError("rule unavailable")), \
+                patch("pilferedparrot.web.run_acp_turn") as agent:
+            app.send_message(chat["id"], {"content": "fourth"}, window_id="main")
+            wait_done()
+        agent.assert_not_called()
+        self.assertEqual(list(context_dir.glob("*.json")), [])
+
+        read_only_calls: list[tuple[str, str, int]] = []
+        def read_only_turn(_argv, **kwargs):
+            read_only_calls.append((kwargs["mode"], kwargs["prompt"],
+                                    len(list(context_dir.glob("*.json")))))
+            return ACPWorkResult("done", False, "acp-session", "end_turn")
+
+        for mode in ("plan", "read-only"):
+            with self.subTest(mode=mode), patch.object(app, "poll_provider_models", return_value={
+                "acp_options": {"modes": [{"value": mode}]},
+            }), patch("pilferedparrot.web.run_acp_turn", side_effect=read_only_turn):
+                app.set_acp_mode(chat["id"], {"mode": mode}, window_id="main")
+                app.send_message(chat["id"], {"content": mode}, window_id="main")
+                wait_done()
+                self.assertEqual(list(context_dir.glob("*.json")), [])
+        self.assertEqual([mode for mode, _, _ in read_only_calls], ["plan", "read-only"])
+        self.assertEqual([count for _, _, count in read_only_calls], [0, 0])
+        for _, prompt, _ in read_only_calls:
+            self.assertIn(MARKER, prompt)
+            self.assertIn("read-only or in plan mode", prompt)
+            self.assertNotIn("[Native whiteboard posting]", prompt)
+            self.assertNotIn("before the final reply also save", prompt)
 
     def test_compatible_tool_loop_persists_open_handoff_with_runtime_identity(self) -> None:
         handoff = "Continue the unfinished parser work and run its focused test."

@@ -461,7 +461,8 @@ def whiteboard_discovery(conversation: Any, config: dict[str, Any]) -> str:
     if getattr(conversation, "provider", "") == "qwen" or settings.get("adapter") == "openai_compatible":
         access = "Use whiteboard_read" + (" only (read-only Chat)." if read_only else " / whiteboard_post tools.")
     else:
-        path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if not read_only:
+            path.mkdir(parents=True, exist_ok=True, mode=0o700)
         access = f"Directory: {path}. Read up to 5 relevant *.txt notes, 2000 characters each."
         if not read_only:
             access += (" New agent notes must report model and reasoning level. Post with the runtime "

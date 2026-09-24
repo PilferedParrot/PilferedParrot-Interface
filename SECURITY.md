@@ -7,7 +7,8 @@ release lines are not supported.
 
 | Version | Supported |
 | --- | --- |
-| 0.8.1 (Linux/source and Windows preview) and the current default branch | Yes |
+| 0.8.2 source and the current default branch | Yes |
+| 0.8.1 published release | Yes until 0.8.2 is published |
 | 0.8.0 and older releases | No; upgrade to the latest release |
 
 ### Internal private preparation fixes in 0.8.1

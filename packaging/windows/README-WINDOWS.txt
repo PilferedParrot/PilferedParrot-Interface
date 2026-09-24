@@ -1,7 +1,7 @@
 PilferedParrot Interface for Windows
 ====================================
 
-This is the 0.8.1 unsigned preview for Windows 10/11 x64. It is a portable package:
+This is the 0.8.2 unsigned preview for Windows 10/11 x64. It is a portable package:
 extract the ZIP and run PilferedParrot.exe. Python and the application are included,
 so no Python installation, installer, or administrator rights are required.
 
@@ -41,6 +41,14 @@ retention, and turning all feedback off.
 This release also adds Project workrooms. The sidebar can pin and
 switch folders while keeping each session's draft and original workspace. Reopening
 the app restores the selected project; the 0.7.1 ZIP does not include it.
+
+The 0.8.2 update adds a Whiteboard view for open continuation handoffs. A
+continuation starter helps draft the next-session prompt, and the note can be
+copied exactly or resolved through an appended update. ACP Work also receives
+the continuation instruction on new and resumed turns. A completed Work reply
+offers a user-reviewed Draft continuation action if a provider skips posting.
+These are guidance and review controls; PPI does not certify task completion
+or automatically resume.
 
 ACP is an opt-in Work preview for Codex and Claude; the legacy path remains the default. Windows
 provider-account and real provider-CLI sign-in are not live-certified. Work file observation
