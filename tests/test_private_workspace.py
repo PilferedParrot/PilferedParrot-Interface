@@ -1,10 +1,12 @@
 """Focused synthetic tests for the private preparation boundary."""
 
+import errno
 import json
 import os
 import runpy
 import shlex
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -95,6 +97,23 @@ class PrivateWorkspaceTests(unittest.TestCase):
         with self.assertRaisesRegex(manager.PreparationError, "different filesystem"):
             manager.prepare_private_workspace(self.source, local)
         self.assertEqual(list(local.iterdir()), [])
+
+    def test_sandbox_result_cannot_select_host_path(self):
+        self.seed()
+        output = {"stage": "../../source", "source_commit": "a" * 40,
+                  "source_tree": "b" * 40, "baseline_commit": "c" * 40,
+                  "stage_device": self.source.stat().st_dev,
+                  "stage_inode": self.source.stat().st_ino,
+                  "materialized_bytes": 0}
+        fake = subprocess.CompletedProcess([], 0, json.dumps(output).encode(), b"")
+        with patch.object(manager, "_run_worker_sandbox", return_value=fake):
+            with self.assertRaisesRegex(manager.PreparationError, "stage identity"):
+                manager.prepare_private_workspace(self.source, self.parent)
+        self.assertEqual(list(self.parent.iterdir()), [])
+        output["stage"] = "private-workspace-" + "a" * 32
+        output["stage_inode"] = "1"
+        with self.assertRaisesRegex(manager.PreparationError, "counters"):
+            manager._validated_worker_result(json.dumps(output).encode(), manager.Limits())
 
     def test_source_path_cannot_supply_bubblewrap_executable(self):
         self.seed()
@@ -228,6 +247,91 @@ sys.exit(result.returncode)
         self.assertEqual(outcomes["mounted"], "writable")
         self.assertEqual(marker.read_bytes(), b"unchanged\n")
         self.assertEqual(mounted_marker.read_bytes(), b"mounted\n")
+
+    def test_worker_cannot_reach_host_sockets_or_network(self):
+        self.seed()
+        hidden = self.source / "untracked-host.sock"
+        exposed = self.source / ".git" / "git-host.sock"
+        fifo = self.source / ".git" / "git-host-fifo"
+        os.mkfifo(fifo)
+        fifo_reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+        listeners = []
+        try:
+            for path in (hidden, exposed):
+                listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                listener.bind(str(path))
+                listener.listen(1)
+                listeners.append(listener)
+            host_namespaces = {name: os.readlink(f"/proc/self/ns/{name}")
+                               for name in ("net", "ipc", "uts")}
+            probe = """
+import errno
+import json
+import os
+import socket
+import stat
+import sys
+
+paths = sys.argv[1:5]
+results = {"visible": [os.path.exists(path) for path in paths],
+           "namespaces": {name: os.readlink("/proc/self/ns/" + name)
+                          for name in ("net", "ipc", "uts")}}
+fds = {}
+for number in os.listdir("/proc/self/fd"):
+    try:
+        target = os.readlink("/proc/self/fd/" + number)
+        with open("/proc/self/fdinfo/" + number) as fdinfo:
+            flags = next(line.split()[1] for line in fdinfo if line.startswith("flags:"))
+        fds[number] = {"target": target, "flags": int(flags, 8),
+                       "regular": stat.S_ISREG(os.fstat(int(number)).st_mode)}
+    except FileNotFoundError:
+        pass
+results["fds"] = fds
+for family in (socket.AF_UNIX, socket.AF_INET):
+    try:
+        socket.socket(family, socket.SOCK_STREAM)
+        results[str(family)] = "created"
+    except OSError as error:
+        results[str(family)] = error.errno
+try:
+    fd = os.open(sys.argv[5], os.O_WRONLY | os.O_NONBLOCK)
+    os.write(fd, b"host write")
+    os.close(fd)
+    results["fifo"] = "writable"
+except OSError as error:
+    results["fifo"] = error.errno
+print(json.dumps(results))
+"""
+            parent_fd = os.open(self.parent, manager._DIR)
+            try:
+                result = manager._run_worker_sandbox(
+                    parent_fd, [sys.executable, "-c", probe, str(hidden), str(exposed),
+                                "/var/run/docker.sock", f"/run/user/{os.getuid()}/bus",
+                                str(fifo)],
+                    timeout=30, source=self.source,
+                )
+            finally:
+                os.close(parent_fd)
+            self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+            outcomes = json.loads(result.stdout)
+            self.assertEqual(outcomes["visible"], [False, True, False, False])
+            for name, host_namespace in host_namespaces.items():
+                self.assertNotEqual(outcomes["namespaces"][name], host_namespace)
+            self.assertTrue({"0", "1", "2"} <= set(outcomes["fds"]))
+            self.assertEqual(outcomes["fds"]["0"]["target"], "/dev/null")
+            for number, info in outcomes["fds"].items():
+                if int(number) > 2:
+                    self.assertTrue(info["regular"], info)
+                    self.assertEqual(info["flags"] & os.O_ACCMODE, os.O_RDONLY, info)
+                    self.assertNotIn(str(self.source), info["target"])
+            self.assertEqual(outcomes[str(socket.AF_UNIX)], errno.EPERM)
+            self.assertEqual(outcomes[str(socket.AF_INET)], errno.EPERM)
+            self.assertEqual(outcomes["fifo"], errno.EACCES)
+            self.assertEqual(os.read(fifo_reader, 100), b"")
+        finally:
+            for listener in listeners:
+                listener.close()
+            os.close(fifo_reader)
 
     def test_symlink_git_substitution_cannot_write_source(self):
         self.seed()

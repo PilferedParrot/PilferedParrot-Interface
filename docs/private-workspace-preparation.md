@@ -12,17 +12,32 @@ attributes, external object stores, oversized objects, and unsafe paths. It
 imports only the pinned tree and its raw subtrees and blobs. The source commit
 is recorded in the journal but not imported into the private repository.
 
-On Linux the function requires `bwrap` with `--bind-fd` and a private (`0700`)
+On Linux the function requires `bwrap` with `--bind-fd` and `--seccomp`, a
+root-owned system `libseccomp`, Landlock ABI 3 or newer, and a private (`0700`)
 destination parent on another filesystem. It executes a resolved root-owned
 Bubblewrap binary beneath root-owned directories that are not group or world
 writable. The launcher and Git workers receive a minimal environment. Bubblewrap
 consumes the destination directory descriptor before starting the worker. An
 inherited descriptor would allow `/proc/self/fd/<fd>/..` to reach writable host
-paths despite a read-only root bind. The launcher also replaces caller stdin
-with `/dev/null`, because a writable inherited stdin descriptor would bypass
-that bind. The worker sees a fresh `/proc`, the host filesystem read only, and
-the pinned destination directory at `/mnt`. Its private repository and blob
-writes therefore cannot reach source paths through a swapped `.git` directory.
+paths. The launcher also replaces caller stdin with `/dev/null`, because a
+writable inherited stdin descriptor would bypass the mount boundary.
+
+The worker receives a private root containing read-only system runtime paths,
+the worker script, the source `.git` directory, and any required home-installed
+Python runtime paths. The source working tree, `/run`, `/tmp`, and other host
+user directories are absent. It has a fresh `/proc`, `/dev`, network, IPC, and
+UTS namespace and no controlling terminal. Seccomp denies socket creation and
+connection, including Unix
+sockets reachable inside a mounted input. Landlock denies pathname writes
+outside `/mnt` and the private `/dev`, including writes to a host FIFO through
+a read-only bind. The writable destination is pinned at `/mnt`. Its private
+repository and blob writes therefore cannot reach source paths through a
+swapped `.git` directory.
+If Bubblewrap, libseccomp, or Landlock cannot establish these controls,
+preparation fails closed. This is a preparation worker boundary, not a claim
+that arbitrary provider sessions or privileged host processes are isolated.
+The caller validates the worker's returned stage name and metadata before
+constructing a host path to the result.
 The different filesystem also makes a same-UID rename of the writable
 destination into the source fail with `EXDEV`. A destination filesystem mounted
 inside the source is refused. The host receives normal paths to a standalone
