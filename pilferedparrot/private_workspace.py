@@ -7,13 +7,17 @@ workspace. No caller may describe the result as an isolated running session.
 from __future__ import annotations
 
 import hashlib
+import ctypes
+import errno
 import json
 import os
+import re
 import select
 import shutil
 import stat
 import subprocess
 import sys
+import sysconfig
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -31,6 +35,7 @@ _GIT_OPTIONS = (
     "-c", "core.eol=lf", "-c", "core.quotePath=false",
     "-c", "maintenance.auto=false", "-c", "gc.auto=0",
 )
+_PROCESS_ENV = {"PATH": "/usr/bin:/bin", "LC_ALL": "C.UTF-8", "PYTHONNOUSERSITE": "1"}
 
 
 class PreparationError(RuntimeError):
@@ -72,7 +77,7 @@ class _Entry:
 
 
 def _environment() -> dict[str, str]:
-    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env = dict(_PROCESS_ENV)
     env.update({
         "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_SYSTEM": os.devnull, "GIT_ATTR_NOSYSTEM": "1",
@@ -478,6 +483,196 @@ def _prepare_worker(source: Path, private_parent: Path, limits: Limits) -> dict:
         os.close(parent_fd)
 
 
+def _trusted_bwrap() -> str:
+    """Resolve a system bubblewrap binary whose entire path is root controlled."""
+    for candidate in ("/usr/bin/bwrap", "/bin/bwrap", "/usr/local/bin/bwrap"):
+        try:
+            resolved = Path(candidate).resolve(strict=True)
+            executable = resolved.stat()
+            if not stat.S_ISREG(executable.st_mode) or not os.access(resolved, os.X_OK):
+                continue
+            if any(info.st_uid != 0 or stat.S_IMODE(info.st_mode) & 0o022
+                   for info in (path.stat() for path in (resolved, *resolved.parents))):
+                continue
+            return str(resolved)
+        except (OSError, RuntimeError):
+            continue
+    raise PreparationError("trusted Linux bubblewrap is required")
+
+
+def _trusted_seccomp_library() -> str:
+    """Load filter generation only from root-controlled system libraries."""
+    triplet = sysconfig.get_config_var("MULTIARCH")
+    locations = [Path(root) / "libseccomp.so.2" for root in
+                 ([f"/lib/{triplet}", f"/usr/lib/{triplet}"] if triplet else []) +
+                 ["/lib64", "/usr/lib64", "/lib", "/usr/lib"]]
+    for candidate in locations:
+        try:
+            resolved = candidate.resolve(strict=True)
+            info = resolved.stat()
+            if stat.S_ISREG(info.st_mode) and all(
+                    item.st_uid == 0 and not stat.S_IMODE(item.st_mode) & 0o022
+                    for item in (path.stat() for path in (resolved, *resolved.parents))):
+                return str(resolved)
+        except (OSError, RuntimeError):
+            continue
+    raise PreparationError("trusted Linux libseccomp is required")
+
+
+def _socket_seccomp_fd() -> int:
+    """Export a filter denying network and Unix socket IPC in the worker."""
+    library = ctypes.CDLL(_trusted_seccomp_library())
+    library.seccomp_init.argtypes = [ctypes.c_uint32]
+    library.seccomp_init.restype = ctypes.c_void_p
+    library.seccomp_rule_add.argtypes = [ctypes.c_void_p, ctypes.c_uint32,
+                                         ctypes.c_int, ctypes.c_uint]
+    library.seccomp_rule_add.restype = ctypes.c_int
+    library.seccomp_syscall_resolve_name.argtypes = [ctypes.c_char_p]
+    library.seccomp_syscall_resolve_name.restype = ctypes.c_int
+    library.seccomp_export_bpf.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    library.seccomp_export_bpf.restype = ctypes.c_int
+    library.seccomp_release.argtypes = [ctypes.c_void_p]
+    context = library.seccomp_init(0x7fff0000)  # SCMP_ACT_ALLOW
+    if not context:
+        raise PreparationError("could not initialize worker socket filter")
+    fd = None
+    try:
+        # Deny io_uring setup too: IORING_OP_SOCKET can otherwise create a
+        # socket without making the socket(2) syscall.
+        for name in (b"socket", b"socketpair", b"connect", b"sendto", b"sendmsg",
+                     b"io_uring_setup"):
+            number = library.seccomp_syscall_resolve_name(name)
+            if number < 0 or library.seccomp_rule_add(
+                    context, 0x00050000 | errno.EPERM, number, 0):  # SCMP_ACT_ERRNO
+                raise PreparationError("worker socket filter is unavailable")
+        legacy = library.seccomp_syscall_resolve_name(b"socketcall")
+        if legacy >= 0 and library.seccomp_rule_add(
+                context, 0x00050000 | errno.EPERM, legacy, 0):
+            raise PreparationError("worker socket filter is unavailable")
+        fd = os.memfd_create("private-worker-seccomp", 0)
+        if library.seccomp_export_bpf(context, fd):
+            raise PreparationError("could not export worker socket filter")
+        os.lseek(fd, 0, os.SEEK_SET)
+        return fd
+    except BaseException:
+        if fd is not None:
+            os.close(fd)
+        raise
+    finally:
+        library.seccomp_release(context)
+
+
+def _restrict_worker_writes() -> None:
+    """Allow pathname writes only in the pinned output and private /dev mounts."""
+    class Ruleset(ctypes.Structure):
+        _fields_ = [("handled_access_fs", ctypes.c_uint64)]
+
+    class PathBeneath(ctypes.Structure):
+        _fields_ = [("allowed_access", ctypes.c_uint64),
+                    ("parent_fd", ctypes.c_int32), ("reserved", ctypes.c_uint32)]
+
+    libc = ctypes.CDLL(None, use_errno=True)
+
+    def call(number: int, *args) -> int:
+        result = libc.syscall(number, *args)
+        if result < 0:
+            raise OSError(ctypes.get_errno(), "Landlock worker boundary failed")
+        return result
+
+    # Linux Landlock ABI 3 handles truncation as well as open-for-write.
+    if call(444, None, 0, 1) < 3:
+        raise PreparationError("Landlock ABI 3 is required")
+    access = (1 << 1) | sum(1 << bit for bit in range(4, 15))
+    ruleset = Ruleset(access)
+    ruleset_fd = call(444, ctypes.byref(ruleset), ctypes.sizeof(ruleset), 0)
+    try:
+        for mount in ("/mnt", "/dev"):
+            mount_fd = os.open(mount, os.O_PATH | os.O_CLOEXEC)
+            try:
+                rule = PathBeneath(access, mount_fd, 0)
+                call(445, ruleset_fd, 1, ctypes.byref(rule), 0)
+            finally:
+                os.close(mount_fd)
+        if libc.prctl(38, 1, 0, 0, 0):  # PR_SET_NO_NEW_PRIVS
+            raise OSError(ctypes.get_errno(), "could not restrict worker privileges")
+        call(446, ruleset_fd, 0)
+    finally:
+        os.close(ruleset_fd)
+
+
+def _worker_sandbox_command(parent_fd: int, seccomp_fd: int, source: Path | None,
+                            executable: Path) -> list[str]:
+    """Mount system code, source Git data, and the pinned output only."""
+    command = [_trusted_bwrap(), "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid",
+               "--unshare-net", "--unshare-ipc", "--unshare-uts", "--tmpfs", "/"]
+    for system_dir in ("/usr", "/etc", "/bin", "/sbin", "/lib", "/lib64",
+                       "/lib32", "/libx32"):
+        if Path(system_dir).exists():
+            command.extend(("--ro-bind", system_dir, system_dir))
+    for path in (Path(sys.prefix), Path(sys.base_prefix), Path(sys.exec_prefix),
+                 Path(sys.base_exec_prefix)):
+        path = path.resolve()
+        if not any(path == system or system in path.parents for system in
+                   (Path("/usr"), Path("/etc"), Path("/bin"), Path("/sbin"),
+                    Path("/lib"), Path("/lib64"), Path("/lib32"), Path("/libx32"))):
+            command.extend(("--ro-bind", str(path), str(path)))
+    # The source working tree is unnecessary: Git reads only its real .git
+    # directory, so untracked FIFOs and sockets never enter the mount view.
+    if source is not None:
+        command.extend(("--dir", str(source), "--ro-bind", str(source / ".git"),
+                        str(source / ".git")))
+    script = Path(__file__).resolve()
+    command.extend(("--ro-bind", str(script), str(script)))
+    if not any(executable == prefix or prefix in executable.parents for prefix in
+               (Path(sys.prefix).resolve(), Path(sys.base_prefix).resolve(),
+                Path(sys.exec_prefix).resolve(), Path(sys.base_exec_prefix).resolve())):
+        command.extend(("--ro-bind", str(executable), str(executable)))
+    command.extend(("--dev", "/dev", "--proc", "/proc", "--chdir", "/",
+                    "--bind-fd", str(parent_fd), "/mnt", "--seccomp", str(seccomp_fd), "--"))
+    return command
+
+
+def _run_worker_sandbox(parent_fd: int, argv: list[str], timeout: int,
+                        source: Path | None = None) -> subprocess.CompletedProcess[bytes]:
+    """Give bubblewrap only the mount fd; never inherit a writable caller stdin."""
+    seccomp_fd = _socket_seccomp_fd()
+    try:
+        executable = Path(argv[0]).resolve(strict=True)
+        launcher = Path(sys.executable).resolve(strict=True)
+        return subprocess.run([*_worker_sandbox_command(parent_fd, seccomp_fd,
+                                                        source,
+                                                        launcher),
+                               str(launcher), "-I", "-S", str(Path(__file__).resolve()),
+                               "--sandbox-exec", json.dumps([str(executable), *argv[1:]])],
+                              pass_fds=(parent_fd, seccomp_fd), stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              env=dict(_PROCESS_ENV), timeout=timeout)
+    finally:
+        os.close(seccomp_fd)
+
+
+def _validated_worker_result(raw: bytes, limits: Limits) -> dict:
+    """Keep sandbox output from selecting an arbitrary host pathname."""
+    try:
+        result = json.loads(raw)
+    except (UnicodeError, ValueError) as exc:
+        raise PreparationError("invalid sandbox result") from exc
+    if not isinstance(result, dict) or not isinstance(result.get("stage"), str) or \
+            re.fullmatch(r"private-workspace-[0-9a-f]{32}", result["stage"]) is None:
+        raise PreparationError("invalid sandbox stage identity")
+    oids = [result.get(key) for key in ("source_commit", "source_tree", "baseline_commit")]
+    if not all(isinstance(oid, str) and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", oid)
+               for oid in oids) or len({len(oid) for oid in oids}) != 1:
+        raise PreparationError("invalid sandbox object IDs")
+    for key in ("stage_device", "stage_inode", "materialized_bytes"):
+        value = result.get(key)
+        if type(value) is not int or value < (1 if key == "stage_inode" else 0):
+            raise PreparationError("invalid sandbox result counters")
+    if result["materialized_bytes"] > limits.max_materialized_bytes:
+        raise PreparationError("invalid sandbox materialized byte count")
+    return result
+
+
 def prepare_private_workspace(source: os.PathLike | str, private_parent: os.PathLike | str,
                               limits: Limits = Limits()) -> PreparedWorkspace:
     """Prepare a private copy, refusing same-filesystem and unsandboxed writes.
@@ -486,8 +681,9 @@ def prepare_private_workspace(source: os.PathLike | str, private_parent: os.Path
     This prevents a same-UID host process from renaming an open writable stage
     into the source while the worker writes. Failed stages remain for review.
     """
-    if sys.platform != "linux" or not shutil.which("bwrap"):
+    if sys.platform != "linux":
         raise PreparationError("Linux bubblewrap is required")
+    _trusted_bwrap()
     if not all(hasattr(os, name) for name in
                ("O_DIRECTORY", "O_NOFOLLOW", "O_TMPFILE", "memfd_create")):
         raise PreparationError("Linux descriptor operations are unavailable")
@@ -528,17 +724,13 @@ def prepare_private_workspace(source: os.PathLike | str, private_parent: os.Path
         if (os.fstat(parent_fd).st_dev, os.fstat(parent_fd).st_ino) != \
                 (parent_info.st_dev, parent_info.st_ino):
             raise PreparationError("destination parent changed")
-        command = ["bwrap", "--die-with-parent", "--unshare-user", "--unshare-pid",
-                   "--ro-bind", "/", "/", "--dev", "/dev",
-                   "--bind", f"/proc/self/fd/{parent_fd}", "/mnt",
-                   "--", sys.executable, str(Path(__file__).resolve()), "--worker",
-                   str(source), json.dumps(asdict(limits))]
-        proc = subprocess.run(command, pass_fds=(parent_fd,), stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE, timeout=900)
+        proc = _run_worker_sandbox(parent_fd, [sys.executable, "-I", "-S", str(Path(__file__).resolve()),
+                                               "--worker", str(source_real), json.dumps(asdict(limits))],
+                                   timeout=900, source=source_real)
         if proc.returncode:
             raise PreparationError("sandboxed preparation failed: " +
                                    proc.stderr.decode(errors="replace")[-1000:])
-        result = json.loads(proc.stdout)
+        result = _validated_worker_result(proc.stdout, limits)
         linked = private_parent.lstat()
         source_linked = source.lstat()
         if (source_linked.st_dev, source_linked.st_ino) != (source_info.st_dev, source_info.st_ino):
@@ -559,6 +751,10 @@ def prepare_private_workspace(source: os.PathLike | str, private_parent: os.Path
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--sandbox-exec":
+        _restrict_worker_writes()
+        command = json.loads(sys.argv[2])
+        os.execv(command[0], command)
     if len(sys.argv) != 4 or sys.argv[1] != "--worker":
         raise SystemExit(2)
     try:

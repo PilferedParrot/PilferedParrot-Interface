@@ -1,3 +1,3 @@
 """PilferedParrot: a direct browser interface for local and CLI model providers."""
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"

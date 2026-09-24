@@ -1,3 +1,17 @@
+## PilferedParrot Interface 0.8.1
+
+0.8.1 repairs the internal Linux private workspace preparation boundary. The 0.8.0 worker
+could reach writable host paths through an inherited destination descriptor or writable stdin,
+and an untrusted launcher environment could run code before Bubblewrap started. This patch
+closes those paths and restricts the worker's host access. The preparation primitive has no
+provider or UI call path; this patch does not enable isolated provider sessions, workspace
+publication, discard, or rewind. The [0.8.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.8.1)
+lists the verified assets and checksums. Earlier release archives remain immutable.
+
+Finish active jobs before closing the old app. Download the new source archive or unsigned
+Windows preview ZIP, verify it against `SHA256SUMS`, and update the launcher or shortcut to the
+new installation. Keep existing configuration and local JSON state.
+
 ## PilferedParrot Interface 0.8.0
 
 0.8.0 brings the changes listed below to the stable Linux/source channel and unsigned Windows

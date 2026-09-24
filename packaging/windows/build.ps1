@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$Version = "0.8.0"
+$Version = "0.8.1"
 $PyInstallerVersion = if ($env:PYINSTALLER_VERSION) { $env:PYINSTALLER_VERSION } else { "6.15.0" }
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 python (Join-Path $Root "bin/update-feedback-baseline") --check

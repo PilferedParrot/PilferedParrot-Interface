@@ -1,4 +1,13 @@
-# PilferedParrot Interface 0.8.0 release verification — 2026-09-23
+# PilferedParrot Interface 0.8.1 patch verification — 2026-09-23
+
+This patch repairs inherited descriptor, stdin, launcher environment, and host access routes
+in the internal Linux private workspace preparation worker. The primitive remains unconnected
+to provider sessions and UI controls. Before publication, verify the final integrated tree with
+focused adversarial tests, Python 3.12/3.13/3.14 unit checks, Linux Chromium, native Windows
+focused/browser/package/executable checks, CodeQL, feedback baseline, source hygiene, and
+downloaded asset hashes. The release page records exact final commit and run evidence.
+
+## PilferedParrot Interface 0.8.0 release verification — 2026-09-23
 
 The [0.8.0 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.8.0)
 lists the verified source commit, final CI and CodeQL runs, archives, and combined checksums.

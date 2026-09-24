@@ -4,15 +4,15 @@ PilferedParrot Interface (PPI) is a local browser interface for coding CLIs and 
 model APIs. Choose the provider for a work session, keep its project and history together, and
 open a separate read-only Chat window when you need a quick question.
 
-**0.8.0** brings project workrooms and optional live Work features to the stable Linux/source
-channel and unsigned Windows 10/11 x64 preview. The [0.8.0 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.8.0)
+**0.8.1** repairs the internal private workspace preparation boundary in the stable Linux/source
+channel and unsigned Windows 10/11 x64 preview. The [0.8.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.8.1)
 lists its assets and verification. Earlier release archives remain unchanged.
 
 [Project site](https://pilferedparrot.github.io/PilferedParrot-Interface/) ·
-[Linux 0.8.0 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.8.0/pilferedparrot-0.8.0-source.tar.gz) ·
-[0.8.0 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.8.0) ·
+[Linux 0.8.1 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.8.1/pilferedparrot-0.8.1-source.tar.gz) ·
+[0.8.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.8.1) ·
 [Release notes](RELEASE_NOTES.md) ·
-[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.8.0/PilferedParrot-0.8.0-windows-x64.zip) ·
+[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.8.1/PilferedParrot-0.8.1-windows-x64.zip) ·
 [Report a bug](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new?template=bug_report.yml) ·
 [Share feedback](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new/choose)
 
@@ -80,6 +80,15 @@ Harness UI has been retired. The existing Harness backend and API remain availab
 records. See [the Harness review](docs/harness-review.md). Provider access, model availability,
 account limits, and usage charges belong to the provider you configure.
 
+## 0.8.1 patch
+
+The internal Linux private workspace preparation worker now drops inherited host descriptors,
+closes caller stdin, uses a trusted Bubblewrap executable and a controlled launch environment,
+and narrows the sandbox's host access. Version 0.8.0 could reach writable host paths through
+inherited descriptors even though its root bind was read-only. This primitive has no provider
+or UI call path; private provider isolation, publication, discard, and rewind remain unavailable.
+See [private workspace preparation](docs/private-workspace-preparation.md).
+
 ## 0.8.0 changes
 
 This release contains the following changes beyond 0.7.1:
@@ -132,7 +141,7 @@ Linux is the stable, best-validated channel, with strongest validation on Linux 
 Install Python 3.12+, Chrome or Chromium, and (if using Qwen shell tools) Bubblewrap.
 
 ```bash
-git clone --branch v0.7.1 https://github.com/PilferedParrot/PilferedParrot-Interface.git
+git clone --branch v0.8.1 https://github.com/PilferedParrot/PilferedParrot-Interface.git
 cd PilferedParrot-Interface
 cp config.example.json config.json
 ./bin/pilferedparrot
@@ -150,7 +159,7 @@ for authentication and integration limits.
 
 ### Upgrading an existing installation
 
-Download the [0.7.1 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.1/pilferedparrot-0.7.1-source.tar.gz),
+Download the [0.8.1 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.8.1/pilferedparrot-0.8.1-source.tar.gz),
 extract it, and run `./bin/pilferedparrot --version` before replacing your launcher with
 `./bin/install-pilferedparrot-desktop`. Keep the extracted directory in place. Existing
 configuration, browser profiles, conversations, and run metadata remain in their current local
@@ -158,7 +167,7 @@ state directory; do not replace your `config.json` unless you intend to reconfig
 
 ## Windows preview
 
-Download the [0.7.1 Windows x64 preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.1/PilferedParrot-0.7.1-windows-x64.zip),
+Download the [0.8.1 Windows x64 preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.8.1/PilferedParrot-0.8.1-windows-x64.zip),
 extract it to a directory you control, and run `PilferedParrot.exe`. The package includes Python,
 needs no installation or administrator rights, and uses Chrome, Chromium, or Microsoft Edge. Keep
 the console window open while PPI runs and keep the extracted directory together. The executable
