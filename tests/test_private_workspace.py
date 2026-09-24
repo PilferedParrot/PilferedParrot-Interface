@@ -33,7 +33,10 @@ class PrivateWorkspaceTests(unittest.TestCase):
         self.git("init", "-q")
 
     def git(self, *args, cwd=None):
-        return subprocess.run(["git", "-C", str(cwd or self.source), *args],
+        # Keep the fixture's Git writes synchronous: detached auto maintenance
+        # can outlive commit() and change .git during the snapshot comparison.
+        return subprocess.run(["git", "-c", "maintenance.auto=false", "-C",
+                               str(cwd or self.source), *args],
                               check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
 
     def commit(self):

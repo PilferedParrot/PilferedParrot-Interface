@@ -29,6 +29,7 @@ _GIT_OPTIONS = (
     "-c", "core.hooksPath=/dev/null", "-c", "core.attributesFile=/dev/null",
     "-c", "core.fsmonitor=false", "-c", "core.autocrlf=false",
     "-c", "core.eol=lf", "-c", "core.quotePath=false",
+    "-c", "maintenance.auto=false", "-c", "gc.auto=0",
 )
 
 
