@@ -1,7 +1,7 @@
 # PilferedParrot Interface 0.8.0 release readiness — 2026-09-23
 
 This is a release preparation record for the candidate source tree. It does not claim that 0.8.0
-has been released or that any gate below has passed. The previous 0.7.1 release, assets, checksums,
+has been released or that the final tree has passed its gates. The previous 0.7.1 release, assets, checksums,
 and CI links remain immutable; see the [0.7.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.1).
 
 The candidate adds project workrooms, live Work events, opt-in ACP Work for Codex and Claude,
@@ -16,10 +16,11 @@ discard workspaces.
 
 ## Required verification — pending
 
-- As of 2026-09-23, the lead reports the candidate commit passed CI on Python 3.12, 3.13, and
-  3.14, and CodeQL is green. The lead also reports Windows focused checks, package build, and
-  executable smoke test passed. The Windows production browser step is still running, so the
-  Windows gate remains pending. These results must be rechecked on the final integrated tree.
+- As of 2026-09-23, the earlier candidate at `5e7db9a` passed CI on Python 3.12, 3.13, and
+  3.14, Linux Chromium, and CodeQL. Its Windows focused checks, package build, and executable
+  smoke test passed. The Windows browser gate found a staged SQLite database `fsync` error;
+  the candidate now includes the fix, but the native Windows rerun is pending. All gates must
+  be rechecked on the final 0.8.0 tree.
 - Linux Chromium passed 144/144 locally before the latest backend-only fixes; rerun it on the final
   integrated tree. Local Python 3.13 and 3.14 suites each ran 1,042 cases with 149 expected skips.
 - Focused version, Windows package, release documentation, feedback-baseline, and source hygiene
