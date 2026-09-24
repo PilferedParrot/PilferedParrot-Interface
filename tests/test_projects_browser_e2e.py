@@ -47,7 +47,11 @@ class ProjectWorkroomBrowserTests(unittest.TestCase):
         self.page.locator("#projectInput").fill(str(second))
         self.page.locator("#saveProject").click()
         expect(self.page.locator("#projectSelect")).to_have_value(str(second))
-        self.page.wait_for_function("(old) => state.activeId !== old", arg=initial_id)
+        # A new-project switch clears activeId before the chat creation finishes.
+        self.page.wait_for_function(
+            "(old) => Boolean(state.activeId) && state.activeId !== old && !projectSwitchPending",
+            arg=initial_id,
+        )
         second_id = self.page.evaluate("state.activeId")
         self.assertEqual(self.page.locator(f'[data-chat="{initial_id}"]').count(), 0)
         self.page.locator("#prompt").fill("Draft for second project")
@@ -88,7 +92,10 @@ class ProjectWorkroomBrowserTests(unittest.TestCase):
         self.page.locator("#projectInput").fill(str(second))
         self.page.locator("#saveProject").click()
         expect(self.page.locator("#projectSelect")).to_have_value(str(second))
-        self.page.wait_for_function("(old) => state.activeId !== old", arg=first_id)
+        self.page.wait_for_function(
+            "(old) => Boolean(state.activeId) && state.activeId !== old && !projectSwitchPending",
+            arg=first_id,
+        )
         second_id = self.page.evaluate("state.activeId")
         self.page.locator("#projectSelect").select_option(first)
         expect(self.page.locator("#projectSelect")).to_have_value(first)
