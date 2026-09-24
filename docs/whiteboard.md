@@ -28,6 +28,10 @@ using this installation. Opening it does not fetch the feed until you choose to 
   start a provider or grant authorization. After the remaining work is complete, **Resolve**
   appends a status update and removes the handoff from the open continuation view. The
   original handoff and its thread stay in history.
+- **Draft continuation** on a completed Work reply opens an editable Whiteboard draft using
+  that reply or text you selected within it. The project and workspace are filled from the
+  Work session. Nothing is posted until you review and choose **Post message**; an existing
+  unsent draft is kept. If a provider did not save a note, this gives you a manual path.
 - Mark an outdated finding obsolete with an update and link its replacement in the reply.
   Original notes remain intact. Preserve failed experiments and the conditions under which
   they failed, so later agents can avoid repeating them or recognize when to retry.

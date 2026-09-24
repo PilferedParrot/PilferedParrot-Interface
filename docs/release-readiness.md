@@ -1,3 +1,44 @@
+# PilferedParrot Interface 0.8.2 candidate verification — 2026-09-24
+
+This ordinary continuation release candidate adds the incomplete-work handoff rule to new and
+resumed ACP Work turns, the Whiteboard Open continuations view and continuation controls, and
+focus preservation during live transcript updates. Completed Work replies also offer a
+user-reviewed Draft continuation action when the provider skips a handoff. Generic handoffs
+keep their previous behavior. Read-only and plan turns do not gain whiteboard write access. The saved handoff is
+agent-authored guidance, not proof that a provider followed the rule or that an interrupted
+run can always create a prompt. No private execution mode, rewind, or live SQLite cutover is
+included.
+
+A bounded real Claude Haiku/default subscription run on 2026-09-24 showed the limitation:
+after a denied file edit it produced an incomplete-work prompt but neither posted a note nor
+disclosed that omission. A fresh one-prompt follow-up with clearer rule wording still missed
+both. A separate user-initiated UI check copied the saved real reply into a Whiteboard draft
+and posted it only after an explicit click; the resulting open handoff was verified. This
+supports the manual fallback, not automatic provider compliance.
+
+## Required verification before publication
+
+- On the final versioned and integrated tree, pass Python 3.12/3.13/3.14 CI, Linux Chromium,
+  native Windows focused/browser/package/executable checks, and CodeQL. Review wide and narrow
+  Whiteboard and transcript behavior in light and dark modes. Record exact commit and run links
+  in the release record; earlier local or branch checks do not stand in for these gates.
+- Check the feedback source baseline, Python compilation, JavaScript and shell syntax, source
+  hygiene, and release documentation. Verify the version in the CLI, Windows build script,
+  Windows workflow artifact/ZIP names, Windows package readme, README, and website.
+- Build the source archive from the verified release tree and use the Windows ZIP produced by
+  Windows CI. Combine both SHA-256 hashes in `SHA256SUMS`; download all release assets back,
+  compare hashes byte-for-byte, check gzip/ZIP integrity, and inspect archive paths and contents
+  for private state or machine-specific data.
+- Keep the Windows package unsigned. The automated package check does not certify a real
+  provider account, CLI sign-in, or interactive Windows provider behavior. Local fake-agent
+  checks do not establish live provider compliance with the handoff prompt.
+
+As of 2026-09-24, final integrated CI, Windows, CodeQL, and asset checks for this candidate
+have not been recorded here. The release record must state their actual results before any
+publication claim.
+
+---
+
 # PilferedParrot Interface 0.8.1 patch verification — 2026-09-23
 
 This patch repairs inherited descriptor, stdin, launcher environment, and host access routes

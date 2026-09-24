@@ -1378,6 +1378,10 @@ function renderMessages() {
   const chat = activeChat();
   const messages = chat?.messages || [];
   const focusedDisclosure = captureTranscriptDisclosureFocus();
+  const focusedContinuation = document.activeElement?.closest?.("[data-draft-continuation]");
+  const continuationFocus = focusedContinuation && $("#messages").contains(focusedContinuation)
+    ? { chatId: chat?.id, messageId: focusedContinuation.dataset.draftContinuation,
+        index: focusedContinuation.dataset.messageIndex } : null;
   const focusedPermission = document.activeElement?.closest?.("[data-acp-permission][data-acp-option]");
   const focusedChoice = focusedPermission ? {
     requestId: focusedPermission.dataset.acpPermission,
@@ -1415,11 +1419,24 @@ function renderMessages() {
         commandTarget: assistant && message.id ? { messageId: message.id } : null,
         shellLanguages: CODE_BLOCK_LANGUAGES,
       });
+    const visibleResponse = assistant && !message.pending
+      ? `<div class="work-reply">${response}</div>` : response;
     return `<article class="message ${role} ${message.error ? "error" : ""}" data-message-id="${escapeHtml(message.id || "")}" data-provider="${assistant ? escapeHtml(provider) : ""}">
       <div class="message-body"><div class="message-head"><span class="message-name">${escapeHtml(name)}</span>${message.cancelled ? '<span class="message-state">Cancelled</span>' : ""}</div>
-      <div class="message-content">${work}${acpPermissions}${acpCards}${response}${assistant && !message.pending ? renderObservedFiles(message.observed_files) : ""}${assistant && !message.pending ? globalThis.PilferedParrotIdentity.render(message) : ""}</div></div>
+      <div class="message-content">${work}${acpPermissions}${acpCards}${visibleResponse}${assistant && !message.pending ? renderObservedFiles(message.observed_files) : ""}${assistant && !message.pending ? globalThis.PilferedParrotIdentity.render(message) : ""}</div></div>
     </article>`;
   }).join("");
+  [...$("#messages").querySelectorAll("article.message")].forEach((article, index) => {
+    const message = messages[index];
+    if (message.role !== "assistant" || message.pending) return;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary draft-continuation";
+    button.dataset.draftContinuation = String(message.id || "");
+    button.dataset.messageIndex = String(index);
+    button.textContent = "Draft continuation";
+    article.querySelector(".message-head").append(button);
+  });
   if (focusedChoice) {
     [...$("#messages").querySelectorAll("[data-acp-permission][data-acp-option]")]
       .find((button) => button.dataset.acpPermission === focusedChoice.requestId
@@ -1429,7 +1446,41 @@ function renderMessages() {
   restoreWorkScroll(workScroll);
   globalThis.PilferedParrotIdentity.restoreState($("#messages"), identityState);
   restoreTranscriptDisclosureFocus(focusedDisclosure);
+  if (continuationFocus?.chatId === activeChat()?.id) {
+    [...$("#messages").querySelectorAll("[data-draft-continuation]")]
+      .find((button) => button.dataset.draftContinuation === continuationFocus.messageId
+        && button.dataset.messageIndex === continuationFocus.index)
+      ?.focus({ preventScroll: true });
+  }
 }
+
+function selectedWorkMessageText(article) {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || !selection.rangeCount) return "";
+  const content = article.querySelector(".work-reply");
+  const range = selection.getRangeAt(0);
+  if (!content?.contains(range.startContainer) || !content.contains(range.endContainer)) return "";
+  return selection.toString().trim();
+}
+
+$("#messages").addEventListener("click", (event) => {
+  const button = event.target.closest?.("[data-draft-continuation]");
+  if (!button || !$("#messages").contains(button)) return;
+  const chat = activeChat();
+  const message = chat?.messages?.[Number(button.dataset.messageIndex)];
+  if (!message || message.role !== "assistant" || message.pending
+      || String(message.id || "") !== button.dataset.draftContinuation) return;
+  const article = button.closest("article.message");
+  const fullText = typeof message.content === "string" ? message.content : "";
+  const selectedText = selectedWorkMessageText(article);
+  const text = selectedText && (selectedText.length < fullText.length || selectedText.length > 2000)
+    ? selectedText : fullText;
+  const workspace = projectOfChat(chat);
+  const project = workspace
+    ? state.projects.find((item) => item.cwd === workspace)?.name || projectFolderName(workspace)
+    : "";
+  globalThis.PilferedParrotWhiteboard?.prepareContinuation({ text, workspace, project });
+});
 
 function renderObservedFiles(observed) {
   if (!observed || observed.label !== "Changes observed during this turn; authorship unknown") return "";

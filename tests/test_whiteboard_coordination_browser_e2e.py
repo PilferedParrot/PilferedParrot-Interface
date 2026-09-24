@@ -362,6 +362,104 @@ class WhiteboardCoordinationBrowserTests(unittest.TestCase):
         self.assertIn('continuation', created[0]['topics'])
         self.assertIn('review', created[0]['topics'])
 
+    def test_completed_work_reply_opens_reviewable_continuation_draft(self):
+        reply = ('Task incomplete.\n\n### Next session prompt\n'
+                 'Objective: finish the Alpha check.\n'
+                 'Completed: the first check passed.\n'
+                 'Next: run the second check and inspect its result.')
+        self.page.evaluate('''text => {
+          const chat = state.chats.find(item => item.id === state.activeId);
+          chat.messages.push({id: 'manual-continuation-reply', role: 'assistant',
+                              provider: 'codex', content: text, created_at: Date.now() / 1000,
+                              activity: [{id: 'manual-tool-output', kind: 'tool_result',
+                                          content: 'PRIVATE-TOOL-SAMPLE'}]});
+          renderMessages();
+        }''', reply)
+        actions = self.page.locator('[data-draft-continuation="manual-continuation-reply"]')
+        expect(actions).to_have_count(1)
+        actions.focus()
+        self.page.evaluate('renderMessages()')
+        expect(actions).to_be_focused()
+        selected_tool_text = self.page.evaluate('''() => {
+          const article = document.querySelector('[data-draft-continuation="manual-continuation-reply"]')
+            .closest('article.message');
+          const work = article.querySelector('.work-log');
+          work.open = true;
+          const output = work.querySelector('.work-item > div');
+          const range = document.createRange();
+          range.selectNodeContents(output);
+          window.getSelection().removeAllRanges();
+          window.getSelection().addRange(range);
+          return selectedWorkMessageText(article);
+        }''')
+        self.assertEqual(selected_tool_text, '', 'tool output is not a reply selection')
+        self.page.evaluate('window.getSelection().removeAllRanges()')
+        requests = []
+        self.page.on('request', lambda request: requests.append((request.method, request.url))
+                     if '/api/whiteboard' in request.url else None)
+        actions.click()
+        expect(self.page.locator('#whiteboardDialog')).to_be_visible()
+        self.assertEqual(requests, [], 'drafting must not read or post the shared board')
+        expect(self.page.locator('#whiteboardComposeKind')).to_have_value('handoff')
+        expect(self.page.locator('#whiteboardComposeTopics')).to_have_value('continuation')
+        expect(self.page.locator('#whiteboardComposeWorkspace')).to_have_value(
+            str(self.fixture.project))
+        expect(self.page.locator('#whiteboardComposeProject')).to_have_value(
+            self.fixture.project.name)
+        expect(self.page.locator('#whiteboardText')).to_have_value(reply)
+
+        self.page.locator('#whiteboardText').fill('Continue the second Alpha check.')
+        with self.page.expect_response(lambda response: response.url.endswith('/api/whiteboard')
+                                       and response.request.method == 'POST'):
+            self.page.locator('#whiteboardPost').click()
+        saved = self.fixture.app.whiteboard_read({
+            'query': 'Continue the second Alpha check.', 'kind': 'handoff',
+        })['messages']
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]['status'], 'open')
+        self.assertIn('continuation', saved[0]['topics'])
+        self.assertEqual(saved[0]['workspace'], str(self.fixture.project))
+
+        self.page.locator('#whiteboardText').fill('Keep this unsent draft')
+        self.page.locator('#whiteboardClose').click()
+        actions.click()
+        expect(self.page.locator('#whiteboardText')).to_have_value('Keep this unsent draft')
+        expect(self.page.locator('#whiteboardStatus')).to_contain_text('preserved')
+
+    def test_overlong_work_reply_uses_starter_without_truncation(self):
+        self.page.evaluate('''() => {
+          const chat = state.chats.find(item => item.id === state.activeId);
+          chat.messages.push({id: 'long-continuation-reply', role: 'assistant',
+                              provider: 'codex', content: 'x'.repeat(2001),
+                              created_at: Date.now() / 1000});
+          renderMessages();
+        }''')
+        self.page.locator('[data-draft-continuation="long-continuation-reply"]').click()
+        expect(self.page.locator('#whiteboardStatus')).to_contain_text('exceeds 2,000')
+        self.assertIn('Original objective:', self.page.locator('#whiteboardText').input_value())
+        self.assertNotIn('x' * 100, self.page.locator('#whiteboardText').input_value())
+        self.assertEqual(self.fixture.app.whiteboard_read()['messages'], [])
+
+    def test_selected_reply_text_prefills_continuation_draft(self):
+        self.page.evaluate('''() => {
+          const chat = state.chats.find(item => item.id === state.activeId);
+          chat.messages.push({id: 'selected-continuation-reply', role: 'assistant',
+                              provider: 'codex', content: 'Summary paragraph.\\n\\nNext session prompt: finish the selected check.',
+                              created_at: Date.now() / 1000});
+          renderMessages();
+          const article = document.querySelector('[data-draft-continuation="selected-continuation-reply"]')
+            .closest('article.message');
+          const paragraph = article.querySelector('.work-reply p:last-child');
+          const range = document.createRange();
+          range.selectNodeContents(paragraph);
+          window.getSelection().removeAllRanges();
+          window.getSelection().addRange(range);
+        }''')
+        self.page.locator('[data-draft-continuation="selected-continuation-reply"]').click()
+        expect(self.page.locator('#whiteboardText')).to_have_value(
+            'Next session prompt: finish the selected check.')
+        self.assertEqual(self.fixture.app.whiteboard_read()['messages'], [])
+
     def test_real_independent_draft_is_saved_before_peer_read(self):
         self.page.locator('#whiteboardButton').click()
         self.page.locator('#whiteboardIndependent').click()

@@ -14,6 +14,7 @@
     title: $("#whiteboardTitleInput"),
     text: $("#whiteboardText"),
     project: $("#whiteboardComposeProject"),
+    workspace: $("#whiteboardComposeWorkspace"),
     topics: $("#whiteboardComposeTopics"),
     evidence: $("#whiteboardEvidence"),
     appliesTo: $("#whiteboardAppliesTo"),
@@ -49,6 +50,7 @@
       title: fields.title.value,
       text: fields.text.value,
       project: fields.project.value,
+      workspace: fields.workspace.value,
       topics: fields.topics.value,
       evidence: fields.evidence.value,
       appliesTo: fields.appliesTo.value,
@@ -64,6 +66,7 @@
       draft.title,
       draft.text,
       draft.project,
+      draft.workspace,
       draft.topics,
       draft.evidence,
       draft.appliesTo,
@@ -163,6 +166,7 @@
       `Question / body: ${note.text || ""}`,
     ];
     if (note.project) brief.push(`Project: ${note.project}`);
+    if (note.workspace) brief.push(`Workspace: ${note.workspace}`);
     if (note.evidence) brief.push(`Evidence: ${note.evidence}`);
     if (note.applies_to) brief.push(`Applies to: ${note.applies_to}`);
     brief.push(
@@ -310,6 +314,7 @@
     append(article, "p", note.text || "", "whiteboard-note-text");
     const pairs = [
       ["Evidence", note.evidence],
+      ["Workspace", note.workspace],
       ["Applies to", note.applies_to],
       ["Expires", note.expires_at && dateText(note.expires_at)],
       ["Basis", note.basis],
@@ -448,6 +453,43 @@
     setStatus("");
     fields.text.focus();
   }
+  const CONTINUATION_STARTER =
+    "Next session prompt\nOriginal objective:\nWorkspace and artifact paths:\nCompleted work and checks actually run:\nRemaining steps, in order:\nBlockers or decisions needed:\nUser constraints:\nCompletion check:\n";
+  function prepareContinuation({ text = "", workspace = "", project = "" } = {}) {
+    if (!dialog.open) dialog.showModal();
+    if (hasUnfinishedDraft()) {
+      setStatus("An unsent Whiteboard draft is already here. It was preserved; finish or clear it before drafting this continuation.", true);
+      return false;
+    }
+    const reply = typeof text === "string" ? text : "";
+    fields.kind.value = "handoff";
+    fields.title.value = "Next session prompt";
+    fields.text.value = reply.length > 0 && reply.length <= fields.text.maxLength
+      ? reply : CONTINUATION_STARTER;
+    fields.project.value = String(project || "");
+    fields.workspace.value = String(workspace || "");
+    fields.topics.value = "continuation";
+    fields.replyTo.value = "";
+    updateReplyControl();
+    fields.topics.closest("details").open = true;
+    saveDraft();
+    fields.text.focus();
+    const warnings = [];
+    if (reply.length > fields.text.maxLength) {
+      warnings.push("The selected Work reply exceeds 2,000 characters. A continuation starter was added; summarize it before posting.");
+    }
+    if (fields.project.value.length > fields.project.maxLength) {
+      warnings.push("The project label exceeds 200 characters; shorten it before posting.");
+    }
+    if (fields.workspace.value.length > fields.workspace.maxLength) {
+      warnings.push("The workspace path exceeds 500 characters; shorten it before posting.");
+    }
+    setStatus(warnings.length ? warnings.join(" ") : reply.length
+      ? "Work reply copied into a continuation draft. Review and edit it before posting."
+      : "The Work reply was empty. Fill in the continuation starter before posting.", Boolean(warnings.length));
+    return true;
+  }
+  globalThis.PilferedParrotWhiteboard = { prepareContinuation };
   function template(kind) {
     if (kind === "continuation") {
       const topics = fields.topics.value.split(",").map(trim).filter(Boolean);
@@ -461,8 +503,7 @@
         setStatus("Shorten the topics before adding continuation.", true);
         return;
       }
-      const starter =
-        "Next session prompt\nOriginal objective:\nWorkspace and artifact paths:\nCompleted work and checks actually run:\nRemaining steps, in order:\nBlockers or decisions needed:\nUser constraints:\nCompletion check:\n";
+      const starter = CONTINUATION_STARTER;
       const existing = fields.text.value;
       const text = existing.startsWith(starter)
         ? existing
@@ -505,6 +546,7 @@
       const [name, item] of [
         ["title", value(fields.title)],
         ["project", value(fields.project)],
+        ["workspace", value(fields.workspace)],
         ["evidence", value(fields.evidence)],
         ["applies_to", value(fields.appliesTo)],
         ["reply_to", value(fields.replyTo)],
@@ -582,6 +624,11 @@
   );
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (fields.project.value.length > fields.project.maxLength
+        || fields.workspace.value.length > fields.workspace.maxLength) {
+      setStatus("Shorten the project label to 200 characters and workspace path to 500 characters before posting.", true);
+      return;
+    }
     const payload = postPayload();
     if (!payload.text.trim() || post.disabled) return;
     const snapshot = JSON.stringify(draftPayload());
