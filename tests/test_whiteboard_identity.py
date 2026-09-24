@@ -36,6 +36,30 @@ class WhiteboardIdentityTests(unittest.TestCase):
         self.assertEqual(notes[second['id']]['identity']['reasoning_effort'], 'medium')
         self.assertEqual(self.board.read(query='ultra')['messages'][0]['id'], first['id'])
 
+    def test_windows_crlf_note_preserves_metadata_and_historical_receipt(self):
+        identity = runtime_identity({'codex': {'model': 'worker-model'}}, 'codex')
+        posted = self.board.post('Investigate this', 'worker', identity=identity,
+                                 kind='request', project='Windows', topics=['whiteboard'])
+        path = self.board.directory / (posted['id'] + '.txt')
+        original = path.read_bytes()
+        self.assertNotIn(b'\r\n', original)
+        # Before the write fix, Windows text mode changed the note bytes after
+        # the receipt had already been hashed from the LF-only body.
+        path.write_bytes(original.replace(b'\n', b'\r\n'))
+        note = self.board.read(project='Windows', topic='whiteboard')['messages'][0]
+        self.assertEqual(note['text'], 'Investigate this')
+        self.assertEqual(note['kind'], 'request')
+        self.assertEqual(note['effective_status'], 'open')
+        self.assertEqual(note['identity'], identity)
+        reply = self.board.post('Done', 'worker', kind='update', reply_to=posted['id'], status='resolved')
+        thread = {item['id']: item for item in self.board.read(thread=posted['id'])['messages']}
+        self.assertEqual(thread[posted['id']]['effective_status'], 'resolved')
+        self.assertEqual(thread[reply['id']]['reply_to'], posted['id'])
+
+        path.write_bytes(path.read_bytes().replace(b'Investigate this', b'Altered request'))
+        changed = next(item for item in self.board.read()['messages'] if item['id'] == posted['id'])
+        self.assertEqual(changed['identity']['source'], 'self-reported')
+
     def test_native_claim_cannot_promote_itself_to_runtime_or_user(self):
         self.board.directory.mkdir()
         for source in ('runtime', 'user'):

@@ -184,12 +184,16 @@ class Whiteboard:
             raw = self._read_file(path)
             if raw is None:
                 continue
+            # Text-mode writes on Windows used to turn the LF separators in
+            # older notes into CRLF. Parse either form without losing the
+            # original bytes needed to verify an identity receipt.
+            content = raw.replace("\r\n", "\n")
             author, workspace, text, values = "Model", "", raw, {}
             supplied_identity = None
             identity = normalize_identity()
             created = datetime.fromtimestamp(info.st_mtime, timezone.utc)
-            if "\n---\n" in raw:
-                header, candidate_text = raw.split("\n---\n", 1)
+            if "\n---\n" in content:
+                header, candidate_text = content.split("\n---\n", 1)
                 fields: dict[str, str] = {}
                 header_lines = header.splitlines()
                 for line in header_lines:
@@ -228,7 +232,10 @@ class Whiteboard:
                     record = json.loads(receipt)
                     if (isinstance(record, dict) and isinstance(supplied_identity, dict)
                             and normalize_identity(record.get("identity")) == normalize_identity(supplied_identity)
-                            and record.get("sha256") == hashlib.sha256(raw.encode("utf-8")).hexdigest()):
+                            and record.get("sha256") in {
+                                hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+                                hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                            }):
                         identity = normalize_identity(record.get("identity"))
                 except (ValueError, RecursionError):
                     pass
@@ -391,13 +398,14 @@ class Whiteboard:
         identities = self.directory / ".identities"
         identities.mkdir(exist_ok=True, mode=0o700)
         receipt_path = identities / (target.stem + ".json")
+        body_bytes = body.encode("utf-8")
         with receipt_path.open("x", encoding="utf-8") as receipt:
-            json.dump({"sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+            json.dump({"sha256": hashlib.sha256(body_bytes).hexdigest(),
                        "identity": identity}, receipt, ensure_ascii=False)
         fd, temporary = tempfile.mkstemp(prefix=".whiteboard-", suffix=".tmp", dir=self.directory)
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(body)
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(body_bytes)
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, target)

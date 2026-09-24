@@ -39,6 +39,8 @@ class WhiteboardTests(unittest.TestCase):
     def test_native_notes_and_unsafe_files(self):
         self.board.post('valid note', 'test')
         (self.board.directory / 'native.txt').write_text('Author: native\n---\nA native worker note', encoding='utf-8')
+        (self.board.directory / 'native-crlf.txt').write_bytes(
+            b'Author: native\r\nMetadata: {"kind":"finding","project":"Windows"}\r\n---\r\nCRLF note')
         (self.board.directory / 'huge.txt').write_bytes(b'x' * 50_000)
         outside = self.root / 'private.txt'
         outside.write_text('private secret')
@@ -47,7 +49,8 @@ class WhiteboardTests(unittest.TestCase):
         except OSError:
             pass
         notes = self.board.read()['messages']
-        self.assertEqual({m['text'] for m in notes}, {'valid note', 'A native worker note'})
+        self.assertEqual({m['text'] for m in notes}, {'valid note', 'A native worker note', 'CRLF note'})
+        self.assertEqual(self.board.read(project='Windows')['messages'][0]['kind'], 'finding')
         with self.assertRaises(ValueError): self.board.post('x' * 2001, 'test')
         with self.assertRaises(ValueError): self.board.post(None, 'test')
 
