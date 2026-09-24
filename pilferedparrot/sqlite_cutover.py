@@ -14,7 +14,7 @@ import os
 import stat
 from pathlib import Path
 
-from .sqlite_state import SQLiteStateStore, StateStoreError
+from .sqlite_state import SQLiteStateStore, StateStoreError, _read_stable_source
 
 
 def validate_paths(source: Path, database: Path) -> tuple[Path, Path]:
@@ -61,8 +61,14 @@ def inspect(source: Path, database: Path, *, create: bool = False,
         or any(char not in "0123456789abcdef" for char in expected_source_sha256)
     ):
         raise StateStoreError("expected source SHA-256 must be lowercase hex")
+    if expected_source_sha256 is not None:
+        # Reject an operator's stale/wrong pin before even initializing a DB.
+        # import_json performs its own stable read and post-import checks.
+        raw, _ = _read_stable_source(source)
+        if hashlib.sha256(raw).hexdigest() != expected_source_sha256:
+            raise StateStoreError("JSON source does not match the expected SHA-256")
     with SQLiteStateStore(database) as store:
-        snapshot = store.import_json(source)
+        snapshot = store.import_json(source, expected_sha256=expected_source_sha256)
         backup, digest, _ = store.source_backup()
         if expected_source_sha256 is not None and digest != expected_source_sha256:
             raise StateStoreError("JSON source does not match the expected SHA-256")

@@ -449,7 +449,7 @@ class SQLiteStateStore:
             self._source_verified = False
             raise SourceChanged("JSON source changed after verification")
 
-    def import_json(self, source: Path) -> StateSnapshot:
+    def import_json(self, source: Path, *, expected_sha256: str | None = None) -> StateSnapshot:
         """Import once, then verify the exact original bytes on every startup."""
         source_alias = Path(source).expanduser().absolute()
         source = source_alias.resolve()
@@ -457,6 +457,8 @@ class SQLiteStateStore:
         raw, signature = _read_stable_source(source)
         document = _decode_document(raw)
         digest = hashlib.sha256(raw).hexdigest()
+        if expected_sha256 is not None and digest != expected_sha256:
+            raise SourceChanged("JSON source does not match the expected SHA-256")
         tree_hash = _tree_hash(document)
         with self._lock:
             if self._closed:

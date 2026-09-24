@@ -6,11 +6,14 @@ import hashlib
 import errno
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
+from pilferedparrot import sqlite_cutover
 from pilferedparrot.sqlite_cutover import inspect, validate_paths
 from pilferedparrot.sqlite_state import SourceChanged, StateStoreError
 from pilferedparrot.web import ChatStore
@@ -79,6 +82,28 @@ class CutoverRunbookTests(unittest.TestCase):
         with self.assertRaises(StateStoreError):
             inspect(self.source, self.database, create=True,
                     expected_source_sha256="0" * 64)
+        self.assertFalse(self.database.exists())
+
+    def test_source_swap_after_precheck_cannot_seed_wrong_authority(self) -> None:
+        original_read = sqlite_cutover._read_stable_source
+
+        def replace_after_precheck(path):
+            result = original_read(path)
+            path.write_bytes(self.raw.replace(b"unsent", b"other"))
+            return result
+
+        with patch.object(sqlite_cutover, "_read_stable_source",
+                          side_effect=replace_after_precheck):
+            with self.assertRaises(SourceChanged):
+                inspect(self.source, self.database, create=True,
+                        expected_source_sha256=hashlib.sha256(self.raw).hexdigest())
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM source_backup").fetchone()[0], 0)
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM state_document").fetchone()[0], 0)
+        self.source.write_bytes(self.raw)
+        self.assertEqual(inspect(self.source, self.database, create=True)["revision"], 0)
 
 
 class FreshServerTests(unittest.TestCase):
