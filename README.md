@@ -11,10 +11,10 @@ and its immutable archives remain available; see the [0.8.0 readiness record](do
 for required checks.
 
 [Project site](https://pilferedparrot.github.io/PilferedParrot-Interface/) ·
-[Planned 0.8.0 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.8.0/pilferedparrot-0.8.0-source.tar.gz) ·
-[0.8.0 release page (pending)](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.8.0) ·
+[Latest published 0.7.1 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.1/pilferedparrot-0.7.1-source.tar.gz) ·
+[0.7.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.1) ·
 [Release notes](RELEASE_NOTES.md) ·
-[Planned Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.8.0/PilferedParrot-0.8.0-windows-x64.zip) ·
+[Latest published Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.1/PilferedParrot-0.7.1-windows-x64.zip) ·
 [Report a bug](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new?template=bug_report.yml) ·
 [Share feedback](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new/choose)
 

@@ -30,8 +30,9 @@ discard workspaces.
 - Keep Windows unsigned and retain the existing scope statement: no Windows provider-account or
   CLI certification is claimed.
 
-The 0.8.0 links and package names in the README are planned paths, not evidence of published
-assets. The 0.7.1 section below records its own prior evidence and does not validate 0.8.0.
+The 0.8.0 package names are planned paths, not evidence of published assets. README download
+links continue to point to 0.7.1 until publication. The 0.7.1 section below records its own
+prior evidence and does not validate 0.8.0.
 
 ---
 
