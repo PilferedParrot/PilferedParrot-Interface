@@ -253,6 +253,11 @@ class ThemeBalanceBrowserEndToEndTests(unittest.TestCase):
         ))
         for theme in themes:
             page = self._page(theme, "work")
+            # A new app window now resumes the selected project session, so
+            # isolate each theme's activity with an explicit new session.
+            previous = page.evaluate("state.activeId")
+            page.locator("#newWorkSession").click()
+            page.wait_for_function("old => state.activeId !== old", arg=previous)
             page.locator("#prompt").fill("Show the activity theme sample")
             page.locator("#prompt").press("Enter")
             expect(page.locator(".message.assistant .work-log summary")).to_contain_text("Work details")

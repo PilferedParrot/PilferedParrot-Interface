@@ -45,6 +45,8 @@ DEFAULTS: dict[str, Any] = {
     # OpenAI-compatible coding-agent adapter and names an environment variable
     # for credentials, so secrets never enter the dashboard store.
     "provider_definitions": {},
+    # Local skill metadata is read only after explicit enablement and request.
+    "skills": {"enabled": False, "roots": []},
     # Opt-in packages use explicit presets and preserve ordinary Work selection.
     "harness": {"preset": "manual", "presets": {}},
     "qwen": {
@@ -139,7 +141,7 @@ DEFAULTS: dict[str, Any] = {
         "default_provider": "codex",
         "chat_store": "~/.local/state/pilferedparrot/chats.json",
         "model_catalog_store": None,
-        "chat_model": "gpt-5.6-terra",
+        "chat_model": "gpt-6-luna",
         "chat_reasoning_effort": "low",
         "chat_context_warning_chars": 80_000,
         "technical_context_warning_chars": 120_000,

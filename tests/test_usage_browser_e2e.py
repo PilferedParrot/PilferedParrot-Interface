@@ -49,8 +49,12 @@ class UsageApp(BrowserTestApp):
                  "remaining_percent": 100 - used, "resets_at": int(time.time()) + 3600},
                 {"label": "Codex · Weekly", "used_percent": 12,
                  "remaining_percent": 88, "resets_at": int(time.time()) + 86400},
-                {"label": "Codex Spark · 5-hour", "used_percent": 5,
+                {"label": "gpt-reserve · Weekly included usage", "used_percent": 0,
+                 "remaining_percent": 100, "resets_at": int(time.time()) + 86400},
+                {"label": "GPT-5.3-Codex-Spark · 5-hour included usage", "used_percent": 5,
                  "remaining_percent": 95, "resets_at": int(time.time()) + 1800},
+                {"label": "GPT-5.3-Codex-Spark · Weekly included usage", "used_percent": 0,
+                 "remaining_percent": 100, "resets_at": int(time.time()) + 86400},
             ]
         return {"codex": FakeBudget(
             "codex", available=True, status="ok", auth_status="signed_in",
@@ -102,13 +106,11 @@ class UsageBrowserEndToEndTests(unittest.TestCase):
 
     def _assert_two_windows(self, page, selector):
         rows = page.locator(selector)
-        expect(rows).to_have_count(3)
+        expect(rows).to_have_count(2)
         expect(rows.nth(0)).to_contain_text("5-hour")
         expect(rows.nth(0)).to_contain_text("34% used")
         expect(rows.nth(1)).to_contain_text("Weekly")
         expect(rows.nth(1)).to_contain_text("12% used")
-        expect(rows.nth(2)).to_contain_text("Spark")
-        expect(rows.nth(2)).to_contain_text("5% used")
 
     def test_work_and_chat_render_distinct_codex_windows(self):
         work = self._open("dashboard")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hmac
 import json
+import math
 import os
 import re
 import secrets
@@ -22,7 +23,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from . import __version__
-from .web_server import BrowserHTTPServer as ThreadingHTTPServer
+from .web_server import BrowserHTTPServer as ThreadingHTTPServer, EngineSwitchConflict
 from .adapters import ProviderCapabilities, adapter_for
 from .budgets import collect_budgets
 from .config import (
@@ -35,8 +36,19 @@ from .config import (
     validate_compatible_base_url,
 )
 from .dispatch import RunCancelled, RunResult, capture_dispatch, _stop_process
+from .dispatch import _provider_process_environment
+from .acp_adapters import AdapterManager
+from .acp_catalog import discover_acp_options
+from .acp_client import ACPError
+from .acp_engine import ACPCancelled, run_acp_turn
+from .acp_permissions import PermissionBroker
 from .processes import provider_argv
 from .ledger import append_run
+from .feedback import FeedbackStore
+from .web_events import EventHub
+from .observed_turn import (
+    ObservationUnavailable, TurnObservations, public_observation_summary,
+)
 from .harness import metric, outcome_summary, render_handoff
 from .web_harness import HarnessWorkflow
 from .model import (
@@ -47,7 +59,7 @@ from .qwen import AGENT_SYSTEM_PROMPT, TOOL_DEFINITIONS, ensure_qwen
 from .response_identity import configured_identity
 from .terminal import launch_terminal, terminal_argv as _terminal_argv
 from .web_persistence import (
-    DashboardModelStore, PersistentChatStore, chat_store_path,
+    DEFAULT_CHAT_MODEL_OPTIONS, DashboardModelStore, PersistentChatStore, chat_store_path,
     dashboard_capability_path, legacy_chat_store_path, load_dashboard_models,
     model_catalog_path, read_dashboard_capability, remove_dashboard_capability,
     write_dashboard_capability,
@@ -72,8 +84,106 @@ CODE_BLOCK_LANGUAGES = frozenset({
     "bash", "console", "fish", "powershell", "shell", "sh", "terminal", "zsh",
 })
 API_GENERATION = 21
-CHAT_MODEL_OPTIONS = ("gpt-5.6-terra", "gpt-5.6-luna")
+CHAT_MODEL_OPTIONS = DEFAULT_CHAT_MODEL_OPTIONS
 MESSAGE_MAX_CHARS = 40_000
+ACP_UPDATE_LIMIT = 100
+ACP_TEXT_LIMIT = 80_000
+ACP_FINAL_TEXT_LIMIT = 1_000_000
+ACP_STOP_REASONS = frozenset({
+    "end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled",
+})
+_ACP_EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}(?![\w.-])")
+_ACP_EMAIL_TAIL = re.compile(r"[\w.+@-]+$")
+
+
+def _acp_public_text(config: dict[str, Any], value: Any) -> str:
+    return _ACP_EMAIL.sub("[redacted-email]", redact_configured_secrets(config, value))
+
+
+def _acp_secret_values(config: dict[str, Any]) -> tuple[str, ...]:
+    sources = [item for item in config.values() if isinstance(item, dict)]
+    definitions = config.get("provider_definitions")
+    if isinstance(definitions, dict):
+        sources.extend(item for item in definitions.values() if isinstance(item, dict))
+    variables = {
+        item["api_key_env"].strip() for item in sources
+        if isinstance(item.get("api_key_env"), str) and item["api_key_env"].strip()
+    }
+    return tuple(sorted({value for name in variables if (value := os.environ.get(name))},
+                        key=len, reverse=True))
+
+
+def _acp_visible_stream(config: dict[str, Any], raw: str,
+                        secrets: tuple[str, ...]) -> str:
+    """Hold trailing secret/email candidates until another chunk resolves them."""
+    match = _ACP_EMAIL_TAIL.search(raw)
+    hold = len(match.group()) if match else 0
+    for secret in secrets:
+        for count in range(1, min(len(secret), len(raw) + 1)):
+            if raw.endswith(secret[:count]):
+                hold = max(hold, count)
+    return _acp_public_text(config, raw[:-hold] if hold else raw)
+
+
+def _acp_chunk_text(value: Any) -> str:
+    if isinstance(value, dict):
+        return value.get("text", "") if value.get("type") == "text" \
+            and isinstance(value.get("text"), str) else ""
+    if isinstance(value, list):
+        return "".join(_acp_chunk_text(item) for item in value)
+    return ""
+
+
+def _acp_public_value(config: dict[str, Any], value: Any) -> Any:
+    """Redact configured secrets throughout protocol data before any public use."""
+    if isinstance(value, str):
+        return _acp_public_text(config, value)
+    if isinstance(value, list):
+        return [_acp_public_value(config, item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _acp_public_value(config, item) for key, item in value.items()
+            if not (
+                str(key).lower().replace("_", "").startswith(
+                    ("account", "auth", "credential", "secret", "email")
+                ) or str(key).lower().replace("_", "") in {
+                    "apikey", "token", "accesstoken", "refreshtoken", "meta",
+                    "rawoutput",
+                    "availablecommands", "availablecommandsupdate",
+                }
+            )
+        }
+    return value
+
+
+def _acp_public_update(config: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    def has_auth_status(value: Any) -> bool:
+        if isinstance(value, dict):
+            if value.get("sessionUpdate") == "_auth/status_update" \
+                    or value.get("method") == "_auth/status_update":
+                return True
+            return any(has_auth_status(item) for item in value.values())
+        if isinstance(value, list):
+            return any(has_auth_status(item) for item in value)
+        return False
+
+    kind = update.get("sessionUpdate")
+    if not isinstance(kind, str) or kind.startswith("_auth/") \
+            or kind == "available_commands_update" or kind == "agent_thought_chunk" \
+            or kind.startswith("terminal_") or has_auth_status(update):
+        return {"sessionUpdate": "filtered_update"}
+    clean = _acp_public_value(config, update)
+    if kind in {"tool_call", "tool_call_update"}:
+        clean.pop("rawInput", None)
+        content = clean.get("content")
+        if isinstance(content, list):
+            clean["content"] = [item for item in content
+                                if isinstance(item, dict) and item.get("type") == "diff"]
+    if len(json.dumps(clean, ensure_ascii=False).encode("utf-8")) > 128 * 1024:
+        if kind == "agent_message_chunk":
+            raise ValueError("ACP assistant update exceeds the display limit")
+        return {"sessionUpdate": kind, "truncated": True}
+    return clean
 PROVIDER_LABELS = {item["id"]: item["label"] for item in PROVIDER_CATALOG}
 PROVIDER_TEMPLATES: tuple[dict[str, str], ...] = (
     {
@@ -498,6 +608,7 @@ class ActiveRun:
     cancel_event: threading.Event = field(default_factory=threading.Event)
     thread: threading.Thread | None = None
     last_checkpoint: float = 0.0
+    observe_files: bool = False
 
 
 @dataclass
@@ -511,13 +622,15 @@ class ChatStore(PersistentChatStore):
     def __init__(
         self, path: Path, *, chat_warning_chars: int = 80_000,
         technical_warning_chars: int = 120_000, legacy_path: Path | None = None,
-        chat_model: str = "gpt-5.6-terra",
+        chat_model: str = "gpt-6-luna",
+        sqlite_state_path: Path | None = None,
     ):
         super().__init__(
             path, chat_warning_chars=chat_warning_chars,
             technical_warning_chars=technical_warning_chars,
             legacy_path=legacy_path, chat_model=chat_model,
             context_usage=_context_usage, chat_model_options=CHAT_MODEL_OPTIONS,
+            sqlite_state_path=sqlite_state_path,
         )
 
 
@@ -526,8 +639,12 @@ _pilferedparrot_dashboard_capability = read_dashboard_capability
 
 
 class PilferedParrotApp(HarnessWorkflow):
-    def __init__(self, config: dict[str, Any], default_cwd: Path):
+    def __init__(
+        self, config: dict[str, Any], default_cwd: Path, *,
+        sqlite_state_path: Path | None = None,
+    ):
         self.config = config
+        self.feedback = FeedbackStore.from_config(config)
         self.default_cwd = default_cwd
         self.renamed_repository_root = _renamed_repository_root(default_cwd)
         self.chat_context_warning_chars = max(
@@ -564,6 +681,12 @@ class PilferedParrotApp(HarnessWorkflow):
         self.model_catalog_lock = self._model_catalog_store.lock
         self.dashboard_models = self._model_catalog_store.data
         self._apply_dashboard_models()
+        for acp_provider in ("codex", "claude"):
+            configured = self.config.get(acp_provider, {}).get("engine")
+            selected = self.dashboard_models["provider_engines"].get(acp_provider)
+            self.config[acp_provider]["engine"] = selected or (
+                "acp" if configured == "acp" else "legacy"
+            )
         active_providers = self._provider_ids()
         self.default_provider = str(config["web"].get("default_provider", "codex"))
         if self.default_provider not in active_providers:
@@ -572,9 +695,14 @@ class PilferedParrotApp(HarnessWorkflow):
             store_path,
             chat_warning_chars=self.chat_context_warning_chars,
             technical_warning_chars=self.technical_context_warning_chars,
-            chat_model=str(config["web"].get("chat_model") or "gpt-5.6-terra").strip(),
+            chat_model=str(config["web"].get("chat_model") or CHAT_MODEL_OPTIONS[0]).strip(),
             legacy_path=legacy_chat_store_path(config),
+            sqlite_state_path=sqlite_state_path,
         )
+        self.turn_observations = TurnObservations(store_path.parent / "observed-files")
+        self.events = EventHub()
+        self.acp_adapters = AdapterManager(config)
+        self.acp_permissions = PermissionBroker(timeout_seconds=300.0)
         self.capabilities_lock = threading.RLock()
         self.capabilities: dict[str, dict[str, str]] = {}
         self.dashboard_capability = self.issue_capability(
@@ -592,7 +720,7 @@ class PilferedParrotApp(HarnessWorkflow):
         self.runs: dict[str, ActiveRun] = {}
         self.chat_run: ActiveRun | None = None
         self.chat_model = str(
-            config["web"].get("chat_model") or "gpt-5.6-terra"
+            config["web"].get("chat_model") or CHAT_MODEL_OPTIONS[0]
         ).strip()
         if self.chat_model not in CHAT_MODEL_OPTIONS:
             self.chat_model = CHAT_MODEL_OPTIONS[0]
@@ -852,9 +980,15 @@ class PilferedParrotApp(HarnessWorkflow):
         options = list(model_catalog(self.config).get(provider, {}).get("options", []))
         if provider == "codex":
             seen = {str(option.get("value")) for option in options}
-            for value in (*CHAT_MODEL_OPTIONS, "gpt-5.6-sol"):
+            stored = self.store.data["preferences"].get("chat_model")
+            current = self.store.data["chat"]
+            thread_model = current.get("model") if current.get("provider") == "codex" else None
+            for value in (*CHAT_MODEL_OPTIONS, stored, thread_model):
+                if not value:
+                    continue
                 if value not in seen:
                     options.append({"value": value, "label": value})
+                    seen.add(value)
         return options
 
     def _preferred_chat_model(self, provider: str) -> str | None:
@@ -862,6 +996,7 @@ class PilferedParrotApp(HarnessWorkflow):
             stored = self.store.data["preferences"].get("chat_model")
             if isinstance(stored, str) and stored.strip():
                 return self._normalize_model(stored)
+            return self.chat_model
         work_model = self.store.data["preferences"]["work_models"].get(provider)
         return self._normalize_model(work_model) or effective_model(self.config, provider) \
             or next((
@@ -890,6 +1025,29 @@ class PilferedParrotApp(HarnessWorkflow):
             self.store.data["preferences"]["work_models"][provider] = model
             self.store.save()
             return self.store.preferences_public()
+
+    def feedback_status(self) -> dict[str, Any]:
+        return self.feedback.status()
+
+    def feedback_action(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if action == "consent":
+            return self.feedback.set_consent(payload)
+        if action in {"clear", "reset"}:
+            if payload:
+                raise ValueError("this feedback action takes an empty object")
+            return self.feedback.clear(reset=action == "reset")
+        if action == "report":
+            if set(payload) - {"feedback"}:
+                raise ValueError("unknown report field")
+            return self.feedback.report(payload.get("feedback"), _preview=True)
+        raise ValueError("unknown feedback action")
+
+    def feedback_snapshot(self) -> dict[str, str]:
+        return self.feedback.snapshot()
+
+    def record_feedback(self, category: str, event: str, surface: str,
+                        consent: dict[str, str] | None = None) -> None:
+        self.feedback.record(category, event, surface, consent)
 
     def set_notification_preferences(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Save the browser notification decision without changing provider settings."""
@@ -947,6 +1105,80 @@ class PilferedParrotApp(HarnessWorkflow):
 
     def _save_dashboard_models(self) -> None:
         self._model_catalog_store.save(self.dashboard_models)
+
+    def acp_setup(self, *, provider: str | None = None,
+                  install_error: str | None = None) -> dict[str, Any]:
+        """Read adapter availability only for providers visible to this window."""
+        providers = (provider,) if provider else ("codex", "claude")
+        result: dict[str, Any] = {}
+        for name in providers:
+            if name not in {"codex", "claude"}:
+                raise ValueError("unsupported ACP provider")
+            error = install_error
+            try:
+                installed = self.acp_adapters.locate(name) is not None
+            except Exception as exc:
+                installed = False
+                # Adapter errors can include local paths or command output.
+                error = "ACP adapter installation is invalid or its runtime is unavailable"
+                if "Node.js 22" in str(exc):
+                    error = "Node.js 22 or newer is required for ACP adapters"
+            if not installed and error is None:
+                error = "ACP adapter is not installed"
+            result[name] = {
+                "engine": self.config[name]["engine"],
+                "installed": installed,
+                "error": error,
+            }
+        return {"providers": result}
+
+    def install_acp_adapters(self, *, provider: str | None = None) -> dict[str, Any]:
+        """Install pinned adapters only for an explicit setup request."""
+        error = None
+        try:
+            self.acp_adapters.install()
+        except Exception as exc:
+            error = "ACP adapter installation failed"
+            if "Node.js 22" in str(exc):
+                error = "Node.js 22 or newer is required for ACP adapters"
+            elif "npm is required" in str(exc):
+                error = "npm is required to install ACP adapters"
+        return self.acp_setup(provider=provider, install_error=error)
+
+    def set_acp_engine(self, provider: str, engine: str,
+                       *, visible_provider: str | None = None) -> dict[str, Any]:
+        if provider not in {"codex", "claude"}:
+            raise ValueError("unsupported ACP provider")
+        if visible_provider is not None and visible_provider != provider:
+            raise PermissionError("window authorization failed")
+        if not isinstance(engine, str) or engine not in {"legacy", "acp"}:
+            raise ValueError("engine must be legacy or acp")
+        with self.runs_lock:
+            with self.store.lock:
+                for chat_id in self.runs:
+                    chat = self.store.get(chat_id)
+                    if chat.get("requested_provider") == provider or chat.get("provider") == provider:
+                        raise EngineSwitchConflict("wait for the active provider run before changing engines")
+                with self.model_catalog_lock:
+                    previous = self.config[provider]["engine"]
+                    prior_saved = self.dashboard_models["provider_engines"].get(provider)
+                    self.config[provider]["engine"] = engine
+                    self.dashboard_models["provider_engines"][provider] = engine
+                    try:
+                        self._save_dashboard_models()
+                    except Exception:
+                        self.config[provider]["engine"] = previous
+                        if prior_saved is None:
+                            self.dashboard_models["provider_engines"].pop(provider, None)
+                        else:
+                            self.dashboard_models["provider_engines"][provider] = prior_saved
+                        raise
+        return self.acp_setup(provider=visible_provider)
+
+    @staticmethod
+    def gpu_snapshot() -> dict[str, Any]:
+        from .gpu_inventory import snapshot_gpus
+        return snapshot_gpus()
 
     @staticmethod
     def _model_text(value: Any, field: str, *, required: bool = True) -> str:
@@ -1032,10 +1264,63 @@ class PilferedParrotApp(HarnessWorkflow):
             raise ValueError("unknown provider")
         return check_provider_update(self.config, provider)
 
-    def poll_provider_models(self, provider: str) -> dict[str, Any]:
+    def poll_provider_models(
+        self, provider: str, *, model: str | None = None,
+        window_id: str = "main", window_provider: str | None = None,
+        scope: str = "dashboard", workspace: Path | None = None,
+    ) -> dict[str, Any]:
         """Refresh a provider's model choices without spending a model turn."""
         if provider not in self._provider_ids():
             raise ValueError("unknown provider")
+        if window_id != "main" and window_provider != provider:
+            raise PermissionError("window authorization failed")
+        if provider in {"codex", "claude"} and self.config[provider].get("engine") == "acp" \
+                and scope == "dashboard":
+            selected_model = self._normalize_model(model) if model is not None else None
+            if model is not None and selected_model is None:
+                raise ValueError("model must be a valid model ID")
+            if workspace is None:
+                with self.store.lock:
+                    selected_project = self.store.project_state(
+                        window_id, provider, self.default_cwd, aggregate=window_id == "main",
+                    )["selected_project"] or self.default_cwd
+            else:
+                selected_project = workspace
+            try:
+                workspace = _project_directory(_migrate_renamed_project_path(
+                    selected_project, self.renamed_repository_root,
+                ))
+                _validate_provider_workspace(provider, workspace, self.config)
+                argv = self.acp_adapters.locate(provider)
+                if argv is None:
+                    raise RuntimeError("ACP adapter is not installed")
+                discovered = discover_acp_options(
+                    argv, cwd=workspace, env=_provider_process_environment(),
+                    model=selected_model, timeout=10,
+                )
+            except ACPError as error:
+                if selected_model is not None and "not advertised" in str(error):
+                    raise ValueError("requested ACP model is not advertised") from None
+                raise RuntimeError("ACP option discovery failed") from None
+            except Exception:
+                raise RuntimeError("ACP option discovery failed") from None
+            options = deepcopy(discovered["models"])
+            current_model = discovered["current_model"]
+            for option in options:
+                if option["value"] == current_model:
+                    option["reasoning_efforts"] = [
+                        effort["value"] for effort in discovered["efforts"]
+                    ]
+            return {
+                "provider": provider, "default": current_model or None,
+                "options": options, "polled_at": int(time.time()), "source": "acp",
+                "acp_options": {
+                    key: deepcopy(discovered[key]) for key in (
+                        "models", "efforts", "modes", "current_model",
+                        "current_effort", "current_mode",
+                    )
+                },
+            }
         catalog = model_catalog(self.config).get(provider, {"default": None, "options": []})
         try:
             options = adapter_for(provider, self.config).models()
@@ -1166,6 +1451,7 @@ class PilferedParrotApp(HarnessWorkflow):
     def state(
         self, scope: str = "dashboard", *, window_id: str = "main",
         window_provider: str | None = None,
+        compact: bool = False,
     ) -> dict[str, Any]:
         catalog = model_catalog(self.config)
         codex_models = {
@@ -1173,7 +1459,10 @@ class PilferedParrotApp(HarnessWorkflow):
             for option in catalog.get("codex", {}).get("options", [])
             if option.get("value")
         }
-        codex_models.update((*CHAT_MODEL_OPTIONS, "gpt-5.6-sol"))
+        codex_models.update(
+            str(option["value"]) for option in self._chat_model_options("codex")
+            if option.get("value")
+        )
         def catalog_maximum(provider: str, option: dict[str, Any]) -> int | None:
             raw = option.get("max_context_window") or option.get("context_window")
             try:
@@ -1200,6 +1489,7 @@ class PilferedParrotApp(HarnessWorkflow):
             "asset_version": ASSET_VERSION,
             "runtime_version": RUNTIME_VERSION,
             "model_context_windows": model_context_windows,
+            "observe_files_available": os.name == "posix",
         }
         if scope == "chat":
             chat = self.store.chat_public()
@@ -1218,6 +1508,7 @@ class PilferedParrotApp(HarnessWorkflow):
                 ],
                 "model_catalog": {provider: {**deepcopy(catalog.get(provider, {})),
                                                "options": deepcopy(options)}},
+                "provider_engines": {provider: self.config.get(provider, {}).get("engine", "legacy")},
                 "providers": [deepcopy(item) for item in self._provider_catalog()],
                 "preferences": self.store.preferences_public(),
             }
@@ -1228,7 +1519,13 @@ class PilferedParrotApp(HarnessWorkflow):
             raise ValueError("unknown provider")
         return {
             **shared,
-            "chats": self.store.list_public(window_id, provider),
+            "chats": (
+                self.store.list_summary_public(window_id, provider)
+                if compact else self.store.list_public(window_id, provider)
+            ),
+            **self.store.project_state(
+                window_id, provider, self.default_cwd, aggregate=window_id == "main",
+            ),
             "window_id": window_id,
             "window_provider": provider,
             "default_cwd": str(self.default_cwd),
@@ -1240,6 +1537,11 @@ class PilferedParrotApp(HarnessWorkflow):
             "provider_templates": self.provider_templates(),
             "harness": self.harness_metadata(),
             "model_catalog": deepcopy(catalog),
+            "provider_engines": {
+                name: self.config.get(name, {}).get("engine", "legacy")
+                for name in (("codex", "claude") if window_id == "main" else (provider,))
+                if name in self._provider_ids(include_hidden=True)
+            },
             "preferences": self.store.preferences_public(),
         }
 
@@ -1268,11 +1570,30 @@ class PilferedParrotApp(HarnessWorkflow):
         requested_model = self._normalize_model(payload.get("model")) \
             if explicit_model else self._normalize_model(latest_model) \
             or self._preferred_work_model(provider)
+        selected_project = self.store.project_state(
+            window_id, provider, self.default_cwd, aggregate=window_id == "main",
+        )["selected_project"]
         cwd = _project_directory(_migrate_renamed_project_path(
-            payload.get("cwd") or self.default_cwd, self.renamed_repository_root,
+            payload.get("cwd") or selected_project, self.renamed_repository_root,
         ))
         _validate_provider_workspace(provider, cwd, self.config)
         model = requested_model or effective_model(self.config, provider)
+        requested_acp_mode = payload.get("acp_mode")
+        if requested_acp_mode is not None:
+            if (provider not in {"codex", "claude"}
+                    or self.config[provider].get("engine") != "acp"):
+                raise ValueError("ACP mode is only available for ACP Work sessions")
+            if (not isinstance(requested_acp_mode, str) or not requested_acp_mode.strip()
+                    or len(requested_acp_mode) > 128
+                    or any(ord(char) < 32 for char in requested_acp_mode)):
+                raise ValueError("ACP mode must be non-empty text")
+            options = self.poll_provider_models(
+                provider, model=model, window_id=window_id,
+                window_provider=provider, workspace=cwd,
+            ).get("acp_options", {}).get("modes", [])
+            if not any(isinstance(item, dict) and item.get("value") == requested_acp_mode
+                       for item in options):
+                raise ValueError("ACP mode is not advertised by the selected agent")
         explicit_reasoning = "reasoning_effort" in payload
         requested_reasoning = payload.get("reasoning_effort") if explicit_reasoning else latest_reasoning
         try:
@@ -1297,10 +1618,43 @@ class PilferedParrotApp(HarnessWorkflow):
         with self.store.lock:
             if requested_model:
                 self.store.data["preferences"]["work_models"][provider] = requested_model
-            return self.store.create(
+            chat = self.store.create(
                 cwd, provider, requested_model, context_limit, context_max, percent,
                 overhead, reservation, window_id, reasoning_effort,
+                remember_project=True, acp_mode=requested_acp_mode,
             )
+            return chat
+
+    def _validated_project(self, payload: dict[str, Any], provider: str) -> Path:
+        raw_cwd = payload.get("cwd")
+        if not isinstance(raw_cwd, str) or not raw_cwd.strip():
+            raise ValueError("project folder is required")
+        cwd = _project_directory(raw_cwd)
+        _validate_provider_workspace(provider, cwd, self.config)
+        return cwd
+
+    def select_project(
+        self, payload: dict[str, Any], *, window_id: str, window_provider: str | None,
+    ) -> dict[str, Any]:
+        provider = window_provider or self.default_provider
+        cwd = self._validated_project(payload, provider)
+        self.store.remember_project(cwd, window_id)
+        return self.store.project_state(
+            window_id, provider, self.default_cwd, aggregate=window_id == "main",
+        )
+
+    def pin_project(
+        self, payload: dict[str, Any], *, window_id: str, window_provider: str | None,
+    ) -> dict[str, Any]:
+        pinned = payload.get("pinned")
+        if not isinstance(pinned, bool):
+            raise ValueError("pinned must be a boolean")
+        provider = window_provider or self.default_provider
+        cwd = self._validated_project(payload, provider)
+        self.store.pin_project(cwd, window_id, pinned)
+        return self.store.project_state(
+            window_id, provider, self.default_cwd, aggregate=window_id == "main",
+        )
 
     def _owned_chat(self, chat_id: str, window_id: str | None) -> dict[str, Any]:
         chat = self.store.get(chat_id)
@@ -1311,6 +1665,80 @@ class PilferedParrotApp(HarnessWorkflow):
     def chat_state(self, chat_id: str, *, window_id: str | None = None) -> dict[str, Any]:
         with self.store.lock:
             return self.store.public(self._owned_chat(chat_id, window_id))
+
+    def observed_files_summary(
+        self, chat_id: str, message_id: str, *, window_id: str,
+    ) -> dict[str, Any]:
+        """Return only the bounded public summary for an owned Work turn."""
+        with self.store.lock:
+            chat = self.store.get(chat_id)
+            if chat.get("window_id", "main") != window_id:
+                raise PermissionError("work session belongs to another window")
+            message = self._message(chat, message_id)
+            summary = public_observation_summary(message.get("observed_files"))
+            if summary is None:
+                raise KeyError(message_id)
+            return summary
+
+    def work_permissions(self, chat_id: str, *, window_id: str) -> dict[str, Any]:
+        with self.store.lock:
+            chat = self._owned_chat(chat_id, window_id)
+            pending = next((item for item in chat["messages"] if item.get("pending")), None)
+            message_id = pending["id"] if pending else None
+        return {"permissions": [
+            {"message_id": message_id, "request": _acp_public_value(self.config, request)}
+            for request in self.acp_permissions.pending_for_chat(chat_id)
+        ] if message_id else []}
+
+    def decide_work_permission(
+        self, chat_id: str, payload: dict[str, Any], *, window_id: str,
+    ) -> dict[str, bool]:
+        with self.store.lock:
+            self._owned_chat(chat_id, window_id)
+        request_id = payload.get("request_id")
+        option_id = payload.get("option_id")
+        if not isinstance(request_id, str) or not isinstance(option_id, str):
+            raise ValueError("request_id and option_id must be text")
+        return {"accepted": self.acp_permissions.decide(chat_id, request_id, option_id)}
+
+    def work_event_batch(
+        self, chat_id: str, after: int, *, epoch: str | None,
+        window_id: str, timeout: float = 10,
+    ) -> list[dict[str, Any]]:
+        with self.store.lock:
+            self._owned_chat(chat_id, window_id)
+        if epoch and epoch != self.events.epoch:
+            return [{"seq": self.events.latest(chat_id), "kind": "reset", "payload": {}}]
+        return self.events.wait_after(chat_id, after, timeout=timeout)
+
+    def work_event_epoch(self) -> str:
+        return self.events.epoch
+
+    def work_event_closed(self) -> bool:
+        return self.events.closed
+
+    def _publish_work_event(
+        self, chat_id: str, message_id: str, kind: str, payload: dict[str, Any],
+        *, event_id: str | None = None,
+    ) -> bool:
+        """Journal first, then publish only for the still-pending local run."""
+        with self.store.lock:
+            try:
+                pending = self._message(self.store.get(chat_id), message_id)
+            except KeyError:
+                return False
+            run_id = pending.get("run_id")
+            if not pending.get("pending") or not isinstance(run_id, str) or not run_id:
+                return False
+            visible = self.store.append_live_event(
+                chat_id, run_id, kind, payload, event_id=event_id,
+            )
+            try:
+                self.events.publish(chat_id, kind, visible)
+            except RuntimeError:
+                # An already closed stream cannot undo a committed journal row.
+                pass
+            return True
 
     def current_chat_state(self) -> dict[str, Any]:
         """Expose the persisted Chat view through the server-facing app boundary."""
@@ -1423,9 +1851,10 @@ class PilferedParrotApp(HarnessWorkflow):
                     chat_thread, self.config, selected_provider, model,
                     Path(chat_thread.get("cwd") or self.default_cwd), limit,
                 )
-                self.store.data["preferences"]["work_models"][selected_provider] = model
                 if selected_provider == "codex":
                     self.store.data["preferences"]["chat_model"] = model
+                else:
+                    self.store.data["preferences"]["work_models"][selected_provider] = model
                 self.store.save()
                 return self.store.chat_public()
 
@@ -1448,9 +1877,12 @@ class PilferedParrotApp(HarnessWorkflow):
             return None
         if not isinstance(value, str):
             raise ValueError("reasoning effort must be a string or null")
-        effort = value.strip().lower()
-        if not effort:
+        effort = value.strip()
+        if not effort or len(effort) > 128 or any(ord(char) < 32 for char in effort):
             raise ValueError("reasoning effort must be a string or null")
+        if provider in {"codex", "claude"} and self.config[provider].get("engine") == "acp":
+            return effort
+        effort = effort.lower()
         if provider != "codex":
             raise ValueError("reasoning effort is only supported for Codex")
         option = next((item for item in model_catalog(self.config).get("codex", {}).get("options", [])
@@ -1482,6 +1914,55 @@ class PilferedParrotApp(HarnessWorkflow):
                 )
                 chat["requested_model"] = requested_model
                 chat["reasoning_effort"] = effort
+                self.store.mark_used(chat)
+                self.store.save()
+                return self.store.public(chat)
+
+    def set_acp_mode(
+        self, chat_id: str, payload: dict[str, Any], *, window_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Save one advertised ACP session mode for this owned Work session."""
+        if "mode" not in payload:
+            raise ValueError("mode is required")
+        value = payload.get("mode")
+        if value is not None and (not isinstance(value, str) or not value.strip()
+                                  or len(value) > 128
+                                  or any(ord(char) < 32 for char in value)):
+            raise ValueError("ACP mode must be non-empty text or null")
+        with self.runs_lock:
+            if chat_id in self.runs:
+                raise ValueError("stop the response before changing ACP mode")
+            with self.store.lock:
+                chat = self._owned_chat(chat_id, window_id)
+                provider = str(chat.get("requested_provider") or self.default_provider)
+                if provider not in {"codex", "claude"} or self.config[provider].get("engine") != "acp":
+                    raise ValueError("ACP mode is only available for ACP Work sessions")
+                model = chat.get("requested_model") or effective_model(self.config, provider)
+                owner = chat.get("window_id", "main")
+                workspace = Path(chat["cwd"])
+        if value is not None:
+            catalog = self.poll_provider_models(
+                provider, model=model, window_id=owner,
+                window_provider=provider, workspace=workspace,
+            )
+            choices = catalog.get("acp_options", {}).get("modes", [])
+            if not any(isinstance(item, dict) and item.get("value") == value
+                       for item in choices):
+                raise ValueError("ACP mode is not advertised by the selected agent")
+        with self.runs_lock:
+            if chat_id in self.runs:
+                raise ValueError("stop the response before changing ACP mode")
+            with self.store.lock:
+                chat = self._owned_chat(chat_id, window_id)
+                if (str(chat.get("requested_provider") or self.default_provider) != provider
+                        or (chat.get("requested_model") or effective_model(self.config, provider)) != model
+                        or Path(chat["cwd"]) != workspace
+                        or self.config[provider].get("engine") != "acp"):
+                    raise ValueError("Work session changed while checking ACP mode")
+                if value is None:
+                    chat.pop("acp_mode", None)
+                else:
+                    chat["acp_mode"] = value
                 self.store.mark_used(chat)
                 self.store.save()
                 return self.store.public(chat)
@@ -1542,7 +2023,10 @@ class PilferedParrotApp(HarnessWorkflow):
     ) -> dict[str, Any]:
         with self.store.lock:
             chat = self._owned_chat(chat_id, window_id)
-            return self.store.set_draft(chat["id"], payload.get("draft"))
+            return self.store.set_draft(
+                chat["id"], payload.get("draft"),
+                ack_only=payload.get("ack_only") is True,
+            )
 
     def send_message(
         self, chat_id: str, payload: dict[str, Any], *,
@@ -1554,8 +2038,13 @@ class PilferedParrotApp(HarnessWorkflow):
             raise ValueError("message cannot be empty")
         if len(prompt) > MESSAGE_MAX_CHARS:
             raise ValueError(f"message cannot exceed {MESSAGE_MAX_CHARS:,} characters")
+        observe_files = payload.get("observe_files", False)
+        if not isinstance(observe_files, bool):
+            raise ValueError("observe_files must be a boolean")
+        if observe_files and os.name != "posix":
+            raise ValueError("file observation requires POSIX")
         request_id = _request_id(payload.get("request_id"))
-        active = ActiveRun()
+        active = ActiveRun(observe_files=observe_files)
         with self.runs_lock:
             if chat_id in self.runs:
                 raise ValueError("this work session is already running")
@@ -1573,30 +2062,61 @@ class PilferedParrotApp(HarnessWorkflow):
                                or chat.get("requested_provider") or self.default_provider)
                 if provider not in self._provider_ids(include_hidden=bool(window_provider)):
                     raise ValueError(f"provider must be one of: {', '.join(self._provider_ids())}")
+                first_turn_cwd = None
+                if not chat["messages"]:
+                    first_turn_cwd = _project_directory(_migrate_renamed_project_path(
+                        chat["cwd"], self.renamed_repository_root,
+                    ))
+                    requested_cwd = _project_directory(_migrate_renamed_project_path(
+                        payload.get("cwd") or chat["cwd"], self.renamed_repository_root,
+                    ))
+                    if requested_cwd != first_turn_cwd:
+                        raise ValueError(
+                            "this session belongs to another project; start a new session there"
+                        )
+                    _validate_provider_workspace(provider, first_turn_cwd, self.config)
                 model_value = payload.get("model") if "model" in payload \
                     else chat.get("requested_model")
                 requested_model = self._normalize_model(model_value)
                 selected_model = requested_model or effective_model(self.config, provider)
+                acp_enabled = provider in {"codex", "claude"} and \
+                    self.config.get(provider, {}).get("engine") == "acp"
+                acp_mode = (payload.get("mode") or chat.get("acp_mode")
+                            or self.config.get(provider, {}).get("acp_mode")) \
+                    if acp_enabled else None
+                if acp_mode is not None and (not isinstance(acp_mode, str)
+                                             or not acp_mode.strip()
+                                             or len(acp_mode) > 128):
+                    raise ValueError("ACP mode must be non-empty text")
                 if _harness_attempt is not None and provider == "claude":
                     # Validated by the selected harness policy. Ordinary Claude
                     # composer defaults retain their existing behavior.
                     reasoning_effort = payload.get("reasoning_effort")
                 elif "reasoning_effort" in payload:
-                    reasoning_effort = self._selected_reasoning_effort(
+                    reasoning_effort = payload.get("reasoning_effort") if acp_enabled \
+                        else self._selected_reasoning_effort(
                         provider, selected_model, payload.get("reasoning_effort"),
                     )
+                    if acp_enabled and reasoning_effort is not None and (
+                        not isinstance(reasoning_effort, str) or not reasoning_effort.strip()
+                        or len(reasoning_effort) > 128
+                    ):
+                        raise ValueError("ACP reasoning effort must be valid text")
                 else:
                     reasoning_effort = chat.get("reasoning_effort")
-                    try:
-                        reasoning_effort = self._selected_reasoning_effort(
-                            provider, selected_model, reasoning_effort,
-                        )
-                    except ValueError:
-                        reasoning_effort = None
+                    if not acp_enabled:
+                        try:
+                            reasoning_effort = self._selected_reasoning_effort(
+                                provider, selected_model, reasoning_effort,
+                            )
+                        except ValueError:
+                            reasoning_effort = None
                 if requested_model and not chat.get("harness_parent"):
                     self.store.data["preferences"]["work_models"][provider] = requested_model
                 same_session = provider == chat.get("provider") \
-                    and selected_model == chat.get("model")
+                    and selected_model == chat.get("model") \
+                    and chat.get("session_engine", "legacy") == \
+                    ("acp" if acp_enabled else "legacy")
                 chat["requested_provider"] = provider
                 chat["requested_model"] = requested_model
                 chat["reasoning_effort"] = reasoning_effort
@@ -1604,14 +2124,10 @@ class PilferedParrotApp(HarnessWorkflow):
                     chat.pop("live_context_usage", None)
                     chat.pop("last_turn_usage", None)
                 if not chat["messages"]:
-                    requested_cwd = _project_directory(_migrate_renamed_project_path(
-                        payload.get("cwd") or chat["cwd"], self.renamed_repository_root,
-                    ))
-                    _validate_provider_workspace(provider, requested_cwd, self.config)
                     # A path mentioned in prose can be an input, example, or
                     # explicit exclusion. Keep the selected workspace and let
                     # provider/tool permissions enforce actual file operations.
-                    chat["cwd"] = str(requested_cwd)
+                    chat["cwd"] = str(first_turn_cwd)
                 percent = _context_percent(chat.get(
                     "context_window_percent", context_window_percent(self.config, provider),
                 ))
@@ -1655,6 +2171,10 @@ class PilferedParrotApp(HarnessWorkflow):
                     "provider": provider,
                     "reasoning_effort": reasoning_effort,
                 }
+                if acp_enabled:
+                    pending["engine"] = "acp"
+                    if acp_mode is not None:
+                        pending["acp_mode"] = acp_mode
                 if _harness_attempt is not None:
                     pending["harness_reference"] = list(_harness_attempt)
                     _, task, attempt = self._harness_reference(_harness_attempt)
@@ -1693,6 +2213,185 @@ class PilferedParrotApp(HarnessWorkflow):
             raise
         return public
 
+    def _run_acp_message(
+        self, chat_id: str, pending_id: str, provider: str, prompt: str, cwd: Path,
+        session_id: str | None, model: str | None, effort: str | None,
+        mode: str | None, active: ActiveRun,
+    ) -> RunResult:
+        argv = self.acp_adapters.locate(provider)
+        if argv is None:
+            raise RuntimeError(
+                f"{provider.title()} ACP adapter is not installed. Install it explicitly before using ACP."
+            )
+        oversized_assistant = threading.Event()
+        raw_assistant = ""
+        raw_lock = threading.Lock()
+        configured_secrets = _acp_secret_values(self.config)
+
+        def sanitize_update(update: dict[str, Any]) -> dict[str, Any]:
+            nonlocal raw_assistant
+            try:
+                clean = _acp_public_update(self.config, update)
+                if clean.get("sessionUpdate") != "agent_message_chunk":
+                    return clean
+                if "streamed_text" in update:
+                    return {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": ""},
+                        "streamed_text": clean.get("streamed_text", ""),
+                        "streamed_text_truncated": bool(clean.get("streamed_text_truncated")),
+                    }
+                chunk = _acp_chunk_text(update.get("content"))
+                with raw_lock:
+                    raw_assistant += chunk
+                    if len(raw_assistant) > ACP_FINAL_TEXT_LIMIT:
+                        raise ValueError("ACP assistant response exceeds the display limit")
+                    visible = _acp_visible_stream(
+                        self.config, raw_assistant, configured_secrets,
+                    )
+                return {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": ""},
+                    "streamed_text": visible[-ACP_TEXT_LIMIT:],
+                    "streamed_text_truncated": len(visible) > ACP_TEXT_LIMIT,
+                }
+            except ValueError:
+                if update.get("sessionUpdate") == "agent_message_chunk":
+                    oversized_assistant.set()
+                raise
+
+        def publish(kind: str, payload: dict[str, Any]) -> None:
+            self._publish_work_event(chat_id, pending_id, kind, payload)
+
+        def on_update(_session_id: str, update: dict[str, Any]) -> None:
+            # Keep the store boundary safe even for a transport that skips the
+            # facade sanitizer or an injected test agent.
+            update = sanitize_update(update)
+            if update.get("sessionUpdate") == "filtered_update":
+                return
+            entry = {"id": uuid.uuid4().hex, "update": update}
+            with self.store.lock:
+                pending = self._message(self.store.get(chat_id), pending_id)
+                if not pending.get("pending"):
+                    return
+                entries = pending.setdefault("acp_updates", [])
+                entries.append(entry)
+                if len(entries) > ACP_UPDATE_LIMIT:
+                    del entries[:-ACP_UPDATE_LIMIT]
+                    pending["acp_updates_truncated"] = True
+                if update.get("sessionUpdate") == "agent_message_chunk":
+                    pending["streamed_text"] = update.get("streamed_text", "")
+                    pending["streamed_text_truncated"] = bool(
+                        update.get("streamed_text_truncated")
+                    )
+                elif update.get("sessionUpdate") == "usage_update":
+                    used, size = update.get("used"), update.get("size")
+                    if all(type(item) in {int, float} and 0 <= item <= 1_000_000_000
+                           and math.isfinite(item) and float(item).is_integer()
+                           for item in (used, size)) and size >= 1:
+                        chat = self.store.get(chat_id)
+                        chat["context_limit_tokens"] = int(size)
+                        chat["context_max_tokens"] = int(size)
+                        chat["context_window_percent"] = 100
+                        _record_context_usage(chat, {
+                            "input_tokens": int(used), "output_tokens": 0,
+                            "context_window_tokens": int(size),
+                        })
+                        publish("usage", {
+                            "message_id": pending_id, **self.store.context_public(chat),
+                        })
+                now = time.monotonic()
+                if now - active.last_checkpoint >= 0.5:
+                    self.store.save()
+                    active.last_checkpoint = now
+                self._publish_work_event(
+                    chat_id, pending_id, "acp_update",
+                    {"message_id": pending_id, "entry": entry}, event_id=entry["id"],
+                )
+
+        def on_permission(params: dict[str, Any]) -> str | None:
+            clean = _acp_public_value(self.config, params)
+            raw_options = params.get("options")
+            clean_options = clean.get("options") if isinstance(clean, dict) else None
+            if not isinstance(raw_options, list) or not isinstance(clean_options, list) \
+                    or len(raw_options) != len(clean_options) \
+                    or any(not isinstance(raw, dict) or not isinstance(public, dict)
+                           or any(raw.get(key) != public.get(key)
+                                  for key in ("optionId", "name", "kind"))
+                           for raw, public in zip(raw_options, clean_options)):
+                return None
+            raw_tool = params.get("toolCall")
+            clean_tool = clean.get("toolCall") if isinstance(clean, dict) else None
+            if isinstance(raw_tool, dict) and isinstance(clean_tool, dict) and any(
+                raw_tool.get(key) != clean_tool.get(key)
+                for key in ("toolCallId", "title", "name", "kind", "rawInput", "content")
+            ):
+                return None
+            request_id: str | None = None
+
+            def opened(request: dict[str, Any]) -> None:
+                nonlocal request_id
+                request_id = request["requestId"]
+                publish("permission", {
+                    "message_id": pending_id, "request": _acp_public_value(self.config, request),
+                })
+
+            try:
+                return self.acp_permissions.request(
+                    chat_id, clean, active.cancel_event, opened,
+                )
+            finally:
+                if request_id is not None:
+                    publish("permission_closed", {
+                        "message_id": pending_id, "request_id": request_id,
+                    })
+
+        try:
+            result = run_acp_turn(
+                argv, cwd=cwd, prompt=prompt, session_id=session_id,
+                model=model, effort=effort, mode=mode,
+                env=_provider_process_environment(), on_update=on_update,
+                sanitize_update=sanitize_update,
+                on_permission=on_permission, cancel_event=active.cancel_event,
+                max_collected_updates=ACP_UPDATE_LIMIT,
+            )
+        except Exception as error:
+            if oversized_assistant.is_set():
+                raise ValueError("ACP assistant update exceeds the display limit") from error
+            raise
+        if oversized_assistant.is_set():
+            raise ValueError("ACP assistant update exceeds the display limit")
+        if result.stop_reason not in ACP_STOP_REASONS:
+            raise ValueError("ACP agent returned an unsupported stop reason")
+        if not isinstance(result.session_id, str) or not result.session_id \
+                or _acp_public_text(self.config, result.session_id) != result.session_id:
+            raise ValueError("ACP agent returned an unsafe session ID")
+        with self.store.lock:
+            pending = self._message(self.store.get(chat_id), pending_id)
+            pending["acp_stop_reason"] = result.stop_reason
+            pending["acp_updates_truncated"] = bool(
+                pending.get("acp_updates_truncated") or result.updates_truncated
+            )
+        with raw_lock:
+            complete_text = raw_assistant or result.text
+        text = _acp_public_text(self.config, complete_text)
+        if result.succeeded and not text.strip():
+            text = "Completed."
+        if len(text) > ACP_FINAL_TEXT_LIMIT:
+            text = text[:ACP_FINAL_TEXT_LIMIT] + "\n\n[ACP response truncated]"
+        elif getattr(result, "text_truncated", False):
+            text += "\n\n[ACP response truncated]"
+        return RunResult(
+            text=text, exit_code=0 if result.succeeded else 1,
+            session_id=result.session_id,
+            error=None if result.succeeded else f"ACP turn stopped: {result.stop_reason}",
+            input_tokens=int(result.usage["input_tokens"])
+            if "input_tokens" in result.usage else None,
+            output_tokens=int(result.usage["output_tokens"])
+            if "output_tokens" in result.usage else None,
+            reported_model=result.model, reported_reasoning_effort=result.effort,
+        )
+
     def _run_message(
         self, chat_id: str, pending_id: str, prompt: str, active: ActiveRun,
     ) -> None:
@@ -1701,6 +2400,7 @@ class PilferedParrotApp(HarnessWorkflow):
         conversation: Conversation | None = None
         result: RunResult | None = None
         started = time.monotonic()
+        observation = None
         try:
             with self.store.lock:
                 chat = self.store.get(chat_id)
@@ -1716,10 +2416,20 @@ class PilferedParrotApp(HarnessWorkflow):
                 provider_messages = list(chat.get("provider_messages") or [])
                 cwd = Path(chat["cwd"])
 
+            # No provider or adapter process has started at this point.
+            if active.observe_files:
+                try:
+                    observation = self.turn_observations.begin(cwd)
+                except Exception as exc:
+                    raise ObservationUnavailable("File observation could not start; response was not run.") from exc
+
             if provider == "qwen":
                 ensure_qwen(self.config, cancel_event=active.cancel_event)
             selected_model = requested_model or effective_model(self.config, provider)
-            same_session = provider == current_provider and selected_model == current_model
+            engine = "acp" if provider in {"codex", "claude"} and \
+                self.config.get(provider, {}).get("engine") == "acp" else "legacy"
+            same_session = provider == current_provider and selected_model == current_model \
+                and chat.get("session_engine", "legacy") == engine
             percent = _context_percent(chat.get(
                 "context_window_percent", context_window_percent(self.config, provider),
             ))
@@ -1770,24 +2480,35 @@ class PilferedParrotApp(HarnessWorkflow):
                 self.store.save()
 
             def report_progress(kind: str, text: str) -> None:
+                if kind.startswith("_auth/"):
+                    return
                 rendered = str(text).strip()
                 if not rendered:
                     return
-                rendered = rendered[:4_000]
+                rendered = redact_configured_secrets(self.config, rendered)[:4_000]
                 with self.store.lock:
                     pending = self._message(self.store.get(chat_id), pending_id)
+                    if not pending.get("pending"):
+                        return
                     activity = pending.setdefault("activity", [])
-                    activity.append({
+                    update = {
+                        "id": uuid.uuid4().hex,
                         "kind": kind,
                         "content": rendered,
                         "created_at": int(time.time()),
-                    })
+                    }
+                    activity.append(update)
                     if len(activity) > 100:
                         del activity[:-100]
                     now = time.monotonic()
                     if now - active.last_checkpoint >= 0.5:
                         self.store.save()
                         active.last_checkpoint = now
+                    self._publish_work_event(
+                        chat_id, pending_id, "progress",
+                        {"message_id": pending_id, "activity": update},
+                        event_id=update["id"],
+                    )
 
             setattr(active.cancel_event, "_pilferedparrot_progress", report_progress)
             def report_usage(usage: dict[str, Any]) -> None:
@@ -1795,17 +2516,30 @@ class PilferedParrotApp(HarnessWorkflow):
                     current = self.store.get(chat_id)
                     if self._message(current, pending_id).get("pending"):
                         _record_context_usage(current, usage)
+                        context = self.store.context_public(current)
+                        self._publish_work_event(
+                            chat_id, pending_id, "usage",
+                            {"message_id": pending_id, **context},
+                        )
 
             setattr(active.cancel_event, "_pilferedparrot_usage", report_usage)
-            result = capture_dispatch(
-                provider, prompt, cwd, conversation, run_config, active.cancel_event,
-            )
-            if result.exit_code == 0 and result.session_id:
+            if engine == "acp":
+                result = self._run_acp_message(
+                    chat_id, pending_id, provider, prompt, cwd,
+                    conversation.provider_session_id, selected_model,
+                    reasoning_effort, pending_snapshot.get("acp_mode"), active,
+                )
+            else:
+                result = capture_dispatch(
+                    provider, prompt, cwd, conversation, run_config, active.cancel_event,
+                )
+            if result.session_id and (result.exit_code == 0 or engine == "acp"):
                 conversation.provider_session_id = result.session_id
             content = result.text or result.error or f"{provider.title()} exited without a response."
             if result.exit_code and result.error and result.text:
                 content += f"\n\n{result.error}"
             if result.exit_code:
+                self.feedback.record("problems", "provider_failed", "work")
                 content = redact_configured_secrets(self.config, content)
             with self.store.lock:
                 chat = self.store.get(chat_id)
@@ -1822,6 +2556,10 @@ class PilferedParrotApp(HarnessWorkflow):
                     chat["provider"] = provider
                     chat["model"] = selected_model
                     chat["provider_session_id"] = conversation.provider_session_id
+                    if engine == "acp":
+                        chat["session_engine"] = "acp"
+                    else:
+                        chat.pop("session_engine", None)
                     chat["provider_messages"] = conversation.messages
                     chat["whiteboard_discovered"] = conversation.whiteboard_discovered
                     if result.input_tokens is not None and result.output_tokens is not None:
@@ -1835,6 +2573,11 @@ class PilferedParrotApp(HarnessWorkflow):
                             "output_tokens": result.live_output_tokens or 0,
                             "context_window_tokens": result.live_context_window_tokens,
                         })
+                elif engine == "acp" and result.session_id:
+                    chat["provider"] = provider
+                    chat["model"] = selected_model
+                    chat["provider_session_id"] = result.session_id
+                    chat["session_engine"] = "acp"
             try:
                 append_run(
                     self.config["ledger"], provider=provider, prompt=prompt, cwd=cwd,
@@ -1845,38 +2588,61 @@ class PilferedParrotApp(HarnessWorkflow):
                 )
             except OSError as error:
                 print(f"[web] could not append run ledger: {error}")
-        except RunCancelled:
+        except ObservationUnavailable:
+            with self.store.lock:
+                chat = self.store.get(chat_id)
+                pending = self._message(chat, pending_id)
+                pending.update({"content": "File observation could not start; response was not run.",
+                                "error": True, "exit_code": 1})
+        except (RunCancelled, ACPCancelled):
+            self.feedback.record("problems", "cancelled", "work")
             with self.store.lock:
                 chat = self.store.get(chat_id)
                 pending = self._message(chat, pending_id)
                 pending.update({"content": "Cancelled.", "cancelled": True, "exit_code": 130})
         except Exception as exc:
+            self.feedback.record("problems", "provider_failed", "work")
             with self.store.lock:
                 chat = self.store.get(chat_id)
                 pending = self._message(chat, pending_id)
+                error_text = _acp_public_text(self.config, exc) \
+                    if locals().get("engine") == "acp" else \
+                    redact_configured_secrets(self.config, exc)
                 pending.update({
                     "content": "PilferedParrot error: "
-                    f"{redact_configured_secrets(self.config, exc)}",
+                    f"{error_text}",
                     "provider": provider,
                     "error": True,
                     "exit_code": 1,
                 })
         finally:
-            with self.runs_lock:
-                with self.store.lock:
-                    chat = self.store.get(chat_id)
-                    pending = self._message(chat, pending_id)
-                    if conversation is not None:
-                        pending["response_identity"] = deepcopy(conversation.response_identity)
-                    self._harness_complete(pending, result, time.monotonic() - started)
-                    pending.pop("pending", None)
-                    pending.pop("cancel_requested", None)
-                    chat["updated_at"] = int(time.time())
-                    self.store.save()
+            try:
+                observation_summary = observation.finish() if observation is not None else None
+                with self.runs_lock:
+                    with self.store.lock:
+                        chat = self.store.get(chat_id)
+                        pending = self._message(chat, pending_id)
+                        if observation_summary is not None:
+                            pending["observed_files"] = observation_summary
+                        if conversation is not None:
+                            pending["response_identity"] = deepcopy(conversation.response_identity)
+                        self._harness_complete(pending, result, time.monotonic() - started)
+                        pending.pop("pending", None)
+                        pending.pop("cancel_requested", None)
+                        chat["updated_at"] = int(time.time())
+                        self.store.save(completed_event=(
+                            chat_id, pending["run_id"], pending_id,
+                        ))
+                        try:
+                            self.events.publish(chat_id, "completed", {"message_id": pending_id})
+                        except RuntimeError:
+                            pass
+            finally:
+                with self.runs_lock:
                     if self.runs.get(chat_id) is active:
                         self.runs.pop(chat_id, None)
-            with self.budget_condition:
-                self.budget_refreshed_at = 0
+                with self.budget_condition:
+                    self.budget_refreshed_at = 0
 
     @staticmethod
     def _message(chat: dict[str, Any], message_id: str) -> dict[str, Any]:
@@ -1975,9 +2741,10 @@ class PilferedParrotApp(HarnessWorkflow):
                     chat_thread.pop("live_context_usage", None)
                     chat_thread.pop("last_turn_usage", None)
                 chat_thread["reasoning_effort"] = reasoning_effort
-                self.store.data["preferences"]["work_models"][selected_provider] = requested_model
                 if selected_provider == "codex":
                     self.store.data["preferences"]["chat_model"] = requested_model
+                else:
+                    self.store.data["preferences"]["work_models"][selected_provider] = requested_model
                 percent = _context_percent(chat_thread.get(
                     "context_window_percent", context_window_percent(
                         self.config, selected_provider,
@@ -2136,8 +2903,10 @@ class PilferedParrotApp(HarnessWorkflow):
                         "context_window_tokens": result.live_context_window_tokens,
                     })
         except RunCancelled:
+            self.feedback.record("problems", "cancelled", "chat")
             reply = "Stopped."
         except Exception as error:
+            self.feedback.record("problems", "provider_failed", "chat")
             reply = f"Chat error: {redact_configured_secrets(self.config, error)}"
         finally:
             with self.runs_lock:
@@ -2265,9 +3034,10 @@ class PilferedParrotApp(HarnessWorkflow):
                 self.config, selected_provider, model, percent,
             )
             with self.store.lock:
-                self.store.data["preferences"]["work_models"][selected_provider] = model
                 if selected_provider == "codex":
                     self.store.data["preferences"]["chat_model"] = model
+                else:
+                    self.store.data["preferences"]["work_models"][selected_provider] = model
             if context_limit is not None:
                 with self.store.lock:
                     self.store.data["chat"]["context_limit_tokens"] = context_limit
@@ -2586,13 +3356,23 @@ class PilferedParrotApp(HarnessWorkflow):
             image_key, theme_version=theme_version,
         )
 
-    def whiteboard_read(self) -> dict[str, Any]:
+    def whiteboard_read(self, filters: dict[str, Any] | None = None) -> dict[str, Any]:
         from .whiteboard import Whiteboard
-        return Whiteboard(self.config).read()
+        filters = filters or {}
+        allowed = {"limit", "since", "query", "project", "topic", "kind", "status", "thread", "before"}
+        if not isinstance(filters, dict) or set(filters) - allowed:
+            raise ValueError("unsupported whiteboard filter")
+        return Whiteboard(self.config).read(**filters)
 
     def whiteboard_post(self, payload: dict[str, Any]) -> dict[str, Any]:
         from .whiteboard import Whiteboard
-        return Whiteboard(self.config).post(payload.get("text"), author="User")
+        allowed = {"text", "workspace", "kind", "title", "project", "topics", "evidence",
+                   "applies_to", "status", "reply_to", "expires_at", "basis"}
+        if not isinstance(payload, dict) or set(payload) - allowed:
+            raise ValueError("unsupported whiteboard field")
+        fields = {key: value for key, value in payload.items() if key != "text"}
+        return Whiteboard(self.config).post(payload.get("text"), author="User",
+                                            identity={"source": "user"}, **fields)
 
     def open_chat_window(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Open Chat in a normal native window, isolated from the maximized main profile."""
@@ -2633,6 +3413,7 @@ class PilferedParrotApp(HarnessWorkflow):
         )
 
     def shutdown(self, timeout: float = 3) -> None:
+        self.acp_permissions.shutdown()
         with self.runs_lock:
             active = list(self.runs.values())
             if self.chat_run is not None:
@@ -2656,6 +3437,9 @@ class PilferedParrotApp(HarnessWorkflow):
             if process.poll() is None:
                 _stop_process(process)
         self.native.shutdown(deadline=deadline)
+        self.feedback.close()
+        self.events.close()
+        self.store.close()
 
 
 def make_handler(app: PilferedParrotApp) -> type[Any]:
@@ -2669,16 +3453,28 @@ def make_handler(app: PilferedParrotApp) -> type[Any]:
     )
 
 
-def serve(config: dict[str, Any], cwd: Path, *, open_browser: bool | None = None) -> int:
+def serve(config: dict[str, Any], cwd: Path, *, open_browser: bool | None = None,
+          sqlite_state_path: Path | None = None) -> int:
     """Wire the composition root into the transport-owned server lifecycle."""
+    if sqlite_state_path is not None:
+        if os.name != "posix":
+            raise RuntimeError("SQLite cutover needs a supported private rollback export")
+        if int(config["web"]["port"]) == 0:
+            raise RuntimeError("SQLite cutover requires a fixed app port")
+        from .sqlite_cutover import validate_paths
+        validate_paths(chat_store_path(config), sqlite_state_path)
     return _server.serve(
-        config, cwd, open_browser=open_browser, create_app=PilferedParrotApp,
+        config, cwd, open_browser=open_browser,
+        create_app=(lambda app_config, app_cwd: PilferedParrotApp(
+            app_config, app_cwd, sqlite_state_path=sqlite_state_path,
+        )),
         make_handler=make_handler,
         read_capability=_pilferedparrot_dashboard_capability,
         browser_url=_browser_url, browser_open=webbrowser.open,
         status=_pilferedparrot_status, terminate=_terminate_stale_pilferedparrot,
         http_server=ThreadingHTTPServer, ipv6_http_server=_IPv6ThreadingHTTPServer,
         timer_factory=threading.Timer,
+        require_fresh=sqlite_state_path is not None,
     )
 
 
@@ -2689,11 +3485,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config")
     parser.add_argument("--cwd", default=str(Path.cwd()))
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--sqlite-state", type=Path,
+                        help="explicit POSIX SQLite authority; requires a stopped app")
     args = parser.parse_args(argv)
     cwd = Path(args.cwd).expanduser().resolve()
     if not cwd.is_dir():
         raise SystemExit(f"not a directory: {cwd}")
-    return serve(load_config(args.config), cwd, open_browser=not args.no_browser)
+    return serve(load_config(args.config), cwd, open_browser=not args.no_browser,
+                 sqlite_state_path=args.sqlite_state)
 
 
 if __name__ == "__main__":

@@ -4,16 +4,15 @@ PilferedParrot Interface (PPI) is a local browser interface for coding CLIs and 
 model APIs. Choose the provider for a work session, keep its project and history together, and
 open a separate read-only Chat window when you need a quick question.
 
-**0.7.1** is a reliability and security update for the stable Linux/source channel and unsigned
-Windows 10/11 x64 preview. Release assets and completed verification are linked from the
-[0.7.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.1);
-the [Actions runs](https://github.com/PilferedParrot/PilferedParrot-Interface/actions) show CI results.
+**0.8.0** brings project workrooms and optional live Work features to the stable Linux/source
+channel and unsigned Windows 10/11 x64 preview. The [0.8.0 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.8.0)
+lists its assets and verification. Earlier release archives remain unchanged.
 
 [Project site](https://pilferedparrot.github.io/PilferedParrot-Interface/) ·
-[Linux 0.7.1 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.1/pilferedparrot-0.7.1-source.tar.gz) ·
-[0.7.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.1) ·
+[Linux 0.8.0 source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.8.0/pilferedparrot-0.8.0-source.tar.gz) ·
+[0.8.0 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.8.0) ·
 [Release notes](RELEASE_NOTES.md) ·
-[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.7.1/PilferedParrot-0.7.1-windows-x64.zip) ·
+[Windows preview ZIP](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.8.0/PilferedParrot-0.8.0-windows-x64.zip) ·
 [Report a bug](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new?template=bug_report.yml) ·
 [Share feedback](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new/choose)
 
@@ -80,6 +79,48 @@ desktop notifications. Work executes directly through the provider you choose; t
 Harness UI has been retired. The existing Harness backend and API remain available for existing
 records. See [the Harness review](docs/harness-review.md). Provider access, model availability,
 account limits, and usage charges belong to the provider you configure.
+
+## 0.8.0 changes
+
+This release contains the following changes beyond 0.7.1:
+
+- Project workrooms remember recent and pinned folders, group the visible session list by
+  selected project, and restore that selection when the app reopens. Use **Project** in the
+  sidebar to switch folders; use **＋** to start a session in another folder. Existing
+  sessions keep their original folder. Search filters the loaded session summaries in the
+  selected project. See [project workrooms](docs/project-workrooms.md).
+- The Work window loads compact session summaries first, then the selected transcript.
+  During a run it receives progress over a capability-protected stream, with snapshot
+  polling as a recovery path. See [live work events](docs/live-work-events.md).
+- An opt-in [ACP Work preview](docs/acp-work-preview.md) streams Codex and Claude text,
+  tool details and diffs, and shows explicit permission choices. Legacy Work remains
+  the default while the new path is validated. The Provider dashboard can install the pinned
+  adapters on demand, choose transport per provider, and show a requested GPU snapshot.
+  The Work picker reads live ACP model, effort and mode choices without sending a prompt.
+  Streamed text updates the pending answer without rebuilding earlier messages.
+- On POSIX systems, **Observe files for this turn** adds a bounded before/after
+  [file change summary](docs/observed-files.md) to a Work response. It reports
+  observed paths and scan gaps without attributing edits to the agent. Private
+  captured bytes stay outside the project; this version offers no rewind.
+- Private workspace preparation is an internal POSIX/Linux core primitive. It
+  snapshots a pinned Git tree into a separate repository; it does not provide UI
+  controls, isolate a provider process or session, publish files, or rewind work.
+  See [private workspace preparation](docs/private-workspace-preparation.md).
+- An explicit POSIX [SQLite cutover procedure](docs/sqlite-cutover.md) can retain
+  the original JSON bytes, verify a stopped source, and export a new JSON rollback
+  file. Normal startup still uses JSON.
+- [Local skill discovery](docs/skills.md) is an opt-in metadata preview. Configure
+  explicit folders and request a scan in Preferences; skills are not added to prompts.
+- New Codex Chat sessions default to GPT-6 Luna with low reasoning when no Chat selection is
+  saved. An explicit saved model and reasoning selection takes precedence.
+- When work remains unfinished, providers receive continuation guidance to leave a copyable
+  next-session prompt and, when writing is allowed, a whiteboard handoff. See the
+  [continuation rule](docs/continuation.md) for its scope and limits.
+- Optional product feedback is off by default. Users can choose categories, review a local
+  report, and download it for voluntary sharing; PPI does not upload it. See the
+  [feedback policy](docs/feedback.md).
+
+The 0.7.1 release and its archives remain available for rollback.
 
 The source project requires Python 3.12 or newer. Chrome or Chromium is preferred on Linux; the
 Windows preview also detects Microsoft Edge. The Python application has no third-party package

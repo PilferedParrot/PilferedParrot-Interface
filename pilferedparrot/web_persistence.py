@@ -18,9 +18,15 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .config import expanded_path
+from .observed_turn import public_observation_summary
+from .sqlite_state import SQLiteStateStore, StateStoreError
+from .sqlite_transform_report import build_transform_report
 
 
-DEFAULT_CHAT_MODEL_OPTIONS = ("gpt-5.6-terra", "gpt-5.6-luna")
+DEFAULT_CHAT_MODEL_OPTIONS = (
+    "gpt-6-luna", "gpt-6-sol", "gpt-6-astra",
+    "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol",
+)
 _PROVIDER_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 NOTIFICATION_PERMISSION_STATES = frozenset({
     "unasked", "granted", "denied", "dismissed", "unavailable",
@@ -37,6 +43,386 @@ APPEARANCE_OPTIONS = {
 }
 STALE_EMPTY_SESSION_SECONDS = 24 * 60 * 60
 WORK_CLEANUP_LAST_RUN = "work_cleanup_last_run"
+PROJECT_WORKROOMS = "project_workrooms"
+PROJECT_RECENT_LIMIT = 24
+PROJECT_PIN_LIMIT = 24
+PROJECT_LIST_LIMIT = 60
+
+# These are fields the compatibility loader deliberately retires. An absent
+# field elsewhere is not evidence that an older or newer writer meant to erase
+# it from SQLite's opaque document.
+_RETIRED_ROOT_FIELDS = frozenset({"coordinator", "coordinator_history"})
+_RETIRED_WORK_FIELDS = frozenset({
+    "qwen_messages", "context_used_tokens", "acp_mode", "last_used_order",
+})
+_RETIRED_CHAT_FIELDS = frozenset({"context_used_tokens"})
+_RETIRED_CHAT_MESSAGE_FIELDS = frozenset({"active_chat_id", "control_action"})
+_KNOWN_PREFERENCES = frozenset({
+    "work_models", "work_context_window_percent", "chat_model",
+    "chat_context_window_percent", "notification_permission", "appearance",
+    WORK_CLEANUP_LAST_RUN, PROJECT_WORKROOMS,
+})
+_PUBLIC_SESSION_FIELDS = frozenset({
+    "id", "window_id", "title", "cwd", "created_at", "updated_at",
+    "requested_provider", "requested_model", "provider", "model",
+    "reasoning_effort", "acp_mode", "messages", "draft", "archived",
+    "archived_at", "last_used_order", "harness_parent", "harness_tasks",
+    "context_chars", "context_warning",
+    "pending", "session_engine", "run_id",
+})
+_PUBLIC_MESSAGE_FIELDS = frozenset({
+    "id", "role", "content", "created_at", "pending", "run_id",
+    "requested_provider", "requested_model", "provider", "model",
+    "reasoning_effort", "engine", "acp_mode", "acp_stop_reason",
+    "acp_updates", "acp_updates_truncated", "streamed_text",
+    "streamed_text_truncated", "activity", "error", "interrupted",
+    "cancel_requested", "cancelled", "exit_code", "response_identity",
+    "whiteboard_discovered",
+    "observed_files",
+})
+
+def _public_fields(value: Any, allowed: frozenset[str]) -> dict[str, Any]:
+    return {key: item for key, item in value.items() if key in allowed} \
+        if isinstance(value, dict) else {}
+
+
+_OMIT_PUBLIC = object()
+_SETTING_SHAPE = {"provider": None, "model": None, "reasoning_effort": None}
+_METRIC_SHAPE = {"value": None, "source": None, "unit": None}
+_CONTRACT_SHAPE = {
+    "task": None, "category": None, "inputs": [None], "write_scope": [None],
+    "acceptance_check": None, "artifact": None, "stop_conditions": None,
+    "hypothesis": None,
+}
+_USAGE_OBSERVATION_SHAPE = {
+    "id": None, "scope_id": None, "basis": None, "source": None,
+    "input_tokens": None, "output_tokens": None, "cached_input_tokens": None,
+    "includes_children": None,
+}
+_USAGE_SHAPE = {
+    "input_tokens": _METRIC_SHAPE, "output_tokens": _METRIC_SHAPE,
+    "cached_input_tokens": _METRIC_SHAPE, "observations": None,
+    "complete": None, "ambiguity": None,
+    "api_equivalent_cost": _METRIC_SHAPE,
+    "subscription_consumption": _METRIC_SHAPE,
+}
+_REVIEW_SHAPE = {
+    "accepted": None, "artifact_snapshot": {"sha256": None, "bytes": None},
+    "artifact": None, "evidence": None, "acceptance_check": None,
+    "review_seconds": _METRIC_SHAPE, "rework_seconds": _METRIC_SHAPE,
+    "recorded_at": None, "source": None,
+}
+_ATTEMPT_SHAPE = {
+    "id": None, "chat_id": None, "parent_chat_id": None, "task_id": None,
+    "category": None, "contract": _CONTRACT_SHAPE, "requested": _SETTING_SHAPE,
+    "route_mode": None, "retry_index": None, "started_at": None,
+    "status": None, "confirmed": {**_SETTING_SHAPE, "source": None},
+    "elapsed_seconds": _METRIC_SHAPE, "usage_observations": [_USAGE_OBSERVATION_SHAPE],
+    "usage": _USAGE_SHAPE, "review": _REVIEW_SHAPE,
+    "api_equivalent_cost": _METRIC_SHAPE,
+    "subscription_consumption": _METRIC_SHAPE, "inherited_context": None,
+    "message_id": None, "run_id": None, "failure_reason": None,
+}
+_HARNESS_TASK_SHAPE = {
+    "id": None, "status": None, "created_at": None,
+    "contract": _CONTRACT_SHAPE,
+    "route": {
+        "mode": None, "requested": _SETTING_SHAPE, "reason": None,
+        "estimates": {"unit": None, "source": None, "direct": None,
+                      "briefing": None, "execution": None,
+                      "verification": None, "rework": None},
+        "prior_selection": {"model": None, "reasoning_effort": None,
+                            "source": None, "runtime_confirmed": None},
+    },
+    "policy": {
+        "name": None, "label": None, "mode": None, "provider": None,
+        "lead": _SETTING_SHAPE, "worker": _SETTING_SHAPE,
+        "escalation": [_SETTING_SHAPE], "custom_routing_required": None,
+        "delegation_enabled": None,
+    },
+    "attempts": [_ATTEMPT_SHAPE],
+    "events": [{"type": None, "attempt_id": None, "evidence": None,
+                "requested": _SETTING_SHAPE, "at": None, **_REVIEW_SHAPE}],
+    "summary": {
+        "counts": {key: None for key in (
+            "total", "accepted", "rejected", "awaiting_review", "failed", "running",
+        )},
+        "usage": _USAGE_SHAPE, "elapsed": _METRIC_SHAPE,
+        "review": _METRIC_SHAPE, "rework": _METRIC_SHAPE,
+        "rework_attempts": None, "api_equivalent_cost": _METRIC_SHAPE,
+        "subscription_consumption": _METRIC_SHAPE,
+    },
+}
+
+
+def _public_shape(value: Any, shape: Any) -> Any:
+    if value is None:
+        return None
+    if shape is None:
+        return value if not isinstance(value, (dict, list)) else _OMIT_PUBLIC
+    if isinstance(shape, list):
+        if not isinstance(value, list):
+            return _OMIT_PUBLIC
+        return [public for item in value
+                if (public := _public_shape(item, shape[0])) is not _OMIT_PUBLIC]
+    if not isinstance(value, dict):
+        return _OMIT_PUBLIC
+    result = {}
+    for key, child_shape in shape.items():
+        if key in value:
+            public = _public_shape(value[key], child_shape)
+            if public is not _OMIT_PUBLIC:
+                result[key] = public
+    return result
+
+
+def _public_acp_update(entry: Any) -> dict[str, Any] | None:
+    if not isinstance(entry, dict) or not isinstance(entry.get("update"), dict):
+        return None
+    update = entry["update"]
+    if update.get("sessionUpdate") not in {"tool_call", "tool_call_update"}:
+        return None
+    public = {key: update[key] for key in (
+        "sessionUpdate", "toolCallId", "name", "title", "kind", "status",
+    ) if isinstance(update.get(key), str)}
+    content = update.get("content")
+    if isinstance(content, list):
+        public_content = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "diff":
+                public_content.append({
+                    key: block[key] for key in ("type", "path", "oldText", "newText")
+                    if isinstance(block.get(key), str)
+                    or key == "oldText" and key in block and block[key] is None
+                })
+            elif block.get("type") == "content" and isinstance(block.get("content"), dict) \
+                    and block["content"].get("type") == "text" \
+                    and isinstance(block["content"].get("text"), str):
+                public_content.append({
+                    "type": "content",
+                    "content": {"type": "text", "text": block["content"]["text"]},
+                })
+        public["content"] = public_content
+    output = update.get("rawOutput")
+    if isinstance(output, str):
+        public["rawOutput"] = output
+    elif isinstance(output, dict) and isinstance(output.get("formatted_output"), str):
+        public["rawOutput"] = {"formatted_output": output["formatted_output"]}
+    return {"id": entry["id"], "update": public} \
+        if isinstance(entry.get("id"), str) else None
+
+
+def _public_observed_messages(result: dict[str, Any]) -> dict[str, Any]:
+    messages = result.get("messages")
+    if isinstance(messages, list):
+        for message in messages:
+            if not isinstance(message, dict) or "observed_files" not in message:
+                continue
+            summary = public_observation_summary(message["observed_files"])
+            if summary is None:
+                message.pop("observed_files", None)
+            else:
+                message["observed_files"] = summary
+    return result
+
+
+def _sqlite_public_projection(result: dict[str, Any]) -> dict[str, Any]:
+    """Keep opaque future fields out of SQLite-backed browser responses."""
+    projected = {key: value for key, value in result.items()
+                 if key in _PUBLIC_SESSION_FIELDS and (
+                     key in {"messages", "harness_tasks", "harness_parent"}
+                     or not isinstance(value, (dict, list))
+                 )}
+    tasks = projected.get("harness_tasks")
+    if isinstance(tasks, list):
+        projected["harness_tasks"] = _public_shape(tasks, [_HARNESS_TASK_SHAPE])
+    else:
+        projected.pop("harness_tasks", None)
+    parent = projected.get("harness_parent")
+    if isinstance(parent, dict):
+        projected["harness_parent"] = _public_shape(
+            parent, {"chat_id": None, "task_id": None},
+        )
+    else:
+        projected.pop("harness_parent", None)
+    messages = projected.get("messages")
+    if isinstance(messages, list):
+        public_messages = []
+        for item in messages:
+            message = {
+                key: value for key, value in _public_fields(item, _PUBLIC_MESSAGE_FIELDS).items()
+                if key in {"activity", "acp_updates", "response_identity", "observed_files"}
+                or not isinstance(value, (dict, list))
+            }
+            if not isinstance(message.get("content"), str):
+                message.pop("content", None)
+            activity = message.get("activity")
+            if isinstance(activity, list):
+                message["activity"] = [
+                    {key: update[key] for key in ("id", "kind", "content")
+                     if isinstance(update.get(key), str)} | (
+                        {"created_at": update["created_at"]}
+                        if type(update.get("created_at")) in (int, float) else {}
+                    ) for update in activity if isinstance(update, dict)
+                ]
+            else:
+                message.pop("activity", None)
+            acp_updates = message.get("acp_updates")
+            if isinstance(acp_updates, list):
+                message["acp_updates"] = [public for entry in acp_updates
+                                          if (public := _public_acp_update(entry)) is not None]
+            else:
+                message.pop("acp_updates", None)
+            identity = message.get("response_identity")
+            if isinstance(identity, dict):
+                message["response_identity"] = {
+                    key: identity[key] for key in (
+                        "provider", "requested_model", "endpoint_kind", "endpoint_origin",
+                    ) if isinstance(identity.get(key), str)
+                }
+                if isinstance(identity.get("reported_models"), list):
+                    message["response_identity"]["reported_models"] = [
+                        model for model in identity["reported_models"]
+                        if isinstance(model, str)
+                    ]
+            else:
+                message.pop("response_identity", None)
+            public_messages.append(message)
+        projected["messages"] = public_messages
+    return _public_observed_messages(projected)
+
+
+def _retired_on_load(path: tuple[str, ...], key: str) -> bool:
+    if not path:
+        return key in _RETIRED_ROOT_FIELDS
+    if path == ("preferences",):
+        return key in _KNOWN_PREFERENCES
+    if len(path) == 2 and path[0] == "chats":
+        return key in _RETIRED_WORK_FIELDS
+    if path == ("chat",) or len(path) == 2 and path[0] == "chat_history":
+        return key in _RETIRED_CHAT_FIELDS
+    if len(path) == 3 and path[:2] == ("chat", "messages") \
+            or len(path) == 4 and path[0] == "chat_history" \
+            and path[2] == "messages":
+        return key in _RETIRED_CHAT_MESSAGE_FIELDS
+    return False
+
+
+def _id_map(items: list[Any]) -> dict[str, dict[str, Any]] | None:
+    if not all(isinstance(item, dict) and isinstance(item.get("id"), str)
+               and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", item["id"])
+               for item in items):
+        return None
+    result = {item["id"]: item for item in items}
+    return result if len(result) == len(items) else None
+
+
+def _has_stable_id(item: Any) -> bool:
+    return isinstance(item, dict) and isinstance(item.get("id"), str) \
+        and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", item["id"]) is not None
+
+
+def _same_json_value(left: Any, right: Any) -> bool:
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            _same_json_value(value, right[key]) for key, value in left.items()
+        )
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            _same_json_value(old, new) for old, new in zip(left, right)
+        )
+    return left == right
+
+
+def _merge_runtime_delta(
+    before: Any, after: Any, authority: Any, path: tuple[str, ...] = (),
+    *, load_transform: bool = False,
+) -> Any:
+    """Apply a runtime change without replacing unchanged opaque subtrees.
+
+    The first pass represents a known compatibility transformation. Later
+    passes represent app edits. Ambiguous object-list edits fail closed. The
+    returned tree shares unchanged nodes with ``authority``; neither tree may
+    be mutated after this call.
+    """
+    if _same_json_value(before, after):
+        return authority
+    if isinstance(before, dict) and isinstance(after, dict) and isinstance(authority, dict):
+        if not load_transform and path == ("chat",) \
+                and before.get("id") != after.get("id"):
+            # reset_chat creates a new thread. The old thread may be moved to
+            # chat_history, but its opaque fields do not belong to the new one.
+            return deepcopy(after)
+        result = authority.copy()
+        for key in before.keys() - after.keys():
+            if not load_transform or _retired_on_load(path, key):
+                result.pop(key, None)
+        for key, value in after.items():
+            if key in before:
+                result[key] = _merge_runtime_delta(
+                    before[key], value, authority.get(key), path + (key,),
+                    load_transform=load_transform,
+                )
+            else:
+                result[key] = deepcopy(value)
+        return result
+    if isinstance(before, list) and isinstance(after, list) and isinstance(authority, list):
+        if not before:
+            if authority:
+                raise StateStoreError("ambiguous SQLite object-list mutation")
+            return deepcopy(after)
+        keyed_before, keyed_after, keyed_authority = (
+            _id_map(items) for items in (before, after, authority)
+        )
+        if keyed_before is not None and keyed_after is not None \
+                and keyed_authority is not None \
+                and set(keyed_before) <= set(keyed_authority):
+            return [
+                _merge_runtime_delta(
+                    keyed_before[item["id"]], item, keyed_authority[item["id"]],
+                    path + (item["id"],), load_transform=load_transform,
+                ) if item["id"] in keyed_before else deepcopy(item)
+                for item in after
+            ]
+        if any(isinstance(item, dict) for item in (*before, *after, *authority)):
+            # Older transcripts may start with messages that have no ID. Keep
+            # that exact prefix attached to its opaque source while allowing
+            # newer, keyed messages to advance, complete, or append after it.
+            first_keyed = next((index for index, item in enumerate(before)
+                                if _has_stable_id(item)), len(before))
+            if not load_transform and first_keyed > 0 \
+                    and len(after) >= first_keyed \
+                    and len(authority) == len(before) \
+                    and _same_json_value(before[:first_keyed], after[:first_keyed]) \
+                    and all(not _has_stable_id(item) for item in authority[:first_keyed]):
+                old_tail = _id_map(before[first_keyed:])
+                new_tail = _id_map(after[first_keyed:])
+                raw_tail = _id_map(authority[first_keyed:])
+                if old_tail is not None and new_tail is not None \
+                        and raw_tail is not None and set(old_tail) <= set(raw_tail):
+                    return list(authority[:first_keyed]) + [
+                        _merge_runtime_delta(
+                            old_tail[item["id"]], item, raw_tail[item["id"]],
+                            path + (item["id"],),
+                        ) if item["id"] in old_tail else deepcopy(item)
+                        for item in after[first_keyed:]
+                    ]
+            if load_transform and len(before) == len(after) == len(authority):
+                return [
+                    _merge_runtime_delta(old, new, raw, path + (str(index),),
+                                         load_transform=True)
+                    for index, (old, new, raw) in enumerate(zip(before, after, authority))
+                ]
+            if len(after) >= len(before) and len(authority) == len(before) \
+                    and _same_json_value(after[:len(before)], before):
+                return list(authority) + deepcopy(after[len(before):])
+            raise StateStoreError("ambiguous SQLite object-list mutation")
+        return deepcopy(after)
+    return deepcopy(after)
 
 
 def _atomic_json_write(
@@ -68,6 +454,17 @@ def _atomic_json_write(
             temporary.unlink()
         except FileNotFoundError:
             pass
+
+
+def _canonical_project_cwd(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return str(Path(value).expanduser().resolve(strict=False))
+    except (OSError, RuntimeError, ValueError):
+        # A historical workspace can disappear or become a broken symlink.
+        # Keep its session readable; selecting it still requires validation.
+        return value
 
 
 def chat_store_path(config: dict[str, Any]) -> Path:
@@ -137,6 +534,7 @@ def empty_dashboard_models(provider_ids: Iterable[str]) -> dict[str, Any]:
         "providers": {provider: {} for provider in provider_ids},
         "provider_cards": {},
         "hidden_providers": [],
+        "provider_engines": {},
     }
 
 
@@ -170,6 +568,13 @@ def load_dashboard_models(path: Path, provider_ids: Iterable[str]) -> dict[str, 
     hidden = payload.get("hidden_providers")
     if isinstance(hidden, list):
         normalized["hidden_providers"] = [value for value in hidden if isinstance(value, str)]
+    engines = payload.get("provider_engines")
+    if isinstance(engines, dict):
+        normalized["provider_engines"] = {
+            provider: engine for provider, engine in engines.items()
+            if provider in {"codex", "claude"} and isinstance(engine, str)
+            and engine in {"legacy", "acp"}
+        }
     return normalized
 
 
@@ -201,9 +606,10 @@ class PersistentChatStore:
     def __init__(
         self, path: Path, *, chat_warning_chars: int = 80_000,
         technical_warning_chars: int = 120_000, legacy_path: Path | None = None,
-        chat_model: str = "gpt-5.6-terra",
+        chat_model: str = "gpt-6-luna",
         context_usage: Callable[..., dict[str, Any]],
         chat_model_options: tuple[str, ...] = DEFAULT_CHAT_MODEL_OPTIONS,
+        sqlite_state_path: Path | None = None,
     ):
         self.path = path
         self.legacy_path = legacy_path
@@ -215,13 +621,45 @@ class PersistentChatStore:
             else self.chat_model_options[0]
         self._context_usage = context_usage
         self.data: dict[str, Any] = {"version": 8, "chats": [], "preferences": {}}
-        self._load()
+        self._sqlite_state: SQLiteStateStore | None = None
+        self._sqlite_revision: int | None = None
+        self._sqlite_committed_data: dict[str, Any] | None = None
+        self._sqlite_authority: dict[str, Any] | None = None
+        self._sqlite_initial_document: dict[str, Any] | None = None
+        self._sqlite_transform_report: dict[str, Any] | None = None
+        self._sqlite_load_pending = False
+        self._sqlite_failed = False
+        try:
+            self._load(sqlite_state_path=sqlite_state_path)
+            if self._sqlite_state is not None:
+                # The runtime view may omit fields the application does not
+                # understand. Keep the imported full tree for SQLite saves.
+                self._sqlite_committed_data = deepcopy(self.data)
+        except Exception:
+            self.close()
+            raise
 
-    def _load(self) -> None:
+    def _load(self, *, sqlite_state_path: Path | None = None) -> None:
         source = self.path
+        raw_imported_document: dict[str, Any] | None = None
+        imported_revision: int | None = None
         if not source.exists() and self.legacy_path is not None and self.legacy_path.exists():
             source = self.legacy_path
-        if source.exists():
+        if sqlite_state_path is not None:
+            # This opt-in path is intentionally separate from app configuration.
+            # The source is a fixed rollback file; SQLite is the only writer.
+            if not source.exists():
+                raise StateStoreError("SQLite cutover requires an existing JSON source")
+            self._sqlite_state = SQLiteStateStore(sqlite_state_path)
+            snapshot = self._sqlite_state.import_json(source)
+            self._sqlite_revision = snapshot.revision
+            self._sqlite_authority = snapshot.document
+            self._sqlite_initial_document = deepcopy(snapshot.document)
+            raw_imported_document = deepcopy(snapshot.document)
+            imported_revision = snapshot.revision
+            self._sqlite_load_pending = True
+            self.data = deepcopy(snapshot.document)
+        elif source.exists():
             try:
                 payload = json.loads(source.read_text(encoding="utf-8"))
             except (OSError, UnicodeError, json.JSONDecodeError) as error:
@@ -245,13 +683,17 @@ class PersistentChatStore:
         for chat in chats:
             for field_name in (
                 "window_id", "title", "cwd", "requested_provider", "requested_model",
-                "provider", "model", "provider_session_id",
+                "provider", "model", "provider_session_id", "acp_mode",
             ):
                 value = chat.get(field_name)
                 if value is not None and not isinstance(value, str):
                     raise RuntimeError(
                         f"chat history contains an invalid {field_name}: {source}"
                     )
+            mode = chat.get("acp_mode")
+            if mode is not None and (not mode.strip() or len(mode) > 128
+                                     or any(ord(char) < 32 for char in mode)):
+                chat.pop("acp_mode", None)
             messages = chat.get("messages", [])
             if not isinstance(messages, list) or not all(
                 isinstance(message, dict) for message in messages
@@ -351,8 +793,10 @@ class PersistentChatStore:
             } if isinstance(work_context, dict) else {},
         }
         chat_model = preferences.get("chat_model")
-        if isinstance(chat_model, str) and chat_model in self.chat_model_options:
-            self.data["preferences"]["chat_model"] = chat_model
+        if isinstance(chat_model, str) and chat_model.strip() \
+                and len(chat_model.strip()) <= 128 \
+                and not any(ord(char) < 32 for char in chat_model):
+            self.data["preferences"]["chat_model"] = chat_model.strip()
         chat_context = preferences.get("chat_context_window_percent")
         if isinstance(chat_context, int) and not isinstance(chat_context, bool) \
                 and 1 <= chat_context <= 100:
@@ -369,11 +813,114 @@ class PersistentChatStore:
         if isinstance(cleanup_last_run, (int, float)) and not isinstance(cleanup_last_run, bool) \
                 and cleanup_last_run >= 0:
             self.data["preferences"][WORK_CLEANUP_LAST_RUN] = int(cleanup_last_run)
+        raw_workrooms = preferences.get(PROJECT_WORKROOMS)
+        workrooms: dict[str, dict[str, Any]] = {}
+        if isinstance(raw_workrooms, dict):
+            for window_id, value in raw_workrooms.items():
+                if not isinstance(window_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", window_id) \
+                        or not isinstance(value, dict):
+                    continue
+                def paths(field: str, limit: int) -> list[str]:
+                    raw = value.get(field)
+                    return list(dict.fromkeys(
+                        item for item in raw
+                        if isinstance(item, str) and os.path.isabs(item)
+                        and 0 < len(item) <= 4096 and "\x00" not in item
+                    ))[:limit] if isinstance(raw, list) else []
+                selected = value.get("selected")
+                workrooms[window_id] = {
+                    "recent": paths("recent", PROJECT_RECENT_LIMIT),
+                    "pinned": paths("pinned", PROJECT_PIN_LIMIT),
+                    "selected": selected if isinstance(selected, str)
+                    and os.path.isabs(selected) and len(selected) <= 4096
+                    and "\x00" not in selected else None,
+                }
+        self.data["preferences"][PROJECT_WORKROOMS] = workrooms
         self.data["version"] = 8
+        if raw_imported_document is not None:
+            self._sqlite_transform_report = build_transform_report(
+                raw_imported_document, self.data, revision=imported_revision,
+            )
+
+    def sqlite_transform_report(self) -> dict[str, Any] | None:
+        """Return the cached value-free report from the SQLite first load.
+
+        The report is computed before any save and is unavailable for the
+        ordinary JSON-backed store. It contains counts and safe schema names,
+        never state values or source paths.
+        """
+        with self.lock:
+            return deepcopy(self._sqlite_transform_report)
 
     def preferences_public(self) -> dict[str, Any]:
         with self.lock:
-            return deepcopy(self.data["preferences"])
+            return deepcopy({
+                key: value for key, value in self.data["preferences"].items()
+                if key != PROJECT_WORKROOMS
+            })
+
+    def _project_workroom(self, window_id: str) -> dict[str, Any]:
+        return self.data["preferences"][PROJECT_WORKROOMS].setdefault(
+            window_id, {"recent": [], "pinned": [], "selected": None},
+        )
+
+    def remember_project(self, cwd: Path, window_id: str, *, save: bool = True) -> None:
+        """Record a validated canonical workspace without changing any session."""
+        with self.lock:
+            path = str(cwd.expanduser().resolve(strict=False))
+            workroom = self._project_workroom(window_id)
+            workroom["selected"] = path
+            workroom["recent"] = [path, *(
+                item for item in workroom["recent"] if item != path
+            )][:PROJECT_RECENT_LIMIT]
+            if save:
+                self.save()
+
+    def pin_project(self, cwd: Path, window_id: str, pinned: bool) -> None:
+        with self.lock:
+            path = str(cwd.expanduser().resolve(strict=False))
+            workroom = self._project_workroom(window_id)
+            workroom["pinned"] = [item for item in workroom["pinned"] if item != path]
+            if pinned:
+                workroom["pinned"] = [path, *workroom["pinned"]][:PROJECT_PIN_LIMIT]
+            self.save()
+
+    def project_state(
+        self, window_id: str, provider: str, default_cwd: Path, *, aggregate: bool = False,
+    ) -> dict[str, Any]:
+        """Return project summaries only; provider windows see only their sessions."""
+        with self.lock:
+            workroom = self._project_workroom(window_id)
+            visible = [chat for chat in self.data["chats"] if aggregate or (
+                chat.get("window_id", "main") == window_id
+                and (chat.get("requested_provider") or chat.get("provider")) == provider
+            )]
+            counts: dict[str, int] = {}
+            latest: dict[str, int] = {}
+            for chat in visible:
+                cwd = _canonical_project_cwd(chat.get("cwd"))
+                if cwd is None:
+                    continue
+                counts[cwd] = counts.get(cwd, 0) + 1
+                updated = chat.get("updated_at")
+                if isinstance(updated, (int, float)) and not isinstance(updated, bool):
+                    latest[cwd] = max(latest.get(cwd, 0), int(updated))
+            selected = (workroom["selected"] or next(iter(workroom["recent"]), None)
+                        or (max(latest, key=latest.get) if latest else None)
+                        or str(default_cwd.resolve(strict=False)))
+            ordered = list(dict.fromkeys([
+                *workroom["pinned"], *workroom["recent"], selected,
+                *sorted(counts, key=lambda path: latest.get(path, 0), reverse=True),
+            ]))[:PROJECT_LIST_LIMIT]
+            return {
+                "selected_project": selected,
+                "projects": [{
+                    "cwd": cwd,
+                    "name": Path(cwd).name or cwd,
+                    "pinned": cwd in workroom["pinned"],
+                    "session_count": counts.get(cwd, 0),
+                } for cwd in ordered],
+            }
 
     @staticmethod
     def _is_strictly_empty_work_session(chat: dict[str, Any]) -> bool:
@@ -456,7 +1003,7 @@ class PersistentChatStore:
 
     @staticmethod
     def _new_chat_thread(
-        model: str | None = "gpt-5.6-terra", provider: str = "codex",
+        model: str | None = "gpt-6-luna", provider: str = "codex",
         cwd: str | None = None,
     ) -> dict[str, Any]:
         now = int(time.time())
@@ -538,12 +1085,106 @@ class PersistentChatStore:
         if archived:
             chat_thread["archived"] = True
 
-    def save(self) -> None:
+    def save(self, *, completed_event: tuple[str, str, str] | None = None) -> None:
+        """Save the tree; an opt-in SQLite completion shares its transaction."""
         with self.lock:
+            if self._sqlite_state is not None:
+                if self._sqlite_failed or self._sqlite_revision is None:
+                    # A mutator may have changed the tree before reaching save.
+                    # Keep every rejected attempt invisible to later reads.
+                    self.data = deepcopy(self._sqlite_committed_data)
+                    raise StateStoreError("SQLite chat store requires a fresh load")
+                try:
+                    snapshot = deepcopy(self.data)
+                    authority = self._sqlite_authority
+                    if not isinstance(authority, dict):
+                        raise StateStoreError("SQLite authority is unavailable")
+                    if self._sqlite_load_pending:
+                        authority = _merge_runtime_delta(
+                            self._sqlite_initial_document, self._sqlite_committed_data,
+                            authority, load_transform=True,
+                        )
+                    merged = _merge_runtime_delta(
+                        self._sqlite_committed_data, snapshot, authority,
+                    )
+                    old_chat = self._sqlite_committed_data.get("chat")
+                    new_chat = snapshot.get("chat")
+                    if isinstance(old_chat, dict) and isinstance(new_chat, dict) \
+                            and old_chat.get("id") != new_chat.get("id"):
+                        archived = [item for item in snapshot.get("chat_history", [])
+                                    if item.get("id") == old_chat.get("id")]
+                        if len(archived) == 1:
+                            raw_chat = authority.get("chat")
+                            if not isinstance(raw_chat, dict):
+                                raise StateStoreError("SQLite Chat archive has no source thread")
+                            merged_archive = _merge_runtime_delta(
+                                old_chat, archived[0], raw_chat, ("chat_history", str(old_chat["id"])),
+                            )
+                            positions = [index for index, item in enumerate(merged["chat_history"])
+                                         if item.get("id") == old_chat.get("id")]
+                            if len(positions) != 1:
+                                raise StateStoreError("ambiguous SQLite Chat archive")
+                            # _merge_runtime_delta shares untouched subtrees.
+                            # Clone this list before replacing one entry.
+                            merged["chat_history"] = list(merged["chat_history"])
+                            merged["chat_history"][positions[0]] = merged_archive
+                    event_kwargs = {} if completed_event is None else {
+                        "event_kind": "completed",
+                        "event_payload": {"message_id": completed_event[2]},
+                        "session_key": completed_event[0],
+                        "run_id": completed_event[1],
+                        "event_id": f"completed_{completed_event[2]}",
+                    }
+                    saved = self._sqlite_state.save_document(
+                        merged, expected_revision=self._sqlite_revision, **event_kwargs,
+                    )
+                except Exception:
+                    # Callers often mutate self.data before save(). A failed
+                    # commit must not leave uncommitted values in the root tree.
+                    self.data = deepcopy(self._sqlite_committed_data)
+                    self._sqlite_failed = True
+                    raise
+                self._sqlite_committed_data = snapshot
+                self._sqlite_authority = merged
+                self._sqlite_initial_document = None
+                self._sqlite_load_pending = False
+                self._sqlite_revision = saved.revision
+                return
             _atomic_json_write(
                 self.path, self.data, ensure_ascii=False, indent=2,
                 trailing_newline=True, fsync=True,
             )
+
+    def append_live_event(
+        self, session_key: str, run_id: str, kind: str,
+        payload: dict[str, Any], *, event_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Commit a sanitized event before a live stream may publish it.
+
+        The JSON compatibility path keeps its existing in-memory stream. The
+        SQLite path returns the exact payload committed to the journal.
+        """
+        with self.lock:
+            if self._sqlite_state is None:
+                return payload
+            if self._sqlite_failed or self._sqlite_revision is None:
+                self.data = deepcopy(self._sqlite_committed_data)
+                raise StateStoreError("SQLite chat store requires a fresh load")
+            try:
+                event = self._sqlite_state.append_event(
+                    session_key, run_id, kind, payload, event_id=event_id,
+                    expected_revision=self._sqlite_revision,
+                )
+            except Exception:
+                self.data = deepcopy(self._sqlite_committed_data)
+                self._sqlite_failed = True
+                raise
+            return event.payload
+
+    def close(self) -> None:
+        with self.lock:
+            if self._sqlite_state is not None:
+                self._sqlite_state.close()
 
     def list_public(
         self, window_id: str | None = None, provider: str | None = None,
@@ -560,6 +1201,46 @@ class PersistentChatStore:
                 key=lambda item: item.get("updated_at", 0), reverse=True,
             )]
 
+    def list_summary_public(
+        self, window_id: str | None = None, provider: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return ordered dashboard rows without copying transcript content."""
+        with self.lock:
+            visible = sorted(
+                (
+                    item for item in self.data["chats"]
+                    if window_id is None or item.get("window_id", "main") == window_id
+                    if provider is None or (
+                        item.get("requested_provider") or item.get("provider")
+                    ) == provider
+                ),
+                key=lambda item: item.get("updated_at", 0), reverse=True,
+            )
+            return [self.summary_public(chat) for chat in visible]
+
+    def summary_public(self, chat: dict[str, Any]) -> dict[str, Any]:
+        """Build the lightweight direct-work-session summary used by compact state."""
+        messages = chat.get("messages", [])
+        return {
+            "id": chat.get("id"),
+            "title": chat.get("title"),
+            "cwd": chat.get("cwd"),
+            "project_cwd": _canonical_project_cwd(chat.get("cwd")),
+            "requested_provider": chat.get("requested_provider"),
+            "requested_model": chat.get("requested_model"),
+            "provider": chat.get("requested_provider") or chat.get("provider"),
+            "model": chat.get("requested_model") or chat.get("model"),
+            "window_id": chat.get("window_id", "main"),
+            "updated_at": chat.get("updated_at"),
+            "last_used_order": chat.get("last_used_order"),
+            "pending": any(
+                isinstance(message, dict) and bool(message.get("pending"))
+                for message in messages
+            ),
+            "message_count": len(messages) if isinstance(messages, list) else 0,
+            "context_status": self.context_public(chat)["context_status"],
+        }
+
     def public(self, chat: dict[str, Any]) -> dict[str, Any]:
         result = deepcopy({
             key: value for key, value in chat.items()
@@ -570,6 +1251,15 @@ class PersistentChatStore:
                 "output_reservation_tokens",
             }
         })
+        if self._sqlite_state is not None:
+            result = _sqlite_public_projection(result)
+        result = _public_observed_messages(result)
+        result["project_cwd"] = _canonical_project_cwd(chat.get("cwd"))
+        result.update(self.context_public(chat))
+        return result
+
+    def context_public(self, chat: dict[str, Any]) -> dict[str, Any]:
+        """Expose current context telemetry without copying a transcript."""
         context_chars = sum(
             len(str(message.get("content") or "")) for message in chat.get("messages", [])
         )
@@ -577,7 +1267,6 @@ class PersistentChatStore:
         # its meter at zero until the first request starts instead of making the
         # fresh session look partly consumed by estimated provider overhead.
         fresh_session = not chat.get("messages") and not chat.get("live_context_usage")
-        result["context_chars"] = context_chars
         usage = self._context_usage(
             context_chars, self.technical_warning_chars,
             limit_tokens=chat.get("context_limit_tokens"),
@@ -591,10 +1280,12 @@ class PersistentChatStore:
                 0 if fresh_session else chat.get("output_reservation_tokens", 0)
             ),
         )
-        result["context_usage"] = usage
-        result["context_percent"] = usage["percent"]
-        result["context_status"] = self._context_status(usage["percent"])
-        return result
+        return {
+            "context_chars": context_chars,
+            "context_usage": usage,
+            "context_percent": usage["percent"],
+            "context_status": self._context_status(usage["percent"]),
+        }
 
     @staticmethod
     def _context_status(percent: int) -> str:
@@ -615,6 +1306,9 @@ class PersistentChatStore:
                 "output_reservation_tokens",
             }
         })
+        if self._sqlite_state is not None:
+            result = _sqlite_public_projection(result)
+        result = _public_observed_messages(result)
         usage = self._context_usage(
             int(chat_thread.get("context_chars", 0)), self.chat_warning_chars,
             limit_tokens=chat_thread.get("context_limit_tokens"),
@@ -723,7 +1417,8 @@ class PersistentChatStore:
         context_limit_tokens: int | None = None, context_max_tokens: int | None = None,
         context_window_percent: int = 100, context_overhead_tokens: int = 0,
         output_reservation_tokens: int = 0, window_id: str = "main",
-        reasoning_effort: str | None = None,
+        reasoning_effort: str | None = None, remember_project: bool = False,
+        acp_mode: str | None = None,
     ) -> dict[str, Any]:
         now = int(time.time())
         chat = {
@@ -745,6 +1440,8 @@ class PersistentChatStore:
             "context_overhead_tokens": max(0, int(context_overhead_tokens)),
             "output_reservation_tokens": max(0, int(output_reservation_tokens)),
         }
+        if acp_mode is not None:
+            chat["acp_mode"] = acp_mode
         if context_limit_tokens is not None and context_limit_tokens > 0:
             chat["context_limit_tokens"] = context_limit_tokens
         if context_max_tokens is not None and context_max_tokens > 0:
@@ -753,10 +1450,14 @@ class PersistentChatStore:
         with self.lock:
             self.data["chats"].append(chat)
             self.mark_used(chat)
+            if remember_project:
+                self.remember_project(cwd, window_id, save=False)
             self.save()
         return self.public(chat)
 
-    def set_draft(self, chat_id: str, draft: Any) -> dict[str, Any]:
+    def set_draft(
+        self, chat_id: str, draft: Any, *, ack_only: bool = False,
+    ) -> dict[str, Any]:
         if not isinstance(draft, str):
             raise ValueError("draft must be text")
         if len(draft) > 40_000:
@@ -766,6 +1467,8 @@ class PersistentChatStore:
             chat["draft"] = draft
             chat["updated_at"] = int(time.time())
             self.save()
+            if ack_only:
+                return {"id": chat_id, "draft_saved": True}
             return self.public(chat)
 
     def mark_used(self, chat: dict[str, Any]) -> None:

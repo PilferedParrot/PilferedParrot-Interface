@@ -32,7 +32,7 @@ jobs:
       - name: Run Windows focused checks
         shell: pwsh
         run: |
-          python -m compileall -q pilferedparrot tests/test_windows_package.py
+          python -m compileall -q pilferedparrot tests/test_windows_package.py tests/test_acp_client.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest tests.test_terminal_launch -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -41,6 +41,8 @@ jobs:
           python -m unittest discover -s tests -p 'test_whiteboard*.py' -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest tests.test_process_cleanup -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest tests.test_acp_client -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pilferedparrot.windows --help
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -53,7 +55,7 @@ jobs:
         shell: pwsh
         run: |
           $SmokeDirectory = Join-Path $env:RUNNER_TEMP "Pilfered Parrot extracted"
-          Expand-Archive ./dist/PilferedParrot-0.7.1-windows-x64.zip -DestinationPath $SmokeDirectory
+          Expand-Archive ./dist/PilferedParrot-0.8.0-windows-x64.zip -DestinationPath $SmokeDirectory
           $Executable = Join-Path $SmokeDirectory "PilferedParrot.exe"
           & $Executable --help
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -69,8 +71,8 @@ jobs:
       - name: Upload Windows package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: PilferedParrot-0.7.1-windows-x64
+          name: PilferedParrot-0.8.0-windows-x64
           path: |
-            dist/PilferedParrot-0.7.1-windows-x64.zip
+            dist/PilferedParrot-0.8.0-windows-x64.zip
             dist/SHA256SUMS
           if-no-files-found: error

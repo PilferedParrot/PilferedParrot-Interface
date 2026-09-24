@@ -82,6 +82,7 @@ class DraftWhiteboardBrowserTests(unittest.TestCase):
 
     def test_whiteboard_is_shared_plain_text_and_persistent(self):
         self.page.locator('#whiteboardButton').click()
+        self.page.locator('#whiteboardBrowse').click()
         expect(self.page.locator('#whiteboardStatus')).to_have_text('No messages yet.')
         note = '<script>bad()</script> useful note'
         self.page.locator('#whiteboardText').fill(note)
@@ -91,6 +92,7 @@ class DraftWhiteboardBrowserTests(unittest.TestCase):
         self.page.locator('#whiteboardClose').click()
         self.page.reload()
         self.page.locator('#whiteboardButton').click()
+        self.page.locator('#whiteboardBrowse').click()
         expect(self.page.locator('#whiteboardMessages')).to_contain_text(note)
 
     def test_bright_theme_preserves_art_colors_and_readable_composer(self):

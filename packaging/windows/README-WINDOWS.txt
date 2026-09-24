@@ -1,7 +1,7 @@
 PilferedParrot Interface for Windows
 ====================================
 
-This is the 0.7.1 unsigned preview for Windows 10/11 x64. It is a portable package:
+This is the 0.8.0 unsigned preview for Windows 10/11 x64. It is a portable package:
 extract the ZIP and run PilferedParrot.exe. Python and the application are included,
 so no Python installation, installer, or administrator rights are required.
 
@@ -31,3 +31,19 @@ Use PilferedParrot.exe --help for command-line options.
 New installations use Darker / Minimal / Standard appearance in Work and Chat.
 Saved choices survive upgrades. Copy buttons preserve code/text whitespace, and
 Run with AI sends a reviewed shell block to the current Work session provider.
+
+This release adds optional product feedback, off by default. Users
+can enable individual categories, inspect a local report, then download it for
+voluntary sharing. Nothing is uploaded. This feature is included in the
+package. See docs/feedback.md for policy 1, local-change detection,
+retention, and turning all feedback off.
+
+This release also adds Project workrooms. The sidebar can pin and
+switch folders while keeping each session's draft and original workspace. Reopening
+the app restores the selected project; the 0.7.1 ZIP does not include it.
+
+ACP is an opt-in Work preview for Codex and Claude; the legacy path remains the default. Windows
+provider-account and real provider-CLI sign-in are not live-certified. Work file observation
+and private workspace preparation require POSIX/Linux. Private workspace preparation is an
+internal core primitive without UI or provider/session isolation and has no rewind or publishing
+control. SQLite cutover is opt-in; normal startup uses JSON.

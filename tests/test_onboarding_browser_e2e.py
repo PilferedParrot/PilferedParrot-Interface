@@ -242,6 +242,11 @@ class OnboardingBrowserEndToEndTests(unittest.TestCase):
 
     def test_dashboard_heading_dot_and_status_have_readable_non_overflowing_layout(self):
         dialog = self._open_dashboard()
+        # Opening the dashboard also loads ACP setup. Its completion re-renders
+        # the connection cards, so wait for that final render before measuring.
+        expect(dialog.locator("[data-acp-feedback]")).to_contain_text(
+            "Provider setup checked.", timeout=10_000,
+        )
         for provider, label in (
             ("codex", "OpenAI Codex"),
             ("claude", "Claude Code"),
@@ -254,7 +259,29 @@ class OnboardingBrowserEndToEndTests(unittest.TestCase):
             expect(heading).to_be_visible()
             expect(dot).to_be_visible()
             expect(status).to_be_visible()
-            heading_box, dot_box, status_box = heading.bounding_box(), dot.bounding_box(), status.bounding_box()
+            # Read all boxes in one browser task. A dashboard render between
+            # separate bounding_box calls can detach the earlier elements.
+            boxes = dialog.evaluate("""(dialog, { provider, label }) => {
+              const card = [...dialog.querySelectorAll('.provider-connection-card')]
+                .find(node => node.querySelector(`[data-provider-window="${provider}"]`));
+              if (!card) return null;
+              const heading = [...card.querySelectorAll('strong')]
+                .find(node => node.textContent.trim() === label);
+              const dot = card.querySelector('.provider-connection-head .status-dot');
+              const status = card.querySelector('.provider-connection-head > small');
+              const box = node => {
+                if (!node) return null;
+                const { x, y, width, height } = node.getBoundingClientRect();
+                return { x, y, width, height };
+              };
+              return {
+                heading: box(heading), dot: box(dot), status: box(status),
+                fontSize: status && parseFloat(getComputedStyle(status).fontSize),
+                cardOverflows: card.scrollWidth > card.clientWidth,
+              };
+            }""", {"provider": provider, "label": label})
+            self.assertIsNotNone(boxes)
+            heading_box, dot_box, status_box = boxes["heading"], boxes["dot"], boxes["status"]
             self.assertIsNotNone(heading_box)
             self.assertIsNotNone(dot_box)
             self.assertIsNotNone(status_box)
@@ -267,8 +294,8 @@ class OnboardingBrowserEndToEndTests(unittest.TestCase):
                 heading_box["height"] / 2,
             )
             self.assertGreaterEqual(status_box["y"], heading_box["y"] + heading_box["height"])
-            self.assertGreaterEqual(status.evaluate("node => parseFloat(getComputedStyle(node).fontSize)"), 16)
-            self.assertFalse(card.evaluate("node => node.scrollWidth > node.clientWidth"))
+            self.assertGreaterEqual(boxes["fontSize"], 16)
+            self.assertFalse(boxes["cardOverflows"])
         self.assertLessEqual(self.page.evaluate("document.documentElement.scrollWidth"), 1920)
 
     def test_cli_cards_install_first_then_offer_signin_while_window_access_stays_enabled(self):

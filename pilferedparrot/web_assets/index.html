@@ -38,6 +38,17 @@
 
       <div class="sidebar-content">
         <div class="sidebar-group workspace-group">
+          <div class="project-switcher" aria-labelledby="projectSwitcherHeading">
+            <div class="project-switcher-heading">
+              <span id="projectSwitcherHeading">Project</span>
+              <div class="project-switcher-actions">
+                <button type="button" id="pinProject" aria-label="Pin project" aria-pressed="false" title="Pin project" disabled>☆</button>
+                <button type="button" id="addProject" aria-label="Choose another project" title="Choose another project" disabled>＋</button>
+              </div>
+            </div>
+            <select id="projectSelect" aria-label="Selected project" disabled></select>
+            <span id="projectSummary" class="project-summary"></span>
+          </div>
           <nav class="sidebar-actions" aria-label="Workspace actions">
             <button class="new-work-session" id="newWorkSession" disabled
                     title="Start a new work session"
@@ -78,6 +89,17 @@
 
         <section class="history-group technical-history" aria-labelledby="technicalHistoryHeading">
           <div class="history-heading" id="technicalHistoryHeading">Session history</div>
+          <div class="session-search">
+            <label for="sessionSearch">Search sessions in this project</label>
+            <div class="session-search-controls">
+              <input id="sessionSearch" type="search"
+                     placeholder="Title, provider, project name or path"
+                     aria-describedby="sessionSearchScope sessionSearchStatus" autocomplete="off" maxlength="160">
+              <button id="clearSessionSearch" type="button" aria-label="Clear session search" hidden>Clear</button>
+            </div>
+            <span id="sessionSearchScope" class="session-search-scope"></span>
+            <p id="sessionSearchStatus" class="session-search-status" role="status" aria-live="polite"></p>
+          </div>
           <nav class="chat-list" id="chatList" aria-label="Session history"></nav>
         </section>
       </div>
@@ -126,10 +148,12 @@
             <div class="composer-controls">
               <label class="composer-setting"><span>Model</span><select id="modelSelect" aria-label="Model" disabled></select></label>
               <label class="composer-setting" id="reasoningControl" hidden><span>Reasoning</span><select id="reasoningSelect" aria-label="Reasoning effort" disabled></select></label>
+              <label class="composer-setting" id="acpModeControl" hidden><span>Mode</span><select id="acpModeSelect" aria-label="ACP mode" disabled></select></label>
             </div>
             <button type="button" class="cancel-run hidden" id="cancelButton" aria-label="Cancel response" title="Cancel response">■</button>
             <button type="submit" class="send-button" id="sendButton" aria-label="Send" disabled>↑</button>
           </div>
+          <label class="observe-files-option" id="observeFilesOption" hidden><input type="checkbox" id="observeFiles"> Observe files for this turn</label>
         </form>
       </footer>
     </main>
@@ -170,6 +194,13 @@
             <label><input type="radio" name="appearanceReadability" value="stronger"> <span>Stronger</span></label>
           </div>
         </fieldset>
+        <section class="appearance-preferences" aria-labelledby="skillDiscoveryTitle">
+          <h3 id="skillDiscoveryTitle">Local skills</h3>
+          <p class="appearance-help">Preview names and descriptions from configured local skill folders. No skill text is added to a prompt.</p>
+          <button class="secondary" id="discoverSkills" type="button" disabled>Preview local skills</button>
+          <p id="skillsStatus" class="appearance-help" role="status" aria-live="polite">Skill discovery is disabled.</p>
+          <ul id="skillsResults" class="skill-preview-list" aria-label="Discovered skill metadata"></ul>
+        </section>
         <button class="chrome-theme-button secondary" id="notificationPreferences" type="button" disabled title="Manage desktop notifications">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
           <span id="notificationPreferencesLabel">Desktop notifications</span>
@@ -178,6 +209,32 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18h1.4a2.1 2.1 0 0 0 0-4.2h-.7a1.8 1.8 0 0 1 0-3.6H15A6 6 0 0 0 12 3Z"/><circle cx="7.5" cy="10" r=".8"/><circle cx="9.5" cy="6.8" r=".8"/><circle cx="13.3" cy="6.2" r=".8"/></svg>
           <span id="chromeThemeLabel">Change theme</span>
         </button>
+        <details id="feedbackDetails" class="feedback-details">
+          <summary>Help improve PilferedParrot</summary>
+          <div class="feedback-content">
+            <p class="appearance-help">Everything stays on this computer. Sharing a downloaded report is your choice. Automatic counters exclude conversations, code, paths, credentials, model names, and personal identifiers. Reports include the app version and OS family.</p>
+            <fieldset class="appearance-preferences feedback-consents"><legend>Collect locally (all optional)</legend>
+              <label><input type="checkbox" data-feedback-consent="usage"> Usage actions (counts only)</label>
+              <label><input type="checkbox" data-feedback-consent="problems"> Provider/request failures and cancellations</label>
+              <label><input type="checkbox" data-feedback-consent="preferences"> Appearance and notification choices</label>
+              <label><input type="checkbox" data-feedback-consent="local_changes"> Coarse local change detection (shipped app files only)</label>
+            </fieldset>
+            <p class="appearance-help">Counts begin when enabled. Turning a choice off deletes its counts. Local change detection runs only when you review a report and includes component counts.</p>
+            <p id="feedbackStatus" class="feedback-status" role="status" aria-live="polite"></p>
+            <fieldset class="appearance-preferences feedback-written"><legend>Write feedback</legend>
+              <label for="feedbackKind">Type</label><select id="feedbackKind"><option value="problem">Problem</option><option value="preference">Preference</option><option value="local_fix">Local fix</option></select>
+              <label for="feedbackArea">Area</label><select id="feedbackArea"><option value="work">Work</option><option value="chat">Chat</option><option value="appearance">Appearance</option><option value="providers">Providers</option><option value="accessibility">Accessibility</option><option value="other">Other</option></select>
+              <label for="feedbackScope">This is</label><select id="feedbackScope"><option value="unsure">Unsure</option><option value="personal">Personal</option><option value="general">General</option></select>
+              <label for="feedbackDescription">Why / what happened</label><textarea id="feedbackDescription" maxlength="2000" rows="3"></textarea>
+              <label for="feedbackChange">What changed / how it helped (optional)</label><textarea id="feedbackChange" maxlength="2000" rows="3"></textarea>
+              <label><input type="checkbox" id="feedbackIncludeWritten"> Include my written feedback in this report</label>
+            </fieldset>
+            <div class="feedback-actions"><button type="button" class="secondary" id="feedbackReviewButton">Review report</button><label><input type="checkbox" id="feedbackReview"> I reviewed this report</label><button type="button" id="feedbackDownload" disabled>Download report</button></div>
+            <pre id="feedbackPreview" class="feedback-preview" hidden></pre>
+            <div class="feedback-actions"><button type="button" class="secondary" id="feedbackClear">Clear stored aggregates</button><button type="button" class="secondary" id="feedbackReset">Turn all off and clear</button></div>
+            <p class="appearance-help">Downloading does not submit anything. Automatic counters exclude content. Written notes are included verbatim when selected; review them and remove secrets. You may share the file voluntarily through <a href="https://github.com/PilferedParrot/PilferedParrot-Interface/issues" target="_blank" rel="noreferrer">PilferedParrot’s GitHub issues</a>.</p>
+          </div>
+        </details>
       </div>
     </div>
   </dialog>
@@ -268,12 +325,55 @@
         <button type="button" class="dialog-close" id="whiteboardClose" aria-label="Close" title="Close"><span aria-hidden="true">×</span></button>
       </div>
       <p>Notes shared across models and jobs on this computer. Keep messages short and useful.</p>
-      <div class="dialog-toolbar"><button type="button" class="secondary" id="whiteboardRefresh">Refresh notes</button></div>
-      <div id="whiteboardMessages" class="whiteboard-messages" aria-live="polite"></div>
+      <div class="whiteboard-entry-choice" id="whiteboardEntryChoice">
+        <button type="button" id="whiteboardBrowse">Browse notes</button>
+        <button type="button" class="secondary" id="whiteboardIndependent">Draft before reading</button>
+      </div>
+      <p class="whiteboard-mode-note" id="whiteboardModeNote">Browse shared findings, or write your first idea before reading others.</p>
+      <section id="whiteboardFeed" class="whiteboard-feed" hidden aria-label="Whiteboard notes">
+        <div class="dialog-toolbar">
+          <button type="button" class="secondary" id="whiteboardRefresh">Refresh notes</button>
+          <button type="button" class="secondary" id="whiteboardOpenRequests">Open requests</button>
+        </div>
+        <form id="whiteboardFilters" class="whiteboard-filters">
+          <label>Search all notes<input id="whiteboardSearch" type="search" placeholder="Words in notes or titles"></label>
+          <div class="whiteboard-filter-actions"><button type="submit" class="secondary">Apply filters</button><button type="button" class="secondary" id="whiteboardClearFilters">Clear</button></div>
+          <details class="whiteboard-more-filters"><summary>More filters</summary><div class="whiteboard-filter-more">
+            <label>Project<input id="whiteboardProject" type="text" placeholder="Project"></label>
+            <label>Topic<input id="whiteboardTopic" type="text" placeholder="Topic"></label>
+            <label>Type<select id="whiteboardKind"><option value="">All types</option><option value="note">Note</option><option value="finding">Finding</option><option value="request">Request</option><option value="idea">Idea</option><option value="experiment">Experiment</option><option value="decision">Decision</option><option value="handoff">Handoff</option><option value="update">Update</option></select></label>
+            <label>Status<select id="whiteboardFilterStatus"><option value="">Any status</option><option value="open">Open</option><option value="claimed">Claimed</option><option value="resolved">Resolved</option><option value="obsolete">Obsolete</option></select></label>
+          </div></details>
+        </form>
+        <div id="whiteboardMessages" class="whiteboard-messages" aria-live="polite"></div>
+        <button type="button" class="secondary" id="whiteboardOlder" hidden>Load older notes</button>
+      </section>
       <p id="whiteboardStatus" role="status"></p>
       <form id="whiteboardForm">
+        <div class="whiteboard-compose-grid">
+          <label>Type<select id="whiteboardComposeKind"><option value="note">Note</option><option value="finding">Finding</option><option value="request">Request</option><option value="idea">Idea</option><option value="experiment">Experiment</option><option value="decision">Decision</option><option value="handoff">Handoff</option></select></label>
+          <label>Title<input id="whiteboardTitleInput" maxlength="160" placeholder="Short summary"></label>
+        </div>
         <label for="whiteboardText">Leave a message</label>
         <textarea id="whiteboardText" rows="3" maxlength="2000" required></textarea>
+        <div class="whiteboard-template-actions" aria-label="Writing starters">
+          <button type="button" class="secondary" data-whiteboard-template="experiment">Experiment starter</button>
+          <button type="button" class="secondary" data-whiteboard-template="handoff">Handoff starter</button>
+          <button type="button" class="secondary" data-whiteboard-template="decision">Decision starter</button>
+        </div>
+        <details class="whiteboard-details">
+          <summary>Optional details</summary>
+          <div class="whiteboard-compose-grid">
+            <label>Project<input id="whiteboardComposeProject" maxlength="200"></label>
+            <label>Topics<input id="whiteboardComposeTopics" maxlength="300" placeholder="Comma-separated"></label>
+            <label>Evidence<input id="whiteboardEvidence" maxlength="1000"></label>
+            <label>Applies to<input id="whiteboardAppliesTo" maxlength="500"></label>
+            <label>Request expires<input id="whiteboardExpiresAt" type="datetime-local"></label>
+            <label>Reply to<input id="whiteboardReplyTo" readonly placeholder="Choose Reply on a note"></label>
+          </div>
+          <button type="button" class="secondary" id="whiteboardCancelReply" hidden>New note</button>
+          <p class="whiteboard-decision-note">Record who decided and why.</p>
+        </details>
         <div class="dialog-actions">
           <button type="submit" id="whiteboardPost">Post message</button>
         </div>
@@ -288,6 +388,7 @@
   <script src="/provider-updates.js"></script>
   <script src="/appearance.js"></script>
   <script src="/appearance-sync.js"></script>
+  <script src="/feedback.js"></script>
   <script src="/usage.js"></script>
   <script src="/app.js"></script>
   <script src="/whiteboard-ui.js"></script>

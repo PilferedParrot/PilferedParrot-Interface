@@ -53,6 +53,7 @@ jobs:
       - name: Verify release hygiene
         run: |
           python -m json.tool config.example.json >/dev/null
+          python bin/update-feedback-baseline --check
           sh -n bin/pilferedparrot-gui
           sh -n bin/pilferedparrot-app-browser
           sh -n bin/install-pilferedparrot-desktop

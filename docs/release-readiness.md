@@ -1,3 +1,36 @@
+# PilferedParrot Interface 0.8.0 release verification — 2026-09-23
+
+The [0.8.0 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.8.0)
+lists the verified source commit, final CI and CodeQL runs, archives, and combined checksums.
+The previous 0.7.1 release, assets, checksums, and CI links remain immutable.
+
+The candidate adds project workrooms, live Work events, opt-in ACP Work for Codex and Claude,
+POSIX file observation, explicit opt-in SQLite cutover, local skill metadata preview, continuation
+handoffs, opt-in local feedback, and an internal private workspace preparation primitive. ACP,
+SQLite, observation, and skills are opt-in. ACP retains the legacy engine as default and Windows
+runtime/permission UI needs platform evidence. SQLite is not normal startup behavior and Windows
+export is unavailable. Observation is POSIX-only, bounded, cannot attribute edits, and has no rewind.
+Skill instructions are not inserted into prompts. Private workspace preparation is internal core
+only: it has no UI or provider/session isolation, and does not publish files, rewind changes, or
+discard workspaces.
+
+## Required verification
+
+- Run the full Python 3.12, 3.13, and 3.14 matrix, Chromium browser suite, Windows focused and
+  browser checks, portable package build and executable smoke test, and CodeQL on the integrated
+  release tree. The release page records the exact successful runs.
+- Check the feedback source baseline, compile Python and JavaScript, inspect release docs and
+  source hygiene, and verify the source archive and Windows ZIP against the combined `SHA256SUMS`.
+- The last local pre-release suites before version metadata changed ran 1,042 Python cases on
+  each of 3.13 and 3.14 (149 expected browser skips), and 144 Chromium cases. CI on the final
+  versioned tree is the release gate, not these earlier local numbers.
+- Keep Windows unsigned and retain the existing scope statement: no Windows provider-account or
+  CLI certification is claimed.
+
+The 0.7.1 section below records its own prior evidence and does not validate 0.8.0.
+
+---
+
 # PilferedParrot Interface 0.7.1 release verification
 
 0.7.1 is a reliability and security patch for source/Linux and the unsigned Windows

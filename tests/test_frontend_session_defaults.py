@@ -17,7 +17,7 @@ function definition(name, prefix = "function") {
   const start = source.indexOf(`${prefix} ${name}(`);
   return source.slice(start, source.indexOf("\n}", start) + 2);
 }
-let createChatPending = false, selectionSavePending = false;
+let createChatPending = false, selectionSavePending = false, messageSubmissionPending = false;
 const state = {windowProvider: "codex", chats: [], defaultCwd: "/tmp", initialized: true};
 const nodes = {"#reasoningSelect": {value: input.value, options: Array(input.options)}};
 const $ = key => nodes[key] ||= {focus() {}};
@@ -29,7 +29,8 @@ const api = async (path, init) => {
 };
 const sessionStorage = {setItem() {}};
 const ACTIVE_CHAT_SESSION_KEY = "active";
-const resizePrompt = () => {}, render = () => {}, saveActiveDraft = () => {}, reportActiveSession = () => {};
+const resizePrompt = () => {}, render = () => {}, renderProjects = () => {},
+  saveActiveDraft = () => {}, reportActiveSession = () => {};
 eval(definition("latestUsedChat"));
 eval(definition("createChat", "async function"));
 createChat("chosen-model").then(() => {

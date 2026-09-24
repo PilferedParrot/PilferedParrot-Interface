@@ -66,7 +66,7 @@ class WebHarnessTests(unittest.TestCase):
 
     def test_delegate_fresh_explicit_route_handoff_review_and_persistence(self):
         task = self.plan()
-        self.assertEqual(task["route"]["requested"]["model"], "gpt-5.6-luna")
+        self.assertEqual(task["route"]["requested"]["model"], "gpt-6-luna")
         chat, seen = self.run_package(task["id"])
         self.assertNotEqual(chat["id"], self.parent)
         self.assertIsNone(seen[0][3])
@@ -80,8 +80,8 @@ class WebHarnessTests(unittest.TestCase):
         attempt = task["attempts"][0]
         self.assertIsNone(attempt["confirmed"]["model"])
         self.assertEqual(attempt["usage"]["input_tokens"]["value"], 100)
-        self.assertEqual(self.app.store.latest_work_defaults("codex"), ("gpt-5.6-sol", "high"))
-        self.assertEqual(self.app.store.data["preferences"]["work_models"]["codex"], "gpt-5.6-sol")
+        self.assertEqual(self.app.store.latest_work_defaults("codex"), ("gpt-6-sol", "high"))
+        self.assertEqual(self.app.store.data["preferences"]["work_models"]["codex"], "gpt-6-sol")
         self.assertIsNone(attempt["subscription_consumption"]["value"])
         with self.assertRaisesRegex(ValueError, "existing artifact"):
             self.action("review", task["id"], accepted=True, artifact="missing.txt", evidence="unverified claim")
@@ -109,7 +109,7 @@ class WebHarnessTests(unittest.TestCase):
             self.assertEqual(task["route"]["mode"], "direct")
             chat, seen = self.run_package(task["id"])
             self.assertEqual(chat["id"], self.parent)
-            self.assertEqual(seen[0][4]["codex"]["model"], "gpt-5.6-sol")
+            self.assertEqual(seen[0][4]["codex"]["model"], "gpt-6-sol")
             self.assertEqual(seen[0][4]["codex"]["reasoning_effort"], "high")
 
     def test_rejected_attempt_escalates_once_and_preserves_target(self):
@@ -124,21 +124,18 @@ class WebHarnessTests(unittest.TestCase):
             self.action("retry", task["id"], evidence="new target", contract=dict(CONTRACT, acceptance_check="Skip second line"))
         response = self.action("retry", task["id"], evidence="Luna missed the second fixture line")
         retried = response["harness_tasks"][0]
-        self.assertEqual(retried["route"]["requested"]["model"], "gpt-5.6-terra")
+        self.assertEqual(retried["route"]["requested"]["model"], "gpt-6-sol")
         self.assertEqual(len(retried["attempts"]), 1)  # Planning spends no provider call.
         self.run_package(task["id"])
         response = self.action("review", task["id"], accepted=True, artifact="output.txt", evidence="Both lines match")
         self.assertEqual(response["harness_tasks"][0]["attempts"][1]["retry_index"], 1)
 
-    def test_direct_failure_requires_a_new_brief_instead_of_downgrading(self):
+    def test_direct_failure_can_use_final_escalation(self):
         task = self.plan(dict(CONTRACT, category="trivial"))
         self.run_package(task["id"])
         self.action("review", task["id"], accepted=False, artifact="output.txt", evidence="Wrong target")
-        with self.assertRaisesRegex(ValueError, "no unused escalation"):
-            self.action("retry", task["id"], evidence="Sol failed")
-        response = self.action("retry", task["id"], evidence="Clarify target", contract={
-            **task["contract"], "task": "Repair only the fixture's second line"})
-        self.assertEqual(response["harness_tasks"][0]["route"]["requested"]["model"], "gpt-5.6-sol")
+        response = self.action("retry", task["id"], evidence="Sol failed")
+        self.assertEqual(response["harness_tasks"][0]["route"]["requested"]["model"], "gpt-6-astra")
 
     def test_scope_symlink_provider_window_and_review_validation(self):
         with tempfile.TemporaryDirectory() as outside:
@@ -212,12 +209,12 @@ class WebHarnessTests(unittest.TestCase):
 
     def test_retries_stop_after_three_launches_and_keep_all_outcomes(self):
         task = self.plan()
-        for model in ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"):
+        for model in ("gpt-6-luna", "gpt-6-sol", "gpt-6-astra"):
             _, seen = self.run_package(task["id"])
             self.assertEqual(seen[0][4]["codex"]["model"], model)
             result = self.action("review", task["id"], accepted=False,
                                  artifact="output.txt", evidence="Required line still missing")
-            if model != "gpt-5.6-sol":
+            if model != "gpt-6-astra":
                 self.action("retry", task["id"], evidence="Artifact does not satisfy the fixed check")
         summary = result["harness_tasks"][0]["summary"]
         self.assertEqual(summary["counts"]["rejected"], 3)

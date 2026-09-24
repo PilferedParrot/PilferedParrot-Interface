@@ -21,10 +21,15 @@ create the initial work session. Choose **Sol / Luna** to use the built-in Codex
 
 | Role | Requested model | Requested reasoning |
 | --- | --- | --- |
-| Lead / direct execution | `gpt-5.6-sol` | `high` |
-| First worker | `gpt-5.6-luna` | `medium` |
-| First escalation | `gpt-5.6-terra` | `medium` |
-| Final escalation | `gpt-5.6-sol` | `high` |
+| Lead / direct execution | `gpt-6-sol` | `high` |
+| First worker | `gpt-6-luna` | `medium` |
+| First escalation | `gpt-6-sol` | `high` |
+| Final escalation | `gpt-6-astra` | `high` |
+
+These are the current compatibility API defaults, updated September 22, 2026.
+Saved package policies and explicit overrides retain their requested models.
+Ordinary Work uses the selected provider/model, not this retired UI's preset;
+see [model allocation guidance](model-allocation.md) for the current local policy.
 
 This is an optional preset, not a requirement for other users. Portable defaults leave
 `harness.preset` at `manual`, which requires explicit configuration before planning. The menu

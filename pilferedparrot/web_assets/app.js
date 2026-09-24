@@ -2,13 +2,17 @@ const $ = (selector) => document.querySelector(selector);
 const { escapeHtml, render: renderMarkdown } = globalThis.PilferedParrotMarkdown;
 const state = {
   chats: [], budgets: {}, activeId: null, defaultCwd: "", draftCwd: "",
+  projects: [], selected_project: "",
   capability: "", models: {}, model_catalog: {}, default_provider: "codex",
   model_context_windows: {}, browser_theme: { active: false }, budgetsLoaded: false,
-  windowId: "main", windowProvider: "codex", providerModels: {}, authPending: {},
+  windowId: "main", windowProvider: "codex", providerModels: {}, workModelSelections: {}, authPending: {},
   authConfirmation: {}, authCodes: {}, providers: [], provider_templates: [],
-  providerDraft: null, preferences: {}, modelPolls: {}, modelFeedback: {},
+  providerDraft: null, preferences: {}, modelPolls: {}, modelProbeSequence: {}, modelFeedback: {},
+  acpSetup: null, acpSetupMessage: "", gpuInventory: null, gpuMessage: "",
   initialized: false,
+  skillDiscovery: { enabled: false, roots: 0 },
 };
+let draftACPMode = null;
 const CAPABILITY_SESSION_KEY = "pilferedparrot-dashboard-capability";
 const WINDOW_ID_SESSION_KEY = "pilferedparrot-dashboard-window-id";
 const ACTIVE_CHAT_SESSION_KEY = "pilferedparrot-dashboard-active-chat";
@@ -42,6 +46,13 @@ try { nativeWindowRequested ||= sessionStorage.getItem(NATIVE_WINDOW_SESSION_KEY
 let nativeWindowInitializing = null;
 if (fragmentCapability) history.replaceState(null, "", location.pathname + location.search);
 let pollTimer = null;
+const workEventFollowers = new Map();
+let workAccessRevoked = false;
+let acpRenderFrame = null;
+let acpRenderFull = false;
+let acpRenderTextTarget = null;
+const decidingPermissions = new Set();
+const notifiedWorkCompletions = new Set();
 let budgetPollTimer = null;
 let budgetRefresh = null;
 let themeBackgroundObjectUrl = null;
@@ -55,6 +66,11 @@ let terminalTarget = null;
 let providerLogoutTarget = null;
 let pendingLaunchModel = null;
 let projectSubmitPending = false;
+let projectDialogCreate = false;
+let projectSwitchPending = false;
+let projectPinPending = false;
+let sessionSearch = "";
+let renderedProjectOptions = "";
 let createChatPending = false;
 let selectionSavePending = false;
 const pendingDrafts = new Map();
@@ -127,7 +143,7 @@ async function flushDraft(chatId) {
     while (pendingDrafts.has(chatId)) {
       const { draft, revision } = pending;
       await api(`/api/chats/${encodeURIComponent(chatId)}/draft`, {
-        method: "POST", body: JSON.stringify({ draft }), keepalive: true,
+        method: "POST", body: JSON.stringify({ draft, ack_only: true }), keepalive: true,
       });
       if (pending.revision === revision) {
         pendingDrafts.delete(chatId);
@@ -156,14 +172,48 @@ function latestUsedChat(chats) {
     || (Number(b.updated_at) || 0) - (Number(a.updated_at) || 0)
   )[0];
 }
-function visibleChats() {
+async function hydrateChat(chatId) {
+  const full = await api(`/api/chats/${encodeURIComponent(chatId)}`);
+  state.chats = state.chats.map((chat) => chat.id === chatId ? full : chat);
+  return full;
+}
+function windowChats() {
   return state.chats.filter((chat) =>
     (chat.window_id || "main") === state.windowId
     && (chat.requested_provider || chat.provider) === state.windowProvider);
 }
-function pendingMessage(chat = activeChat()) { return chat?.messages?.find((message) => message.pending); }
+function projectOfChat(chat) { return chat?.project_cwd || chat?.cwd || ""; }
+function visibleChats() {
+  const selected = state.selected_project || state.draftCwd;
+  return windowChats().filter((chat) => !selected || projectOfChat(chat) === selected);
+}
+function searchedChats(chats) {
+  const query = sessionSearch.trim().toLocaleLowerCase();
+  if (!query) return chats;
+  const selected = state.selected_project || state.draftCwd || "";
+  const project = (state.projects || []).find((item) => item.cwd === selected);
+  const projectName = project?.name || projectFolderName(selected);
+  return chats.filter((chat) => [
+    chat.title,
+    providerLabel(chat.provider || chat.requested_provider),
+    projectName,
+    selected,
+  ].some((value) => String(value || "").toLocaleLowerCase().includes(query)));
+}
+function pendingMessage(chat = activeChat()) {
+  return chat?.messages?.find((message) => message.pending)
+    || (chat?.pending ? { pending: true } : undefined);
+}
 function activeRunning() { return Boolean(pendingMessage()); }
 function anyRunning() { return state.chats.some((chat) => pendingMessage(chat)); }
+function pollableRunningChats() {
+  if (workAccessRevoked) return [];
+  return state.chats.filter((chat) => {
+    if (!pendingMessage(chat)) return false;
+    const follower = workEventFollowers.get(chat.id);
+    return !follower || follower.fallback;
+  });
+}
 function harnessRunning(chat = activeChat()) {
   return Boolean(chat?.harness_tasks?.some((task) => task.status === "running"));
 }
@@ -252,6 +302,48 @@ async function api(path, options = {}) {
     throw error;
   }
   return data;
+}
+
+async function loadSkillDiscoveryStatus() {
+  const status = await api("/api/skills/status");
+  state.skillDiscovery = status;
+  const button = $("#discoverSkills");
+  button.disabled = !status.enabled || status.roots < 1;
+  $("#skillsStatus").textContent = status.enabled && status.roots > 0
+    ? `${status.roots} local folder${status.roots === 1 ? "" : "s"} configured. Preview runs only when you click the button.`
+    : "Discovery is off. To enable it, set skills.enabled to true and add explicit folder paths under skills.roots in config.json.";
+}
+
+async function previewLocalSkills() {
+  const button = $("#discoverSkills");
+  const status = $("#skillsStatus");
+  const results = $("#skillsResults");
+  button.disabled = true;
+  status.textContent = "Reading skill metadata…";
+  results.replaceChildren();
+  try {
+    const data = await api("/api/skills/discover", {
+      method: "POST", body: "{}",
+    });
+    for (const skill of data.skills || []) {
+      const item = document.createElement("li");
+      const title = document.createElement("strong");
+      title.textContent = skill.name;
+      const description = document.createElement("span");
+      description.textContent = skill.description;
+      const source = document.createElement("small");
+      source.textContent = skill.source;
+      item.append(title, description, source);
+      results.append(item);
+    }
+    status.textContent = data.skills?.length
+      ? `Found ${data.skills.length} local skill${data.skills.length === 1 ? "" : "s"}. This is metadata only; nothing was added to a prompt.`
+      : "No readable SKILL.md metadata found in the configured folders.";
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = !state.skillDiscovery.enabled || state.skillDiscovery.roots < 1;
+  }
 }
 
 async function nativeWindowAction(action, details = {}) {
@@ -411,6 +503,10 @@ function providerIds() {
 
 function defaultModel(provider) { return state.model_catalog?.[provider]?.default || ""; }
 
+function isACPProvider(provider) {
+  return state.provider_engines?.[provider] === "acp";
+}
+
 function preferredModel(provider) {
   return state.preferences?.work_models?.[provider] || defaultModel(provider);
 }
@@ -443,12 +539,13 @@ function providerModelOptions(provider) {
   const selected = providerModelChoice(provider);
   const options = Array.isArray(catalog.options) ? [...catalog.options] : [];
   if (selected && !options.some((item) => item.value === selected)) {
-    options.unshift({ value: selected, label: selected });
+    options.unshift({ value: selected, label: isACPProvider(provider)
+      ? `${selected} · unavailable` : selected, unavailable: isACPProvider(provider) });
   }
   if (!options.length) return '<option value="">Provider-selected model</option>';
   const providerDefault = catalog.default ? "" :
     `<option value="" ${selected ? "" : "selected"}>Provider-selected model</option>`;
-  return providerDefault + options.map((item) => `<option value="${escapeHtml(item.value)}" ${item.value === selected ? "selected" : ""}>${escapeHtml(modelOptionLabel(item, provider))}</option>`).join("");
+  return providerDefault + options.map((item) => `<option value="${escapeHtml(item.value)}" ${item.value === selected ? "selected" : ""} ${item.unavailable ? "disabled" : ""}>${escapeHtml(modelOptionLabel(item, provider))}</option>`).join("");
 }
 
 function providerModelFeedback(provider, message) {
@@ -458,7 +555,8 @@ function providerModelFeedback(provider, message) {
     node.textContent = message;
     node.hidden = !message;
   }
-  if (!$("#providerDialog").open && message !== "Checking models…") toast(message);
+  if (!$("#providerDialog").open && message !== "Checking models…"
+      && message !== "Models refreshed.") toast(message);
 }
 
 function modelRefreshFailure(provider) {
@@ -468,42 +566,68 @@ function modelRefreshFailure(provider) {
     : "Could not refresh models. Check the provider connection and try again.";
 }
 
-async function pollProviderModels(provider, select = null) {
-  if (!provider || state.modelPolls[provider]) return state.modelPolls[provider];
+async function pollProviderModels(provider, select = null, requestedModel = "") {
+  const probeProject = state.selected_project;
+  const probeKey = isACPProvider(provider)
+    ? `${provider}:${probeProject}:${requestedModel || "discover"}` : provider;
+  if (!provider || state.modelPolls[probeKey]) return state.modelPolls[probeKey];
+  const probeSequence = isACPProvider(provider)
+    ? (state.modelProbeSequence[provider] = (state.modelProbeSequence[provider] || 0) + 1) : 0;
   const request = (async () => {
     if (select) select.setAttribute("aria-busy", "true");
     providerModelFeedback(provider, "Checking models…");
     try {
-      const catalog = await api(`/api/providers/${encodeURIComponent(provider)}/models`);
+      const selectedModel = requestedModel;
+      const selectedChoice = select?.matches("#modelSelect") ? select.value
+        : select?.matches("[data-provider-model]") ? select.value : providerModelChoice(provider);
+      if (isACPProvider(provider) && select?.matches("#modelSelect") && selectedChoice
+          && !state.workModelSelections[provider]) {
+        state.workModelSelections[provider] = selectedChoice;
+      }
+      const suffix = isACPProvider(provider) && selectedModel
+        ? `?model=${encodeURIComponent(selectedModel)}` : "";
+      const catalog = await api(`/api/providers/${encodeURIComponent(provider)}/models${suffix}`);
+      if (isACPProvider(provider) && (state.modelProbeSequence[provider] !== probeSequence
+          || state.selected_project !== probeProject)) {
+        return catalog;
+      }
       state.model_catalog[provider] = {
         ...state.model_catalog[provider], ...catalog,
         default: catalog.default || "",
         options: Array.isArray(catalog.options) ? catalog.options : [],
       };
+      const choiceToValidate = selectedModel || selectedChoice;
+      const selectedMissing = isACPProvider(provider) && choiceToValidate
+        && !state.model_catalog[provider].options.some((item) => item.value === choiceToValidate);
       state.model_context_windows[provider] = Object.fromEntries(
         state.model_catalog[provider].options
           .filter((item) => Number(item.max_context_window || item.context_window) > 0)
           .map((item) => [item.value, Number(item.max_context_window || item.context_window)]),
       );
-      const selected = providerModelChoice(provider);
+      const selected = select?.matches("#modelSelect")
+        ? selectedModel : providerModelChoice(provider);
       if (select?.matches("[data-provider-model]")) {
         select.innerHTML = providerModelOptions(provider);
         select.value = selected;
       } else if (provider === state.windowProvider) {
-        renderModelSelect(provider, activeChat()?.requested_model || selected);
+        renderModelSelect(provider, state.workModelSelections[provider]
+          || activeChat()?.requested_model || selected);
+        renderACPModeSelect(provider, activeChat()?.acp_mode ?? draftACPMode,
+          !state.initialized || activeRunning() || selectionSavePending);
       }
-      providerModelFeedback(provider, catalog.warning
-        ? modelRefreshFailure(provider) : "Models refreshed.");
+      providerModelFeedback(provider, selectedMissing
+        ? `Saved model “${choiceToValidate}” is not advertised by this ACP agent.`
+        : catalog.warning ? modelRefreshFailure(provider) : "Models refreshed.");
       return catalog;
     } catch (error) {
       providerModelFeedback(provider, modelRefreshFailure(provider));
       return null;
     } finally {
       if (select?.isConnected) select.removeAttribute("aria-busy");
-      delete state.modelPolls[provider];
+      delete state.modelPolls[probeKey];
     }
   })();
-  state.modelPolls[provider] = request;
+  state.modelPolls[probeKey] = request;
   return request;
 }
 
@@ -597,16 +721,18 @@ function renderModelSelect(provider, requestedModel) {
   const select = $("#modelSelect");
   const catalog = state.model_catalog?.[provider] || { default: "", options: [] };
   const options = Array.isArray(catalog.options) ? [...catalog.options] : [];
-  if (provider === "codex" && !options.some((item) => item.value === "gpt-5.6-sol")) {
+  if (provider === "codex" && !isACPProvider(provider)
+      && !options.some((item) => item.value === "gpt-5.6-sol")) {
     options.unshift({ value: "gpt-5.6-sol", label: "GPT-5.6 Sol" });
   }
-  const requested = requestedModel || preferredModel(provider) || "";
+  const requested = state.workModelSelections[provider] || requestedModel || preferredModel(provider) || "";
   if (requested && !options.some((item) => item.value === requested)) {
-    options.unshift({ value: requested, label: requested });
+    options.unshift({ value: requested, label: isACPProvider(provider)
+      ? `${requested} · unavailable` : requested, unavailable: isACPProvider(provider) });
   }
   const providerDefault = catalog.default ? "" : '<option value="">Provider-selected model</option>';
   select.innerHTML = options.length
-    ? providerDefault + options.map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(modelOptionLabel(item, provider))}</option>`).join("")
+    ? providerDefault + options.map((item) => `<option value="${escapeHtml(item.value)}" ${item.unavailable ? "disabled" : ""}>${escapeHtml(modelOptionLabel(item, provider))}</option>`).join("")
     : '<option value="">Provider-selected model</option>';
   select.value = requested;
   select.disabled = !state.initialized || activeRunning() || selectionSavePending;
@@ -615,8 +741,14 @@ function renderModelSelect(provider, requestedModel) {
 
 const REASONING_LABELS = { none: "None", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Maximum", ultra: "Ultra" };
 function reasoningOptions(provider, model) {
-  if (provider !== "codex") return [];
   const option = state.model_catalog?.[provider]?.options?.find((item) => item.value === model);
+  if (state.provider_engines?.[provider] === "acp") {
+    if (state.model_catalog?.[provider]?.acp_options?.current_model !== model) return [];
+    const liveEfforts = state.model_catalog?.[provider]?.acp_options?.efforts;
+    return Array.isArray(liveEfforts) ? liveEfforts.map((item) => item.value).filter(Boolean)
+      : Array.isArray(option?.reasoning_efforts) ? option.reasoning_efforts : [];
+  }
+  if (provider !== "codex") return [];
   return Array.isArray(option?.reasoning_efforts) ? option.reasoning_efforts : ["low", "medium", "high"];
 }
 function renderReasoningSelect(provider, model, effort, disabled, chatSurface = false) {
@@ -625,7 +757,8 @@ function renderReasoningSelect(provider, model, effort, disabled, chatSurface = 
   $("#reasoningControl").hidden = !options.length;
   const catalog = state.model_catalog?.[provider] || {};
   const defaultLabel = (chatSurface ? catalog.chat_reasoning_default_label : catalog.reasoning_default_label)
-    || (chatSurface ? "Chat default" : "Codex default");
+    || (state.provider_engines?.[provider] === "acp"
+      ? "Agent default" : chatSurface ? "Chat default" : "Codex default");
   select.innerHTML = `<option value="">${escapeHtml(defaultLabel)}</option>` + options.map((value) =>
     `<option value="${escapeHtml(value)}">${escapeHtml(REASONING_LABELS[value] || value)}</option>`).join("");
   select.value = options.includes(effort) ? effort : "";
@@ -633,6 +766,29 @@ function renderReasoningSelect(provider, model, effort, disabled, chatSurface = 
   select.title = select.value === "ultra"
     ? "Ultra reasoning may automatically delegate work to additional agents. Applies to your next message."
     : "Higher reasoning can take longer. Applies to your next message; Default uses the configured setting.";
+}
+function renderACPModeSelect(provider, mode, disabled) {
+  const control = $("#acpModeControl");
+  const select = $("#acpModeSelect");
+  if (!isACPProvider(provider)) {
+    control.hidden = true;
+    select.innerHTML = '<option value="">No override</option>';
+    select.disabled = true;
+    return;
+  }
+  const modes = state.model_catalog?.[provider]?.acp_options?.modes;
+  const savedMode = typeof mode === "string" && mode.length <= 128 ? mode : "";
+  const choices = Array.isArray(modes) ? modes.filter((item) =>
+    item && typeof item.value === "string" && item.value.length <= 128) : [];
+  const savedUnavailable = savedMode && !choices.some((item) => item.value === savedMode);
+  control.hidden = choices.length === 0 && !savedUnavailable;
+  select.innerHTML = '<option value="">No override</option>' + choices.map((item) =>
+    `<option value="${escapeHtml(item.value)}" title="${escapeHtml(item.description || "")}">${escapeHtml(item.label || item.value)}</option>`).join("")
+    + (savedUnavailable ? `<option value="${escapeHtml(savedMode)}" disabled>${escapeHtml(savedMode)} · unavailable</option>` : "");
+  select.value = savedMode && (savedUnavailable || choices.some((item) => item.value === savedMode))
+    ? savedMode : "";
+  select.disabled = disabled || (choices.length === 0 && !savedUnavailable);
+  select.title = "Applies to each turn in this Work session. No override leaves the agent or configured mode unchanged. Permissions still require your approval.";
 }
 function renderContextSummary(usage, status) {
   const summary = $("#contextSummary");
@@ -649,37 +805,125 @@ function relativeTime(timestamp) {
   return `${Math.floor(seconds / 86400)}d`;
 }
 
+function renderProjects() {
+  const select = $("#projectSelect");
+  const selected = state.selected_project || state.draftCwd || state.defaultCwd;
+  const projects = Array.isArray(state.projects) ? [...state.projects] : [];
+  if (selected && !projects.some((project) => project.cwd === selected)) {
+    projects.unshift({ cwd: selected, name: projectFolderName(selected), session_count: 0 });
+  }
+  const signature = JSON.stringify(projects.map((project) =>
+    [project.cwd, project.name, Boolean(project.pinned), project.session_count]));
+  if (signature !== renderedProjectOptions) {
+    select.replaceChildren(...projects.map((project) => {
+      const option = document.createElement("option");
+      option.value = project.cwd;
+      option.textContent = `${project.pinned ? "★ " : ""}${project.name || projectFolderName(project.cwd)}${project.session_count ? ` · ${project.session_count}` : ""}`;
+      option.title = project.cwd;
+      return option;
+    }));
+    renderedProjectOptions = signature;
+  }
+  if (document.activeElement !== select || !select.value) select.value = selected;
+  select.title = selected;
+  select.disabled = !state.initialized || projectSwitchPending || createChatPending
+    || messageSubmissionPending || projects.length === 0;
+  const project = projects.find((item) => item.cwd === selected);
+  const pin = $("#pinProject");
+  const pinned = Boolean(project?.pinned);
+  pin.textContent = pinned ? "★" : "☆";
+  pin.setAttribute("aria-pressed", String(pinned));
+  pin.setAttribute("aria-label", pinned ? "Unpin project" : "Pin project");
+  pin.title = pinned ? "Unpin project" : "Pin project";
+  pin.disabled = !state.initialized || !selected || projectPinPending;
+  $("#addProject").disabled = !state.initialized || projectSwitchPending
+    || createChatPending || messageSubmissionPending;
+  const count = Number(project?.session_count) || visibleChats().length;
+  const summary = $("#projectSummary");
+  summary.textContent = `${count} ${count === 1 ? "session" : "sessions"} · ${selected || "Choose a folder"}`;
+  summary.title = selected;
+}
+
 function renderChats() {
   const list = $("#chatList");
-  list.innerHTML = visibleChats().map((chat) => `
+  const allChats = visibleChats();
+  const chats = searchedChats(allChats);
+  const selected = state.selected_project || state.draftCwd || "";
+  const search = $("#sessionSearch");
+  const clear = $("#clearSessionSearch");
+  const status = $("#sessionSearchStatus");
+  const scope = $("#sessionSearchScope");
+  if (search && document.activeElement !== search) search.value = sessionSearch;
+  if (clear) clear.hidden = !sessionSearch;
+  if (scope) {
+    const project = (state.projects || []).find((item) => item.cwd === selected);
+    scope.textContent = selected
+      ? `Scope: ${project?.name || projectFolderName(selected)}`
+      : "Scope: selected project";
+    scope.title = selected;
+  }
+  if (status) {
+    const summary = sessionSearch.trim()
+      ? `${chats.length} of ${allChats.length} ${allChats.length === 1 ? "session" : "sessions"} in this project match.`
+      : `${allChats.length} ${allChats.length === 1 ? "session" : "sessions"} in this project.`;
+    if (status.textContent !== summary) status.textContent = summary;
+  }
+  list.innerHTML = chats.length ? chats.map((chat) => `
     <button class="chat-item ${chat.id === state.activeId ? "active" : ""}" data-chat="${escapeHtml(chat.id)}">
       <div class="chat-item-title">${escapeHtml(chat.title)}</div>
-      <div class="chat-item-meta"><span>${escapeHtml(providerLabel(chat.provider || chat.requested_provider))}</span><span>${chat.context_status !== "normal" ? '<i class="limit-dot" title="Near practical limit" aria-label="Near practical limit">!</i>' : ""}${relativeTime(chat.updated_at)}</span></div>
-    </button>`).join("");
+      <div class="chat-item-meta"><span>${escapeHtml(providerLabel(chat.provider || chat.requested_provider))}</span><span>${chat.context_status && chat.context_status !== "normal" ? '<i class="limit-dot" title="Near practical limit" aria-label="Near practical limit">!</i>' : ""}${relativeTime(chat.updated_at)}</span></div>
+    </button>`).join("") : (sessionSearch.trim()
+    ? '<p class="project-empty">No sessions match this search.</p>'
+    : '<p class="project-empty">No sessions in this project yet.</p>');
   list.querySelectorAll("[data-chat]").forEach((button) => button.addEventListener("click", async () => {
     saveActiveDraft();
     const chatId = button.dataset.chat;
-    state.activeId = chatId;
-    try { sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, state.activeId); } catch (_error) {}
-    state.draftCwd = activeChat().cwd;
-    reportActiveSession();
-    $("#prompt").value = cachedDraft(activeChat());
-    resizePrompt();
-    render();
-    setSidebarOpen(false);
     try {
-      const updated = await api(`/api/chats/${chatId}/activate`, {
-        method: "POST", body: JSON.stringify({}),
-      });
-      state.chats = state.chats.map((chat) => chat.id === updated.id ? updated : chat)
-        .sort((a, b) => b.updated_at - a.updated_at);
-      renderChats();
-    } catch (_error) {
-      // The selected session remains usable if its best-effort recency update
-      // is interrupted by a shutdown or a transient local-server error.
+      const full = await hydrateChat(chatId);
+      if (chatId !== state.activeId) delete state.workModelSelections[state.windowProvider];
+      state.activeId = chatId;
+      try { sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, chatId); } catch (_error) {}
+      state.draftCwd = projectOfChat(full);
+      reportActiveSession();
+      $("#prompt").value = cachedDraft(full);
+      resizePrompt();
+      render();
+      setSidebarOpen(false);
+      try {
+        const updated = await api(`/api/chats/${encodeURIComponent(chatId)}/activate`, {
+          method: "POST", body: JSON.stringify({}),
+        });
+        state.chats = state.chats.map((chat) => chat.id === updated.id ? updated : chat)
+          .sort((a, b) => b.updated_at - a.updated_at);
+        renderChats();
+      } catch (_error) {
+        // Recency is best effort; a failed update does not hide the session.
+      }
+    } catch (error) {
+      toast(error.message);
     }
   }));
 }
+
+$("#sessionSearch").addEventListener("input", (event) => {
+  sessionSearch = event.target.value;
+  renderChats();
+});
+$("#sessionSearch").addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && sessionSearch) {
+    event.preventDefault();
+    event.stopPropagation();
+    sessionSearch = "";
+    event.currentTarget.value = "";
+    renderChats();
+  }
+});
+$("#clearSessionSearch").addEventListener("click", () => {
+  sessionSearch = "";
+  $("#sessionSearch").value = "";
+  renderChats();
+  $("#sessionSearch").focus();
+});
 
 const STATUS_TEXT = {
   cli_missing: "CLI not found",
@@ -746,7 +990,10 @@ function renderProviderConnections() {
   const list = $("#providerConnectionList");
   if (!list) return;
   const draft = state.providerDraft ? providerDraftMarkup() : "";
-  list.innerHTML = draft + providerIds().map((provider) => {
+  const visibleProviders = state.windowId === "main" ? providerIds()
+    : providerIds().filter((provider) => provider === state.windowProvider);
+  const setupProviders = state.windowId === "main" ? ["codex", "claude"] : visibleProviders;
+  list.innerHTML = acpSetupMarkup(setupProviders) + gpuMarkup() + draft + visibleProviders.map((provider) => {
     const info = providerInfo(provider);
     const budget = state.budgets[provider];
     const missingCli = budget?.status === "cli_missing";
@@ -797,6 +1044,51 @@ function renderProviderConnections() {
       </div>
     </section>`;
   }).join("");
+}
+
+function acpSetupMarkup(providers) {
+  const supported = providers.filter((provider) => provider === "codex" || provider === "claude");
+  if (!supported.length) return "";
+  const rows = supported.map((provider) => {
+    const item = state.acpSetup?.providers?.[provider];
+    const engine = item?.engine === "acp" ? "acp" : "legacy";
+    const status = item ? (item.error || (item.installed ? "ACP adapter installed." : "ACP adapter is not installed.")) : "Setup status not checked.";
+    return `<section class="setup-provider-row"><strong>${escapeHtml(providerLabel(provider))}</strong>
+      <label><span>Transport</span><select data-acp-engine="${provider}" aria-label="${providerLabel(provider)} transport" ${item ? "" : "disabled"}>
+        <option value="legacy" ${engine === "legacy" ? "selected" : ""}>Legacy</option>
+        <option value="acp" ${engine === "acp" ? "selected" : ""} ${item?.installed ? "" : "disabled"}>ACP</option>
+      </select></label><p role="status">${escapeHtml(status)}</p>
+      <p>Changing transport starts a new provider session on the next turn, including in an existing Work session.</p></section>`;
+  }).join("");
+  return `<section class="setup-panel" aria-labelledby="acpSetupHeading"><h3 id="acpSetupHeading">Provider transport</h3>
+    <p>Check setup to choose Legacy or ACP. Installing adds both the Codex and Claude ACP adapters, including from a provider window.</p>
+    <button type="button" class="secondary" data-acp-check>Check setup</button>
+    <button type="button" class="secondary" data-acp-install ${state.windowId === "main" && supported.every((provider) => state.acpSetup?.providers?.[provider]?.installed) ? "disabled" : ""}>Install ACP adapters</button>
+    <div class="setup-provider-list">${rows}</div><p role="status" data-acp-feedback>${escapeHtml(state.acpSetupMessage)}</p></section>`;
+}
+
+function gpuMarkup() {
+  const rows = (state.gpuInventory?.gpus || []).map((gpu) => `<li><strong>${escapeHtml(gpu.name || "GPU")}</strong>
+    <span>UUID: ${escapeHtml(gpu.uuid || "Unavailable")}</span>
+    <span>${Number(gpu.memory_free_mib || 0).toLocaleString()} MiB free · ${Number(gpu.memory_used_mib || 0).toLocaleString()} / ${Number(gpu.memory_total_mib || 0).toLocaleString()} MiB used · ${Number(gpu.utilization_percent || 0)}% utilized</span></li>`).join("");
+  const status = state.gpuMessage || (state.gpuInventory?.error || (state.gpuInventory ? (state.gpuInventory.available ? "GPU inventory checked." : "No GPU inventory available.") : "GPU inventory has not been checked."));
+  return `<section class="setup-panel" aria-labelledby="gpuHeading"><h3 id="gpuHeading">GPU inventory</h3>
+    <button type="button" class="secondary" data-gpu-check>Check GPUs</button><p role="status" data-gpu-feedback>${escapeHtml(status)}</p>
+    ${rows ? `<ul class="gpu-list">${rows}</ul>` : ""}</section>`;
+}
+
+async function loadAcpSetup() {
+  state.acpSetupMessage = "Checking provider setup…"; renderProviderConnections();
+  try { state.acpSetup = await api("/api/acp/setup"); state.acpSetupMessage = "Provider setup checked."; }
+  catch (error) { state.acpSetupMessage = error.message; }
+  renderProviderConnections();
+}
+
+async function checkGpuInventory() {
+  state.gpuMessage = "Checking GPUs…"; renderProviderConnections();
+  try { state.gpuInventory = await api("/api/hardware/gpus"); state.gpuMessage = state.gpuInventory.error || "GPU inventory checked."; }
+  catch (error) { state.gpuMessage = error.message; }
+  renderProviderConnections();
 }
 
 function providerTemplateInfo(id) {
@@ -873,6 +1165,160 @@ function workLabel(item) {
   })[item.kind] || "Update";
 }
 
+function acpPreview(value, limit) {
+  const text = typeof value === "string" ? value : "";
+  return text.length > limit ? `${text.slice(0, limit)}\n… Preview shortened.` : text;
+}
+
+function acpText(value, limit = 8_000) {
+  return escapeHtml(acpPreview(value, limit));
+}
+
+const ACP_STREAM_LIMIT = 80_000;
+const ACP_TRUNCATED_NOTICE = "Earlier live text is omitted here; the completed answer will show the full response.";
+
+function acpStreamedTextMarkup(message) {
+  if (!message.streamed_text) return "";
+  return `<div class="acp-streamed-text" aria-live="off">${message.streamed_text_truncated ? `<small>${ACP_TRUNCATED_NOTICE}</small>` : ""}<span class="acp-streamed-content">${acpText(message.streamed_text, ACP_STREAM_LIMIT)}</span></div>`;
+}
+
+function acpDiffMarkup(block, limit) {
+  const path = typeof block.path === "string" ? block.path : "Changed file";
+  const safePath = acpText(path, 1_000);
+  const oldText = block.oldText === null ? "New file" : block.oldText;
+  return `<section class="acp-diff" role="region" aria-label="File change: ${safePath}">
+    <div class="acp-diff-path">${safePath}</div>
+    <div class="acp-diff-pair">
+      <div role="group" aria-label="Before ${safePath}"><strong>Before</strong><pre>${acpText(oldText, limit)}</pre></div>
+      <div role="group" aria-label="After ${safePath}"><strong>After</strong><pre>${acpText(block.newText, limit)}</pre></div>
+    </div></section>`;
+}
+
+function acpToolCards(message, openState) {
+  const tools = new Map();
+  for (const entry of Array.isArray(message.acp_updates) ? message.acp_updates : []) {
+    const update = entry?.update;
+    if (!update || !["tool_call", "tool_call_update"].includes(update.sessionUpdate)
+        || typeof update.toolCallId !== "string") continue;
+    const previous = tools.get(update.toolCallId) || { toolCallId: update.toolCallId };
+    for (const field of ["name", "title", "kind", "status", "content", "rawOutput", "locations"]) {
+      if (update[field] !== undefined && update[field] !== null) previous[field] = update[field];
+    }
+    tools.set(update.toolCallId, previous);
+  }
+  if (!tools.size) return "";
+  return `<div class="acp-tools" role="region" aria-label="Agent actions">${[...tools.values()].map((tool) => {
+    const kind = typeof tool.kind === "string" ? tool.kind : "action";
+    const status = ["pending", "in_progress", "completed", "failed"].includes(tool.status)
+      ? tool.status : "pending";
+    const content = Array.isArray(tool.content) ? tool.content : [];
+    const details = content.map((block) => {
+      if (block?.type === "diff") {
+        return acpDiffMarkup(block, 20_000);
+      }
+      if (block?.type === "content" && block.content?.type === "text") {
+        return `<pre class="acp-tool-output">${acpText(block.content.text)}</pre>`;
+      }
+      return "";
+    }).join("");
+    const output = typeof tool.rawOutput === "string" ? tool.rawOutput
+      : typeof tool.rawOutput?.formatted_output === "string" ? tool.rawOutput.formatted_output : "";
+    const key = `${message.id || ""}:${tool.toolCallId}`;
+    const isOpen = openState.has(key) ? openState.get(key) : Boolean(message.pending);
+    return `<details class="acp-tool-card" data-tool-key="${escapeHtml(key)}" ${isOpen ? "open" : ""}>
+      <summary><span class="acp-tool-kind">${acpText(kind, 60)}</span><strong>${acpText(tool.title || tool.name || "Agent action", 250)}</strong><span class="acp-tool-status ${status}">${escapeHtml(status.replace("_", " "))}</span></summary>
+      ${details}${output ? `<pre class="acp-tool-output">${acpText(output)}</pre>` : ""}
+    </details>`;
+  }).join("")}</div>`;
+}
+
+function acpPermissionCards(message, chatId) {
+  const requests = Array.isArray(message.acp_permissions) ? message.acp_permissions : [];
+  return requests.map((request) => {
+    const tool = request.toolCall || {};
+    const preview = Array.isArray(tool.content) ? tool.content.map((block) =>
+      block?.type === "diff" ? acpDiffMarkup(block, 65_536) : "",
+    ).join("") : "";
+    const command = tool.command ? `<div class="acp-command"><strong>Command</strong><pre>${acpText(tool.command, 65_536)}</pre></div>` : "";
+    const buttons = (Array.isArray(request.options) ? request.options : []).map((option) => {
+      const meaning = {
+        allow_once: "Allow once", allow_always: "Allow for this session",
+        reject_once: "Reject once", reject_always: "Always reject",
+      }[option.kind] || "Choose";
+      const offered = typeof option.name === "string" ? option.name : "";
+      const label = /allow|reject|deny|never/i.test(offered)
+        ? offered : `${meaning} · ${offered}`;
+      return (
+      `<button type="button" class="${option.kind?.startsWith("reject") ? "secondary" : ""}"
+        data-acp-permission="${escapeHtml(request.requestId)}" data-acp-option="${escapeHtml(option.optionId)}"
+        data-acp-chat="${escapeHtml(chatId)}" ${decidingPermissions.has(request.requestId) ? "disabled" : ""}>${acpText(label, 160)}</button>`);
+    }).join("");
+    return `<section class="acp-permission" role="group" aria-label="Permission requested">
+      <div class="acp-permission-heading"><strong>Permission requested</strong><span>${acpText(tool.kind || tool.name || "Action", 80)}</span></div>
+      <p>${acpText(tool.title || "Review this action before continuing.", 300)}</p>
+      ${command}${preview}<div class="acp-permission-actions">${buttons}</div>
+    </section>`;
+  }).join("");
+}
+
+function renderAcpStreamedText(chatId, messageId) {
+  const chat = activeChat();
+  const message = chat?.id === chatId && chat.messages?.find((item) => item.id === messageId && item.pending);
+  if (!message) return false;
+  const article = [...$("#messages").querySelectorAll("article.message.assistant[data-message-id]")]
+    .find((node) => node.dataset.messageId === messageId);
+  const content = article?.querySelector(".message-content");
+  const pendingLine = content?.querySelector(".pending-line");
+  if (!pendingLine) return false;
+  let streamed = content.querySelector(".acp-streamed-text");
+  if (!message.streamed_text) {
+    streamed?.remove();
+    return true;
+  }
+  if (!streamed) {
+    streamed = document.createElement("div");
+    streamed.className = "acp-streamed-text";
+    streamed.setAttribute("aria-live", "off");
+    const body = document.createElement("span");
+    body.className = "acp-streamed-content";
+    streamed.append(body);
+    content.append(streamed);
+  }
+  let notice = streamed.querySelector("small");
+  if (message.streamed_text_truncated && !notice) {
+    notice = document.createElement("small");
+    notice.textContent = ACP_TRUNCATED_NOTICE;
+    streamed.prepend(notice);
+  } else if (!message.streamed_text_truncated) {
+    notice?.remove();
+  }
+  streamed.querySelector(".acp-streamed-content").textContent =
+    acpPreview(message.streamed_text, ACP_STREAM_LIMIT);
+  return true;
+}
+
+function scheduleAcpRender(textTarget = null) {
+  if (!textTarget || (acpRenderTextTarget
+      && (acpRenderTextTarget.chatId !== textTarget.chatId
+        || acpRenderTextTarget.messageId !== textTarget.messageId))) {
+    acpRenderFull = true;
+  } else {
+    acpRenderTextTarget = textTarget;
+  }
+  if (acpRenderFrame !== null) return;
+  acpRenderFrame = requestAnimationFrame(() => {
+    acpRenderFrame = null;
+    const full = acpRenderFull;
+    const target = acpRenderTextTarget;
+    acpRenderFull = false;
+    acpRenderTextTarget = null;
+    if (full || !target || !renderAcpStreamedText(target.chatId, target.messageId)) {
+      renderMessages();
+      renderChats();
+    }
+  });
+}
+
 function captureWorkScroll() {
   const positions = new Map();
   document.querySelectorAll(".work-items[data-work-key]").forEach((node) => {
@@ -882,6 +1328,11 @@ function captureWorkScroll() {
     });
   });
   return positions;
+}
+
+function captureWorkLogOpenState() {
+  return new Map([...$("#messages").querySelectorAll(".work-log[data-work-key]")]
+    .map((node) => [node.dataset.workKey, node.open]));
 }
 
 function restoreWorkScroll(positions) {
@@ -895,6 +1346,14 @@ function restoreWorkScroll(positions) {
 function renderMessages() {
   const chat = activeChat();
   const messages = chat?.messages || [];
+  const focusedPermission = document.activeElement?.closest?.("[data-acp-permission][data-acp-option]");
+  const focusedChoice = focusedPermission ? {
+    requestId: focusedPermission.dataset.acpPermission,
+    optionId: focusedPermission.dataset.acpOption,
+  } : null;
+  const acpToolOpen = new Map([...$("#messages").querySelectorAll(".acp-tool-card[data-tool-key]")]
+    .map((node) => [node.dataset.toolKey, node.open]));
+  const workLogOpen = captureWorkLogOpenState();
   const workScroll = captureWorkScroll();
   const identityState = globalThis.PilferedParrotIdentity.captureState($("#messages"));
   $("#welcome").classList.toggle("hidden", messages.length > 0);
@@ -905,8 +1364,12 @@ function renderMessages() {
     const name = assistant
       ? `${providerLabel(provider)} · ${modelLabel(provider, message.model)}` : "You";
     const activity = Array.isArray(message.activity) ? message.activity : [];
+    const acpCards = assistant ? acpToolCards(message, acpToolOpen) : "";
+    const acpPermissions = assistant && message.pending && chat
+      ? acpPermissionCards(message, chat.id) : "";
     const workKey = String(message.id || `message-${messageIndex}`);
-    const work = activity.length ? `<details class="work-log" ${message.pending ? "open" : ""}>
+    const workOpen = workLogOpen.has(workKey) ? workLogOpen.get(workKey) : Boolean(message.pending);
+    const work = activity.length ? `<details class="work-log" data-work-key="${escapeHtml(workKey)}" ${workOpen ? "open" : ""}>
       <summary><span>${message.pending ? `${providerLabel(provider)} is working` : "Work details"}</span><small>${activity.length} update${activity.length === 1 ? "" : "s"}</small></summary>
       <div class="work-items" data-work-key="${escapeHtml(workKey)}">${activity.map((item) => `
         <div class="work-item ${escapeHtml(item.kind || "status")}">
@@ -915,18 +1378,39 @@ function renderMessages() {
         </div>`).join("")}</div>
     </details>` : "";
     const response = message.pending
-      ? `<div class="pending-line"><span class="thinking" aria-label="${escapeHtml(providerLabel(provider))} is working"><i></i><i></i><i></i></span><span>${escapeHtml((activity.at(-1)?.content || `Starting ${providerLabel(provider)}…`).slice(0, 240))} · ${escapeHtml(relativeTime(message.created_at))}</span></div>`
+      ? `<div class="pending-line"><span class="thinking" aria-label="${escapeHtml(providerLabel(provider))} is working"><i></i><i></i><i></i></span><span>${escapeHtml((activity.at(-1)?.content || `Starting ${providerLabel(provider)}…`).slice(0, 240))} · ${escapeHtml(relativeTime(message.created_at))}</span></div>${acpStreamedTextMarkup(message)}`
       : renderMarkdown(message.content, {
         commandTarget: assistant && message.id ? { messageId: message.id } : null,
         shellLanguages: CODE_BLOCK_LANGUAGES,
       });
-    return `<article class="message ${role} ${message.error ? "error" : ""}" data-provider="${assistant ? escapeHtml(provider) : ""}">
+    return `<article class="message ${role} ${message.error ? "error" : ""}" data-message-id="${escapeHtml(message.id || "")}" data-provider="${assistant ? escapeHtml(provider) : ""}">
       <div class="message-body"><div class="message-head"><span class="message-name">${escapeHtml(name)}</span>${message.cancelled ? '<span class="message-state">Cancelled</span>' : ""}</div>
-      <div class="message-content">${work}${response}${assistant && !message.pending ? globalThis.PilferedParrotIdentity.render(message) : ""}</div></div>
+      <div class="message-content">${work}${acpPermissions}${acpCards}${response}${assistant && !message.pending ? renderObservedFiles(message.observed_files) : ""}${assistant && !message.pending ? globalThis.PilferedParrotIdentity.render(message) : ""}</div></div>
     </article>`;
   }).join("");
+  if (focusedChoice) {
+    [...$("#messages").querySelectorAll("[data-acp-permission][data-acp-option]")]
+      .find((button) => button.dataset.acpPermission === focusedChoice.requestId
+        && button.dataset.acpOption === focusedChoice.optionId)
+      ?.focus({ preventScroll: true });
+  }
   restoreWorkScroll(workScroll);
   globalThis.PilferedParrotIdentity.restoreState($("#messages"), identityState);
+}
+
+function renderObservedFiles(observed) {
+  if (!observed || observed.label !== "Changes observed during this turn; authorship unknown") return "";
+  const changes = Array.isArray(observed.changes) ? observed.changes.slice(0, 100) : [];
+  const count = Number(observed.change_count) || 0;
+  const coverage = observed.coverage || {};
+  const incomplete = Number(coverage.before?.incomplete_count || 0) + Number(coverage.after?.incomplete_count || 0);
+  const status = observed.status === "complete" ? "Coverage complete under scan policy" : `Incomplete coverage (${incomplete} scan issue${incomplete === 1 ? "" : "s"})`;
+  const item = (entry) => entry ? `${escapeHtml(entry.type || "unknown")}${entry.type === "file" ? ` · ${Number(entry.size) || 0} bytes · SHA-256 ${escapeHtml(entry.sha256 || "")}` : ""}` : "absent";
+  return `<details class="observed-files"><summary>${count} observed file change${count === 1 ? "" : "s"} · authorship unknown</summary>
+    <p>${escapeHtml(status)}${observed.changes_truncated ? " · Change list limited to 100" : ""}${observed.unverified_count ? ` · ${Number(observed.unverified_count)} unverified path(s)` : ""}</p>
+    ${changes.length ? `<ul>${changes.map((change) => `<li><strong>${escapeHtml(change.kind)}</strong> <code>${escapeHtml(change.path)}</code><details class="observed-evidence"><summary>Sizes and SHA-256</summary><small>Before: ${item(change.before)}; after: ${item(change.after)}</small></details></li>`).join("")}</ul>` : "<p>No verified changes in the visible summary.</p>"}
+    ${incomplete ? `<p>Incomplete paths: ${[...(coverage.before?.incomplete_paths || []), ...(coverage.after?.incomplete_paths || [])].slice(0, 30).map(escapeHtml).join(", ")}</p>` : ""}
+  </details>`;
 }
 
 function clampPaneWidth(name, value) {
@@ -1078,9 +1562,12 @@ function renderHeader() {
     context.className = "context-pie-card";
     renderContextSummary(null);
   }
-  renderModelSelect(state.windowProvider, chat?.requested_model || "");
+  renderModelSelect(state.windowProvider, state.workModelSelections[state.windowProvider]
+    || chat?.requested_model || "");
   renderReasoningSelect(state.windowProvider, $("#modelSelect").value,
     chat ? chat.reasoning_effort : draftReasoningEffort,
+    !state.initialized || activeRunning() || selectionSavePending);
+  renderACPModeSelect(state.windowProvider, chat ? chat.acp_mode : draftACPMode,
     !state.initialized || activeRunning() || selectionSavePending);
 }
 
@@ -1092,6 +1579,7 @@ function render() {
     );
   }
   document.body.dataset.windowProvider = state.windowProvider;
+  renderProjects();
   renderChats();
   renderProviders();
   renderMessages();
@@ -1106,7 +1594,8 @@ function render() {
     : harnessParentRunning
       ? "A saved task is running; you can continue here when it finishes"
       : DEFAULT_PROMPT_PLACEHOLDER;
-  $("#newWorkSession").disabled = !ready || createChatPending || selectionSavePending;
+  $("#newWorkSession").disabled = !ready || createChatPending || selectionSavePending
+    || projectSwitchPending || messageSubmissionPending;
   const chatSupported = providerInfo(state.windowProvider).capabilities?.chat !== false;
   $("#openChat").disabled = !ready || !chatSupported;
   $("#openChat").title = chatSupported ? "Open Chat" : "This provider supports Work only; read-only Chat is not yet supported.";
@@ -1115,7 +1604,7 @@ function render() {
   $("#chromeTheme").disabled = !ready;
   $("#notificationPreferences").disabled = !ready || notificationPermissionPending;
   $("#notificationPreferencesLabel").textContent = notificationPermissionLabel();
-  $("#projectButton").disabled = !ready;
+  $("#projectButton").disabled = !ready || createChatPending || messageSubmissionPending;
   $("#sendButton").classList.toggle("hidden", running);
   $("#sendButton").disabled = !ready || running || harnessChild || harnessParentRunning || selectionSavePending || !$("#prompt").value.trim();
   $("#cancelButton").classList.toggle("hidden", !running);
@@ -1406,10 +1895,11 @@ async function refreshBrowserTheme(notify = false) {
 }
 
 async function createChat(requestedModel = "") {
-  if (createChatPending || selectionSavePending) return null;
+  if (createChatPending || selectionSavePending || messageSubmissionPending) return null;
   saveActiveDraft();
   createChatPending = true;
   $("#newWorkSession").disabled = true;
+  renderProjects();
   const provider = state.windowProvider;
   try {
     const chat = await api("/api/chats", {
@@ -1421,13 +1911,17 @@ async function createChat(requestedModel = "") {
         // stale draft effort when the user has selected it.
         reasoning_effort: activeChat()?.harness_parent ? undefined : activeChat() || $("#reasoningSelect").options.length
           ? $("#reasoningSelect").value || null : undefined,
+        ...($("#acpModeSelect").value ? { acp_mode: $("#acpModeSelect").value } : {}),
       }),
     });
     state.chats.unshift(chat);
+    draftACPMode = null;
+    if (state.workModelSelections) delete state.workModelSelections[provider];
     state.activeId = chat.id;
+    state.selected_project = chat.project_cwd || chat.cwd;
     reportActiveSession();
     try { sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, chat.id); } catch (_error) {}
-    state.draftCwd = chat.cwd;
+    state.draftCwd = chat.project_cwd || chat.cwd;
     $("#prompt").value = "";
     resizePrompt();
     render();
@@ -1436,6 +1930,63 @@ async function createChat(requestedModel = "") {
   } finally {
     createChatPending = false;
     if (state.initialized) $("#newWorkSession").disabled = false;
+    renderProjects();
+  }
+}
+
+async function selectProject(path, { newSession = false } = {}) {
+  if (projectSwitchPending || createChatPending || messageSubmissionPending || !path) return;
+  const previous = {
+    root: state.selected_project,
+    draftCwd: state.draftCwd,
+    activeId: state.activeId,
+    prompt: $("#prompt").value,
+  };
+  saveActiveDraft();
+  projectSwitchPending = true;
+  render();
+  try {
+    const selection = await api("/api/projects/select", {
+      method: "POST", body: JSON.stringify({ cwd: path }),
+    });
+    state.selected_project = selection.selected_project;
+    state.projects = selection.projects;
+    state.draftCwd = selection.selected_project;
+    const existing = newSession ? null : latestUsedChat(windowChats().filter((chat) =>
+      projectOfChat(chat) === selection.selected_project));
+    if (existing) {
+      const full = await hydrateChat(existing.id);
+      if (existing.id !== state.activeId) delete state.workModelSelections[state.windowProvider];
+      state.activeId = existing.id;
+      try { sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, existing.id); } catch (_error) {}
+      $("#prompt").value = cachedDraft(full);
+      resizePrompt();
+      reportActiveSession();
+      api(`/api/chats/${encodeURIComponent(existing.id)}/activate`, {
+        method: "POST", body: JSON.stringify({}),
+      }).catch(() => {});
+    } else {
+      state.activeId = null;
+      await createChat($("#modelSelect").value || preferredModel(state.windowProvider));
+    }
+    render();
+    setSidebarOpen(false);
+  } catch (error) {
+    state.selected_project = previous.root;
+    state.draftCwd = previous.draftCwd;
+    state.activeId = previous.activeId;
+    $("#prompt").value = previous.prompt;
+    resizePrompt();
+    if (previous.root && previous.root !== path) {
+      api("/api/projects/select", {
+        method: "POST", body: JSON.stringify({ cwd: previous.root }),
+      }).catch(() => {});
+    }
+    render();
+    throw error;
+  } finally {
+    projectSwitchPending = false;
+    render();
   }
 }
 
@@ -1451,6 +2002,8 @@ async function sendMessage(event) {
   const selectedProvider = state.windowProvider;
   const selectedModel = $("#modelSelect").value;
   const reasoningEffort = $("#reasoningSelect").value || null;
+  const acpMode = $("#acpModeSelect").value || null;
+  const observeFiles = $("#observeFiles").checked;
   if (!activeChat()) {
     try {
       await createChat();
@@ -1463,7 +2016,9 @@ async function sendMessage(event) {
     }
   }
   const chat = activeChat();
+  const submittedCwd = projectOfChat(chat);
   messageSubmissionPending = true;
+  render();
   // Finish older saves before submission can clear the sent draft.
   try { await flushDraft(chat.id); } catch (_error) {}
   const requestId = globalThis.crypto?.randomUUID?.()
@@ -1490,12 +2045,16 @@ async function sendMessage(event) {
     const updated = await api(`/api/chats/${chat.id}/messages`, {
       method: "POST",
       body: JSON.stringify({
-        content, provider: selectedProvider, model: selectedModel, cwd: state.draftCwd,
+        content, provider: selectedProvider, model: selectedModel, cwd: submittedCwd,
         reasoning_effort: reasoningEffort,
+        ...(acpMode ? { mode: acpMode } : {}),
+        observe_files: observeFiles,
         request_id: requestId, draft: originalDraft,
       }),
     });
     state.chats = state.chats.map((item) => item.id === updated.id ? updated : item);
+    $("#observeFiles").checked = false;
+    if (pendingMessage(updated)) startWorkEventFollower(updated.id);
     const newerDraft = state.activeId === chat.id
       ? $("#prompt").value : (draftValues.get(chat.id) || "");
     queueDraft(chat.id, newerDraft);
@@ -1516,6 +2075,7 @@ async function sendMessage(event) {
       toast(pendingMessage(activeChat())
         ? "Connection recovered; the response is still running."
         : "Connection recovered; the response completed.");
+      startPendingWorkEventFollowers();
       schedulePoll();
     } catch (_refreshError) {
       const current = state.chats.find((item) => item.id === chat.id) || chat;
@@ -1543,21 +2103,29 @@ function resizePrompt() {
 }
 
 function applyServerState(initial) {
+  $("#observeFilesOption").hidden = !initial.observe_files_available;
   const activeId = state.activeId;
   const draftCwd = state.draftCwd;
+  const selectedProject = state.selected_project;
   const requestedProvider = activeChat()?.requested_provider;
   const requestedModel = activeChat()?.requested_model;
   Object.assign(state, initial);
   state.windowId = initial.window_id || state.windowId;
   state.windowProvider = initial.window_provider || state.windowProvider;
+  state.selected_project = initial.selected_project || selectedProject || "";
   const chats = visibleChats();
   chats.forEach((chat) => { chat.draft = cachedDraft(chat); });
   state.activeId = chats.some((chat) => chat.id === activeId)
-    ? activeId : chats[0]?.id || null;
+    ? activeId : latestUsedChat(chats)?.id || null;
+  if (state.activeId !== activeId) delete state.workModelSelections[state.windowProvider];
   try {
     if (state.activeId) sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, state.activeId);
   } catch (_error) {}
-  state.draftCwd = draftCwd || activeChat()?.cwd || state.defaultCwd;
+  state.draftCwd = state.selected_project || draftCwd || projectOfChat(activeChat()) || state.defaultCwd;
+  if (state.activeId !== activeId) {
+    $("#prompt").value = activeChat() ? cachedDraft(activeChat()) : "";
+    resizePrompt();
+  }
   if (state.activeId === activeId && requestedProvider && !activeRunning()) {
     activeChat().requested_provider = requestedProvider;
     activeChat().requested_model = requestedModel || null;
@@ -1566,42 +2134,402 @@ function applyServerState(initial) {
 
 async function refreshState() {
   const sequence = ++stateRequestSequence;
+  const activeBefore = state.activeId;
+  const projectBefore = state.selected_project;
   const conversation = $("#conversation");
   const previousScrollTop = conversation.scrollTop;
   const followOutput = conversation.scrollHeight - conversation.scrollTop
     - conversation.clientHeight < 120;
-  const initial = await api("/api/state");
-  if (sequence < stateAppliedSequence || selectionSavePending) return;
+  const initial = await api("/api/state?compact=1");
+  if (sequence < stateAppliedSequence || selectionSavePending
+      || state.activeId !== activeBefore || state.selected_project !== projectBefore) return;
+  const selected = initial.selected_project || projectBefore;
+  const candidates = initial.chats.filter((chat) =>
+    (chat.window_id || "main") === (initial.window_id || state.windowId)
+    && (chat.requested_provider || chat.provider) === (initial.window_provider || state.windowProvider)
+    && (!selected || projectOfChat(chat) === selected));
+  const target = candidates.find((chat) => chat.id === activeBefore) || latestUsedChat(candidates);
+  if (target) {
+    const full = await api(`/api/chats/${encodeURIComponent(target.id)}`);
+    initial.chats = initial.chats.map((chat) => chat.id === full.id ? full : chat);
+  }
+  if (sequence < stateAppliedSequence || selectionSavePending
+      || state.activeId !== activeBefore || state.selected_project !== projectBefore) return;
   stateAppliedSequence = sequence;
   applyServerState(initial);
   render();
   conversation.scrollTop = followOutput ? conversation.scrollHeight : previousScrollTop;
 }
 
+function supportsWorkEventStreams() {
+  return typeof ReadableStream !== "undefined"
+    && typeof TextDecoder !== "undefined"
+    && typeof AbortController !== "undefined";
+}
+
+function replaceWorkChat(chat) {
+  state.chats = state.chats.map((item) => item.id === chat.id ? chat : item)
+    .sort((a, b) => b.updated_at - a.updated_at);
+  if (state.activeId === chat.id) render();
+  else renderChats();
+}
+
+function notifyWorkCompletion(chat, messageId = "") {
+  if (!chat) return;
+  const message = messageId || [...(chat.messages || [])].reverse()
+    .find((item) => item.role === "assistant" && !item.pending)?.id || chat.updated_at || "done";
+  const key = `${chat.id}:${message}`;
+  if (notifiedWorkCompletions.has(key)) return;
+  notifiedWorkCompletions.add(key);
+  if (notifiedWorkCompletions.size > 256) {
+    notifiedWorkCompletions.delete(notifiedWorkCompletions.values().next().value);
+  }
+  notifyCompletion(
+    `${providerLabel(chat.requested_provider || chat.provider || state.windowProvider)} finished ${chat.title || "a work session"}.`,
+    `pilferedparrot-work-${chat.id}-${message}`,
+  );
+}
+
+function stopWorkEventFollower(chatId, { keepPollingFallback = false } = {}) {
+  const follower = workEventFollowers.get(chatId);
+  if (!follower) return;
+  follower.stopped = true;
+  follower.fallback = true;
+  if (follower.retryTimer !== null) clearTimeout(follower.retryTimer);
+  follower.retryResolve?.();
+  follower.controller?.abort();
+  if (!keepPollingFallback) workEventFollowers.delete(chatId);
+}
+
+function stopAllWorkEventFollowers() {
+  for (const chatId of workEventFollowers.keys()) stopWorkEventFollower(chatId);
+}
+
+function revokeWorkAccess() {
+  if (workAccessRevoked) return;
+  workAccessRevoked = true;
+  stopAllWorkEventFollowers();
+  if (pollTimer !== null) clearTimeout(pollTimer);
+  pollTimer = null;
+  toast("This window's access expired. Reopen PilferedParrot to continue.");
+}
+
+function waitForWorkEventRetry(follower, delay) {
+  return new Promise((resolve) => {
+    follower.retryResolve = resolve;
+    follower.retryTimer = setTimeout(() => {
+      follower.retryTimer = null;
+      follower.retryResolve = null;
+      resolve();
+    }, delay);
+  });
+}
+
+async function refreshChatFromWorkEvent(follower, messageId = "") {
+  const before = state.chats.find((chat) => chat.id === follower.chatId);
+  const wasPending = Boolean(pendingMessage(before));
+  const pendingId = messageId || follower.messageId || pendingMessage(before)?.id || "";
+  const full = await api(`/api/chats/${encodeURIComponent(follower.chatId)}`);
+  if (follower.stopped) return null;
+  replaceWorkChat(full);
+  if (pendingMessage(full)) {
+    follower.messageId = pendingMessage(full)?.id || follower.messageId;
+    return full;
+  }
+  stopWorkEventFollower(follower.chatId);
+  if (wasPending) notifyWorkCompletion(full, pendingId);
+  refreshBudgets(false).catch(() => {});
+  scheduleBudgetPoll();
+  if (full.harness_parent) refreshState().catch(() => {});
+  return full;
+}
+
+function applyWorkProgress(follower, payload) {
+  const chat = state.chats.find((item) => item.id === follower.chatId);
+  const messageId = payload?.message_id;
+  const activity = payload?.activity;
+  if (!chat || typeof messageId !== "string" || !activity
+      || typeof activity.id !== "string" || typeof activity.content !== "string") return;
+  const message = chat.messages?.find((item) => item.id === messageId);
+  if (!message || !message.pending) return;
+  if (!Array.isArray(message.activity)) message.activity = [];
+  if (message.activity.some((item) => item.id === activity.id)) return;
+  message.activity.push(activity);
+  if (message.activity.length > 100) message.activity.splice(0, message.activity.length - 100);
+  if (follower.messageId === messageId || !follower.messageId) follower.messageId = messageId;
+  if (state.activeId === chat.id) render();
+  else renderChats();
+}
+
+function applyWorkUsage(follower, payload) {
+  const chat = state.chats.find((item) => item.id === follower.chatId);
+  if (!chat || typeof payload?.message_id !== "string"
+      || !chat.messages?.some((item) => item.id === payload.message_id && item.pending)
+      || !payload.context_usage || typeof payload.context_usage !== "object") return;
+  chat.context_chars = payload.context_chars;
+  chat.context_usage = payload.context_usage;
+  chat.context_percent = payload.context_percent;
+  chat.context_status = payload.context_status;
+  if (state.activeId === chat.id) renderHeader();
+  else renderChats();
+}
+
+function pendingWorkMessage(chatId, messageId) {
+  const chat = state.chats.find((item) => item.id === chatId);
+  return chat?.messages?.find((item) => item.id === messageId && item.pending);
+}
+
+function applyAcpUpdate(follower, payload) {
+  const entry = payload?.entry;
+  const message = pendingWorkMessage(follower.chatId, payload?.message_id);
+  if (!message || typeof entry?.id !== "string" || !entry.id
+      || !entry.update || typeof entry.update !== "object") return;
+  if (!Array.isArray(message.acp_updates)) message.acp_updates = [];
+  if (message.acp_updates.some((item) => item.id === entry.id)) return;
+  message.acp_updates.push(entry);
+  if (message.acp_updates.length > 512) message.acp_updates.splice(0, message.acp_updates.length - 512);
+  let textOnly = false;
+  if (entry.update.sessionUpdate === "agent_message_chunk") {
+    // The server redacts the aggregate before sending this replacement. Do
+    // not concatenate independently filtered chunks: a secret may straddle
+    // their boundary.
+    const replacement = typeof entry.update.streamed_text === "string"
+      ? entry.update : payload;
+    if (typeof replacement.streamed_text === "string") {
+      message.streamed_text = replacement.streamed_text;
+      message.streamed_text_truncated = Boolean(replacement.streamed_text_truncated);
+      textOnly = true;
+    }
+  }
+  scheduleAcpRender(textOnly ? { chatId: follower.chatId, messageId: message.id } : null);
+}
+
+function applyAcpPermission(follower, payload) {
+  const message = pendingWorkMessage(follower.chatId, payload?.message_id);
+  const request = payload?.request;
+  if (!message || typeof request?.requestId !== "string" || !request.requestId) return;
+  if (!Array.isArray(message.acp_permissions)) message.acp_permissions = [];
+  if (!message.acp_permissions.some((item) => item.requestId === request.requestId)) {
+    message.acp_permissions.push(request);
+    scheduleAcpRender();
+  }
+}
+
+function applyAcpPermissionClosed(follower, payload) {
+  const message = pendingWorkMessage(follower.chatId, payload?.message_id);
+  if (!message || !Array.isArray(message.acp_permissions)) return;
+  message.acp_permissions = message.acp_permissions.filter((item) => item.requestId !== payload.request_id);
+  scheduleAcpRender();
+}
+
+async function hydrateAcpPermissions(follower) {
+  const chat = state.chats.find((item) => item.id === follower.chatId);
+  if (!chat || pendingMessage(chat)?.engine !== "acp") return;
+  const result = await api(`/api/chats/${encodeURIComponent(chat.id)}/permissions`);
+  if (follower.stopped) return;
+  for (const message of chat.messages || []) {
+    if (message.pending && message.engine === "acp") message.acp_permissions = [];
+  }
+  for (const item of Array.isArray(result.permissions) ? result.permissions : []) {
+    applyAcpPermission(follower, item?.request ? item : {
+      message_id: pendingMessage(chat)?.id, request: item,
+    });
+  }
+  scheduleAcpRender();
+}
+
+async function handleWorkEventFrame(follower, frame) {
+  const eventName = frame.event || "message";
+  if (!frame.data) return;
+  const value = JSON.parse(frame.data);
+  if (eventName === "hello") {
+    if (typeof value.epoch !== "string") return;
+    const epochChanged = Boolean(follower.epoch && follower.epoch !== value.epoch);
+    follower.epoch = value.epoch;
+    if (epochChanged) {
+      follower.after = 0;
+      await refreshChatFromWorkEvent(follower);
+    }
+    return;
+  }
+  const event = value;
+  if (!Number.isSafeInteger(event.seq) || typeof event.kind !== "string") return;
+  if (event.kind === "reset") {
+    follower.after = event.seq;
+    await refreshChatFromWorkEvent(follower);
+    return;
+  }
+  if (event.seq <= follower.after) return;
+  follower.after = event.seq;
+  if (event.kind === "progress") {
+    applyWorkProgress(follower, event.payload);
+  } else if (event.kind === "usage") {
+    applyWorkUsage(follower, event.payload);
+  } else if (event.kind === "acp_update") {
+    applyAcpUpdate(follower, event.payload);
+  } else if (event.kind === "permission") {
+    applyAcpPermission(follower, event.payload);
+  } else if (event.kind === "permission_closed") {
+    applyAcpPermissionClosed(follower, event.payload);
+  } else if (event.kind === "completed") {
+    await refreshChatFromWorkEvent(follower, event.payload?.message_id || "");
+  }
+}
+
+async function consumeWorkEventStream(response, follower) {
+  if (!response.body?.getReader) throw new Error("Live event stream is unavailable.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  try {
+    while (!follower.stopped) {
+      const { value, done } = await reader.read();
+      buffered += decoder.decode(value || new Uint8Array(), { stream: !done });
+      let boundary;
+      while ((boundary = buffered.search(/\r?\n\r?\n/)) >= 0) {
+        const separator = buffered.slice(boundary).match(/^\r?\n\r?\n/)[0];
+        const rawFrame = buffered.slice(0, boundary);
+        buffered = buffered.slice(boundary + separator.length);
+        const frame = { event: "", data: [] };
+        for (const line of rawFrame.split(/\r?\n/)) {
+          if (line.startsWith(":")) continue;
+          if (line.startsWith("event:")) frame.event = line.slice(6).trim();
+          else if (line.startsWith("data:")) frame.data.push(line.slice(5).replace(/^ /, ""));
+        }
+        frame.data = frame.data.join("\n");
+        await handleWorkEventFrame(follower, frame);
+        if (follower.stopped) return;
+      }
+      if (done) return;
+    }
+  } finally {
+    try { await reader.cancel(); } catch (_error) {}
+    reader.releaseLock();
+  }
+}
+
+async function runWorkEventFollower(follower) {
+  let retryDelay = 500;
+  while (!follower.stopped) {
+    try {
+      let chat = state.chats.find((item) => item.id === follower.chatId);
+      if (!chat) {
+        stopWorkEventFollower(follower.chatId);
+        return;
+      }
+      const hadPending = Boolean(pendingMessage(chat));
+      follower.messageId ||= pendingMessage(chat)?.id || "";
+      if (!Array.isArray(chat.messages) || !pendingMessage(chat)?.id) {
+        const full = await api(`/api/chats/${encodeURIComponent(follower.chatId)}`);
+        if (follower.stopped) return;
+        replaceWorkChat(full);
+        chat = full;
+      }
+      if (!pendingMessage(chat)) {
+        if (hadPending) notifyWorkCompletion(chat, follower.messageId);
+        stopWorkEventFollower(follower.chatId);
+        if (hadPending) {
+          refreshBudgets(false).catch(() => {});
+          scheduleBudgetPoll();
+          if (chat.harness_parent) refreshState().catch(() => {});
+        }
+        return;
+      }
+      follower.messageId = pendingMessage(chat)?.id || follower.messageId || "";
+      if (!follower.permissionsLoaded) {
+        try {
+          await hydrateAcpPermissions(follower);
+          follower.permissionsLoaded = true;
+        }
+        catch (error) { if (error.status === 403) { revokeWorkAccess(); return; } }
+      }
+      if (!follower.epoch && follower.after > 0) follower.after = 0;
+      const query = new URLSearchParams({ after: String(follower.after) });
+      if (follower.epoch) query.set("epoch", follower.epoch);
+      follower.controller = new AbortController();
+      const headers = { Accept: "text/event-stream" };
+      if (state.capability) headers["X-PilferedParrot-Capability"] = state.capability;
+      const response = await fetch(
+        `/api/chats/${encodeURIComponent(follower.chatId)}/events?${query}`,
+        { headers, signal: follower.controller.signal },
+      );
+      if (response.status === 404) {
+        stopWorkEventFollower(follower.chatId, { keepPollingFallback: true });
+        schedulePoll();
+        return;
+      }
+      if (response.status === 403) {
+        revokeWorkAccess();
+        return;
+      }
+      if (!response.ok || !response.headers.get("content-type")?.startsWith("text/event-stream")) {
+        throw new Error("Live event stream request failed.");
+      }
+      follower.fallback = false;
+      retryDelay = 500;
+      await consumeWorkEventStream(response, follower);
+      if (follower.stopped) return;
+      follower.fallback = true;
+      schedulePoll();
+    } catch (_error) {
+      if (follower.stopped) return;
+      follower.fallback = true;
+      schedulePoll();
+    } finally {
+      follower.controller = null;
+    }
+    await waitForWorkEventRetry(follower, retryDelay);
+    retryDelay = Math.min(5_000, retryDelay * 2);
+  }
+}
+
+function startWorkEventFollower(chatId) {
+  if (workAccessRevoked || !supportsWorkEventStreams() || workEventFollowers.has(chatId)) return;
+  const follower = {
+    chatId, after: 0, epoch: null, messageId: "", fallback: true,
+    stopped: false, controller: null, retryTimer: null, retryResolve: null,
+    permissionsLoaded: false,
+  };
+  workEventFollowers.set(chatId, follower);
+  runWorkEventFollower(follower).catch(() => {
+    if (!follower.stopped) {
+      follower.fallback = true;
+      schedulePoll();
+    }
+  });
+}
+
+function startPendingWorkEventFollowers() {
+  for (const chat of state.chats) {
+    if (pendingMessage(chat)) startWorkEventFollower(chat.id);
+  }
+}
+
 function schedulePoll() {
-  if (!anyRunning() || pollTimer !== null) return;
+  if (!pollableRunningChats().length || pollTimer !== null) return;
   pollTimer = setTimeout(async () => {
     pollTimer = null;
-    const wasRunning = anyRunning();
+    const running = pollableRunningChats();
+    const pendingIds = new Map(running.map((chat) => [chat.id, pendingMessage(chat)?.id || ""]));
     try {
-      const runningIds = state.chats.filter((chat) => pendingMessage(chat)).map((chat) => chat.id);
-      const updates = await Promise.all(runningIds.map((chatId) =>
-        api(`/api/chats/${encodeURIComponent(chatId)}`)));
+      const updates = await Promise.all(running.map((chat) =>
+        api(`/api/chats/${encodeURIComponent(chat.id)}`)));
       const completed = updates.filter((chat) => !pendingMessage(chat));
       const changedActive = updates.some((chat) => chat.id === state.activeId);
       const byId = new Map(updates.map((chat) => [chat.id, chat]));
       state.chats = state.chats.map((chat) => byId.get(chat.id) || chat)
         .sort((a, b) => b.updated_at - a.updated_at);
+      startPendingWorkEventFollowers();
       if (changedActive) render();
       else renderChats();
       // Refresh the provider card on the pending -> completed edge. This is
       // especially important for Qwen, whose auto-started endpoint may stop
       // again immediately after a turn completes.
-      if (wasRunning && completed.length) {
-        completed.forEach((chat) => notifyCompletion(
-          `${providerLabel(chat.requested_provider || chat.provider || state.windowProvider)} finished ${chat.title || "a work session"}.`,
-          `pilferedparrot-work-${chat.id}`,
-        ));
+      if (completed.length) {
+        completed.forEach((chat) => {
+          notifyWorkCompletion(chat, pendingIds.get(chat.id));
+          stopWorkEventFollower(chat.id);
+        });
         await refreshBudgets(false);
         // A worker completion updates its parent package, while the worker is
         // the selected session. Refresh full state so that review is available
@@ -1610,7 +2538,7 @@ function schedulePoll() {
       }
     }
     catch (error) { toast(error.message); }
-    finally { if (anyRunning()) schedulePoll(); }
+    finally { if (pollableRunningChats().length) schedulePoll(); }
   }, 750);
 }
 
@@ -1684,10 +2612,12 @@ async function confirmTerminalCommand() {
 }
 
 async function init() {
+  globalThis.PilferedParrotFeedback?.connect(api);
   try {
     restorePaneWidths();
-    const initial = await api("/api/state");
+    const initial = await api("/api/state?compact=1");
     Object.assign(state, initial);
+    $("#observeFilesOption").hidden = !initial.observe_files_available;
     globalThis.PilferedParrotAppearanceSync.connect(api, initial.preferences?.appearance, message => toast(message, "error"));
     if (fragmentCwd) state.defaultCwd = fragmentCwd;
     state.windowId = initial.window_id || state.windowId;
@@ -1698,28 +2628,28 @@ async function init() {
     });
     await initializeNativeWindow();
     await refreshBrowserTheme(false).catch(() => {});
-    if (launchedFromApp) {
-      state.activeId = null;
-      state.draftCwd = fragmentCwd || state.defaultCwd;
-      if (fragmentPickProject) {
-        pendingLaunchModel = fragmentModel;
-        openProjectDialog(true);
-      } else {
-        await createChat(fragmentModel);
-      }
+    let savedActiveId = "";
+    try { savedActiveId = sessionStorage.getItem(ACTIVE_CHAT_SESSION_KEY) || ""; } catch (_error) {}
+    state.selected_project = fragmentCwd || initial.selected_project || state.defaultCwd;
+    state.draftCwd = state.selected_project;
+    const chats = visibleChats();
+    const explicitNewSession = launchedFromApp && Boolean(fragmentCwd || fragmentModel);
+    state.activeId = !explicitNewSession && chats.some((chat) => chat.id === savedActiveId)
+      ? savedActiveId : !explicitNewSession ? latestUsedChat(chats)?.id || null : null;
+    if (fragmentPickProject) {
+      pendingLaunchModel = fragmentModel;
+      openProjectDialog(true);
+    } else if (!state.activeId) {
+      await createChat(fragmentModel);
     } else {
-      let savedActiveId = "";
-      try { savedActiveId = sessionStorage.getItem(ACTIVE_CHAT_SESSION_KEY) || ""; } catch (_error) {}
-      const chats = visibleChats();
-      state.activeId = chats.some((chat) => chat.id === savedActiveId)
-        ? savedActiveId : latestUsedChat(chats)?.id || null;
-      state.draftCwd = activeChat()?.cwd || state.defaultCwd;
-      if (activeChat()) { $("#prompt").value = cachedDraft(activeChat()); resizePrompt(); }
-      if (!state.activeId) await createChat(fragmentModel);
+      const full = await hydrateChat(state.activeId);
+      $("#prompt").value = cachedDraft(full);
+      resizePrompt();
     }
     state.initialized = true;
     reportActiveSession();
     render();
+    startPendingWorkEventFollowers();
     schedulePoll();
     await refreshBudgets(true);
     scheduleBudgetPoll();
@@ -1940,6 +2870,54 @@ $("#newWorkSession").addEventListener("click", () => {
 $("#providerWindows").addEventListener("click", () => {
   renderProviderConnections();
   $("#providerDialog").showModal();
+  loadAcpSetup();
+});
+$("#providerConnectionList").addEventListener("click", async (event) => {
+  const target = event.target.closest("[data-acp-check], [data-acp-install], [data-gpu-check]");
+  if (!target) return;
+  target.disabled = true;
+  try {
+    if (target.matches("[data-acp-check]")) await loadAcpSetup();
+    else if (target.matches("[data-gpu-check]")) await checkGpuInventory();
+    else {
+      state.acpSetupMessage = "Installing ACP adapter…"; renderProviderConnections();
+      try {
+        state.acpSetup = await api("/api/acp/install", { method: "POST", body: "{}" });
+        const statuses = Object.values(state.acpSetup?.providers || {});
+        const unavailable = statuses.filter((item) => !item.installed);
+        if (unavailable.length) {
+          const reasons = [...new Set(unavailable.map((item) => item.error).filter(Boolean))];
+          state.acpSetupMessage = reasons.length
+            ? `Installation failed: ${reasons.join("; ")}`
+            : "Installation failed: one or more ACP adapters remain unavailable.";
+        } else {
+          state.acpSetupMessage = "ACP adapters are installed and ready.";
+        }
+      } catch (error) { state.acpSetupMessage = error.message; }
+      renderProviderConnections();
+    }
+  } finally {
+    const button = target.isConnected ? target : null;
+    if (button) button.disabled = false;
+  }
+});
+$("#providerConnectionList").addEventListener("change", async (event) => {
+  const select = event.target.closest("[data-acp-engine]");
+  if (!select) return;
+  select.disabled = true;
+  try {
+    const provider = select.dataset.acpEngine;
+    state.acpSetup = await api(`/api/acp/providers/${encodeURIComponent(provider)}/engine`, {
+      method: "POST", body: JSON.stringify({ engine: select.value }),
+    });
+    state.provider_engines = { ...state.provider_engines, [provider]: select.value };
+    state.acpSetupMessage = "Transport saved. The next turn starts a new provider session.";
+    if (provider === state.windowProvider) {
+      await pollProviderModels(provider);
+      render();
+    }
+  } catch (error) { state.acpSetupMessage = error.message; }
+  renderProviderConnections();
 });
 $("#refreshProviderDashboard").addEventListener("click", async () => {
   const button = $("#refreshProviderDashboard");
@@ -1963,10 +2941,45 @@ $("#openChat").addEventListener("click", openChatWindow);
 $("#notificationPreferences").addEventListener("click", () => {
   manageNotificationPermission().catch((error) => toast(error.message, "error"));
 });
-$("#preferencesButton").addEventListener("click", () => $("#preferencesDialog").showModal());
+$("#preferencesButton").addEventListener("click", () => {
+  $("#preferencesDialog").showModal();
+  loadSkillDiscoveryStatus().catch((error) => {
+    $("#skillsStatus").textContent = error.message;
+  });
+});
+$("#discoverSkills").addEventListener("click", () => {
+  previewLocalSkills();
+});
 $("#chromeTheme").addEventListener("click", openChromeThemeGallery);
 setupPaneResizer("#sidebarResizer", "sidebar");
-$("#messages").addEventListener("click", (event) => {
+$("#messages").addEventListener("click", async (event) => {
+  const permissionButton = event.target.closest("[data-acp-permission][data-acp-option]");
+  if (permissionButton) {
+    const requestId = permissionButton.dataset.acpPermission;
+    const chatId = permissionButton.dataset.acpChat;
+    if (chatId !== state.activeId || decidingPermissions.has(requestId)) return;
+    decidingPermissions.add(requestId);
+    renderMessages();
+    try {
+      const result = await api(`/api/chats/${encodeURIComponent(chatId)}/permissions`, {
+        method: "POST", body: JSON.stringify({
+          request_id: requestId, option_id: permissionButton.dataset.acpOption,
+        }),
+      });
+      if (!result.accepted) {
+        toast("This permission request has expired. The agent was denied.");
+      } else {
+        const chat = state.chats.find((item) => item.id === chatId);
+        for (const message of chat?.messages || []) {
+          if (Array.isArray(message.acp_permissions)) {
+            message.acp_permissions = message.acp_permissions.filter((item) => item.requestId !== requestId);
+          }
+        }
+      }
+    } catch (error) { toast(error.message); }
+    finally { decidingPermissions.delete(requestId); renderMessages(); }
+    return;
+  }
   const button = event.target.closest("[data-run-command]");
   if (button) runTerminalCommand(button);
 });
@@ -1974,16 +2987,29 @@ async function saveWorkSelection(modelChanged = false) {
   if (selectionSavePending || activeRunning()) return;
   const chat = activeChat();
   const model = $("#modelSelect").value;
-  const selected = $("#reasoningSelect").value || null;
-  const effort = reasoningOptions(state.windowProvider, model).includes(selected) ? selected : null;
+  let selected = $("#reasoningSelect").value || null;
+  let effort = reasoningOptions(state.windowProvider, model).includes(selected) ? selected : null;
   const previousModel = chat?.requested_model;
   selectionSavePending = true;
+  if (modelChanged) state.workModelSelections[state.windowProvider] = model;
   $("#modelSelect").disabled = true;
   $("#reasoningSelect").disabled = true;
   $("#sendButton").disabled = true;
   $("#newWorkSession").disabled = true;
   stateAppliedSequence = ++stateRequestSequence;
   try {
+    if (modelChanged && isACPProvider(state.windowProvider) && model) {
+      const catalog = await pollProviderModels(state.windowProvider, null, model);
+      if (!catalog || catalog.acp_options?.current_model !== model
+          || state.model_catalog[state.windowProvider]?.acp_options?.current_model !== model
+          || !catalog.options?.some((item) => item.value === model)) {
+        throw new Error(`“${model}” is not an available model for this ACP agent. Your selection is kept for review.`);
+      }
+      renderReasoningSelect(state.windowProvider, model, selected,
+        !state.initialized || activeRunning() || selectionSavePending);
+      selected = $("#reasoningSelect").value || null;
+      effort = reasoningOptions(state.windowProvider, model).includes(selected) ? selected : null;
+    }
     if (modelChanged && model) {
       state.preferences = await api("/api/preferences/provider", {
         method: "POST", body: JSON.stringify({ provider: state.windowProvider, model }),
@@ -1997,10 +3023,16 @@ async function saveWorkSelection(modelChanged = false) {
     } else {
       draftReasoningEffort = effort;
     }
+    if (modelChanged) delete state.workModelSelections[state.windowProvider];
     if (modelChanged && selected && !effort) toast("Reasoning reset to default for this model.");
   } catch (error) {
-    if (chat) chat.requested_model = previousModel;
-    toast(error.message);
+    if (isACPProvider(state.windowProvider) && modelChanged) {
+      toast(error.message, "error");
+    } else {
+      delete state.workModelSelections[state.windowProvider];
+      if (chat) chat.requested_model = previousModel;
+      toast(error.message);
+    }
   } finally {
     stateAppliedSequence = ++stateRequestSequence;
     selectionSavePending = false;
@@ -2009,6 +3041,21 @@ async function saveWorkSelection(modelChanged = false) {
 }
 $("#modelSelect").addEventListener("change", () => saveWorkSelection(true));
 $("#reasoningSelect").addEventListener("change", () => saveWorkSelection());
+$("#acpModeSelect").addEventListener("change", async () => {
+  const chat = activeChat();
+  const mode = $("#acpModeSelect").value || null;
+  if (!chat) { draftACPMode = mode; return; }
+  if (selectionSavePending || activeRunning()) return render();
+  selectionSavePending = true;
+  render();
+  try {
+    const updated = await api(`/api/chats/${chat.id}/acp-mode`, {
+      method: "POST", body: JSON.stringify({ mode }),
+    });
+    state.chats = state.chats.map((item) => item.id === updated.id ? updated : item);
+  } catch (error) { toast(error.message, "error"); }
+  finally { selectionSavePending = false; render(); }
+});
 $("#modelSelect").addEventListener("pointerdown", (event) => {
   pollProviderModels(state.windowProvider, event.currentTarget);
 });
@@ -2027,9 +3074,14 @@ $("#refreshBudgets").addEventListener("click", async () => {
     button.removeAttribute("aria-busy");
   }
 });
-function openProjectDialog(needsChoice) {
-  $("#projectNotice").hidden = !needsChoice;
-  $("#projectInput").value = needsChoice ? "" : state.draftCwd;
+function openProjectDialog(needsChoice, createSession = false) {
+  projectDialogCreate = createSession;
+  const notice = $("#projectNotice");
+  notice.hidden = !needsChoice && !createSession;
+  notice.textContent = needsChoice
+    ? "This provider cannot work in the launching folder. Choose another folder before starting."
+    : "A project change starts a new session so this session keeps its original folder.";
+  $("#projectInput").value = needsChoice || createSession ? "" : state.draftCwd;
   updateProjectFolderName();
   $("#projectDialog").showModal();
 }
@@ -2073,11 +3125,32 @@ $("#browseProject").addEventListener("click", async () => {
   }
 });
 $("#projectButton").addEventListener("click", () => {
-  if (activeChat()?.messages?.length) {
-    toast("Start a new work session to change projects.");
-    return;
+  openProjectDialog(pendingLaunchModel !== null, Boolean(activeChat()?.messages?.length));
+});
+$("#addProject").addEventListener("click", () => openProjectDialog(false, true));
+$("#projectSelect").addEventListener("change", async (event) => {
+  const chosen = event.target.value;
+  try { await selectProject(chosen); }
+  catch (error) { toast(error.message); event.target.value = state.selected_project; }
+});
+$("#pinProject").addEventListener("click", async () => {
+  if (projectPinPending || !state.selected_project) return;
+  const project = state.projects.find((item) => item.cwd === state.selected_project);
+  projectPinPending = true;
+  renderProjects();
+  try {
+    const result = await api("/api/projects/pin", {
+      method: "POST",
+      body: JSON.stringify({ cwd: state.selected_project, pinned: !project?.pinned }),
+    });
+    state.projects = result.projects;
+    state.selected_project = result.selected_project;
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    projectPinPending = false;
+    renderProjects();
   }
-  openProjectDialog(pendingLaunchModel !== null);
 });
 $("#projectForm").addEventListener("submit", async (event) => {
   if (projectSubmitPending) {
@@ -2089,12 +3162,12 @@ $("#projectForm").addEventListener("submit", async (event) => {
   const chosen = $("#projectInput").value.trim();
   // A launch that is still waiting for a folder has no default worth falling
   // back to: the inherited one is precisely what this provider refused.
-  if (pendingLaunchModel !== null && !chosen) {
-    toast("Enter a project folder for this provider.");
+  if ((pendingLaunchModel !== null || projectDialogCreate) && !chosen) {
+    toast("Choose a project folder before starting a session.");
     return;
   }
-  state.draftCwd = chosen || state.defaultCwd;
   if (pendingLaunchModel !== null) {
+    state.draftCwd = chosen;
     const model = pendingLaunchModel;
     const saveButton = $("#saveProject");
     const launchDraft = $("#prompt").value;
@@ -2114,6 +3187,16 @@ $("#projectForm").addEventListener("submit", async (event) => {
     } finally {
       projectSubmitPending = false;
       saveButton.disabled = false;
+    }
+  } else {
+    projectSubmitPending = true;
+    try {
+      await selectProject(chosen || state.defaultCwd, { newSession: projectDialogCreate });
+    } catch (error) {
+      toast(error.message);
+      return;
+    } finally {
+      projectSubmitPending = false;
     }
   }
   $("#projectDialog").close();
@@ -2259,6 +3342,7 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 window.addEventListener("pagehide", () => {
+  stopAllWorkEventFollowers();
   saveActiveDraft();
   for (const chatId of pendingDrafts.keys()) flushDraft(chatId).catch(() => {});
   if (!state.capability) return;

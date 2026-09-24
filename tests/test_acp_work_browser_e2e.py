@@ -1,0 +1,400 @@
+"""Browser coverage for the opt-in ACP Work UI using the deterministic stdio agent."""
+
+from __future__ import annotations
+
+import os
+import json
+import re
+import sys
+import unittest
+from pathlib import Path
+from urllib.parse import urlparse
+from unittest.mock import patch
+
+from pilferedparrot.web import PilferedParrotApp
+
+try:
+    from playwright.sync_api import expect, sync_playwright
+except ModuleNotFoundError:
+    if os.environ.get("PILFEREDPARROT_REQUIRE_PLAYWRIGHT") == "1":
+        raise
+    expect = sync_playwright = None
+
+from playwright_fixture import PilferedParrotBrowserFixture
+
+
+FAKE_AGENT = Path(__file__).parent / "fixtures" / "acp" / "fake_agent.py"
+PREVIEW_COMMAND = "printf 'approved\\n' > allowed.txt"
+SPLIT_SECRET = "FAKE-ACP-SPLIT-SECRET-739a"
+
+
+class ACPBrowserFixture(PilferedParrotBrowserFixture):
+    def _config(self):
+        config = super()._config()
+        config["codex"]["engine"] = "acp"
+        config["codex"]["api_key_env"] = "FAKE_ACP_SECRET"
+        return config
+
+    def __init__(self):
+        self._agent_mode = patch.dict(os.environ, {
+            "FAKE_ACP_BROWSER_E2E": "1", "FAKE_ACP_SECRET": SPLIT_SECRET,
+        })
+        self._agent_mode.start()
+        super().__init__()
+        self.app.acp_adapters.locate = lambda provider: [sys.executable, str(FAKE_AGENT)]
+        self.mode_choices = [
+            {"value": "default", "label": "Agent default", "description": ""},
+            {"value": "plan", "label": "Plan", "description": "Plan before acting"},
+        ]
+        self.app.poll_provider_models = self._poll_acp_models
+
+    def _poll_acp_models(self, provider, *args, **kwargs):
+        del args, kwargs
+        catalog = PilferedParrotApp.poll_provider_models(self.app, provider)
+        catalog["source"] = "acp"
+        catalog["acp_options"] = {
+            "models": [{"value": "fake-small", "label": "Fake Small"}],
+            "efforts": [],
+            "modes": self.mode_choices,
+            "current_model": "fake-small", "current_effort": "",
+            "current_mode": "default",
+        }
+        return catalog
+
+    def stop(self):
+        try:
+            super().stop()
+        finally:
+            self._agent_mode.stop()
+
+
+@unittest.skipUnless(sync_playwright, "install requirements-browser.txt to run Playwright")
+class ACPWorkBrowserEndToEndTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.playwright = sync_playwright().start()
+        try:
+            cls.browser = cls.playwright.chromium.launch(headless=True)
+        except BaseException:
+            cls.playwright.stop()
+            raise
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.browser.close()
+        cls.playwright.stop()
+
+    def setUp(self):
+        self.fixture = ACPBrowserFixture()
+        self.addCleanup(self.fixture.stop)
+        self.context = self.browser.new_context(viewport={"width": 1280, "height": 900})
+        self.addCleanup(self.context.close)
+        self.page = self.context.new_page()
+        self.page_errors = []
+        self.external_requests = []
+        self.page.on("pageerror", lambda error: self.page_errors.append(error))
+        self.context.on("request", self._record_request)
+        self.page.goto(self.fixture.browser_url, wait_until="domcontentloaded")
+        expect(self.page.get_by_role("textbox", name="Message")).to_be_enabled(timeout=5_000)
+
+    def tearDown(self):
+        self.assertEqual(self.external_requests, [], "browser attempted external network")
+        self.assertEqual(self.page_errors, [], "browser emitted an unhandled JavaScript error")
+
+    def _record_request(self, request):
+        if urlparse(request.url).hostname not in {"127.0.0.1", "localhost", "::1"}:
+            self.external_requests.append(request.url)
+
+    def _send_and_wait_for_permission(self, prompt):
+        message = self.page.get_by_role("textbox", name="Message")
+        message.fill(prompt)
+        self.page.get_by_role("button", name="Send").click()
+        card = self.page.get_by_role("group", name="Permission requested")
+        expect(card).to_be_visible(timeout=8_000)
+        expect(self.page.locator(".acp-streamed-text")).to_contain_text(
+            "working on ", timeout=5_000,
+        )
+        return card
+
+    def test_mode_choice_is_saved_and_set_on_loaded_session_before_prompt(self):
+        model = self.page.locator("#modelSelect")
+        model.dispatch_event("pointerdown")
+        expect(model.locator('option[value="fake-small"]')).to_have_count(1, timeout=5_000)
+        mode = self.page.get_by_role("combobox", name="ACP mode")
+        expect(mode).to_be_visible()
+        expect(mode.locator('option[value=""]')).to_have_text("No override")
+        expect(mode.locator('option[value="plan"]')).to_have_count(1)
+        expect(self.page.locator("#toast")).not_to_have_text("Models refreshed.")
+        mode.select_option("plan")
+        self.page.get_by_role("textbox", name="Message").fill("browser-e2e-deny")
+        self.page.get_by_role("button", name="Send").click()
+        card = self.page.get_by_role("group", name="Permission requested")
+        expect(card).to_be_visible(timeout=8_000)
+        card.get_by_role("button", name="Reject once").click()
+        expect(card).to_have_count(0, timeout=5_000)
+        with self.fixture.app.store.lock:
+            chat = next(chat for chat in self.fixture.app.store.data["chats"]
+                        if chat.get("window_id") == "main")
+            self.assertEqual(chat.get("acp_mode"), "plan")
+
+        records = [json.loads(line) for line in
+                   (self.fixture.project / "fake-agent-requests.jsonl").read_text().splitlines()]
+        self.assertEqual([item["fixture"] for item in records if "fixture" in item],
+                         ["set_mode", "prompt"])
+        self.page.reload(wait_until="domcontentloaded")
+        expect(self.page.get_by_role("textbox", name="Message")).to_be_enabled(timeout=5_000)
+        self.page.locator("#modelSelect").dispatch_event("pointerdown")
+        reloaded_mode = self.page.get_by_role("combobox", name="ACP mode")
+        expect(reloaded_mode).to_be_visible()
+        expect(reloaded_mode).to_have_value("plan")
+        self.page.evaluate("() => { state.provider_engines.codex = 'legacy'; renderHeader(); }")
+        expect(self.page.locator("#acpModeControl")).to_be_hidden()
+        expect(self.page.locator("#acpModeSelect")).to_have_value("")
+        self.page.evaluate("() => { state.provider_engines.codex = 'acp'; renderHeader(); }")
+        expect(reloaded_mode).to_be_visible()
+        expect(reloaded_mode).to_have_value("plan")
+
+    def test_unavailable_saved_mode_stays_visible_and_can_be_cleared(self):
+        self.fixture.mode_choices = []
+        chat = self.fixture.app.create_chat(
+            {"cwd": str(self.fixture.project), "model": "fake-small"},
+            window_id="main", window_provider="codex",
+        )
+        with self.fixture.app.store.lock:
+            stored = self.fixture.app.store.get(chat["id"])
+            stored["acp_mode"] = "removed-mode"
+            self.fixture.app.store.save()
+        self.page.evaluate(
+            "id => sessionStorage.setItem('pilferedparrot-dashboard-active-chat', id)",
+            chat["id"],
+        )
+        self.page.reload(wait_until="domcontentloaded")
+        expect(self.page.get_by_role("textbox", name="Message")).to_be_enabled(timeout=5_000)
+        self.page.locator("#modelSelect").dispatch_event("pointerdown")
+        mode = self.page.get_by_role("combobox", name="ACP mode")
+        expect(mode).to_be_visible()
+        expect(mode.locator('option[value="removed-mode"]')).to_contain_text("unavailable")
+        expect(mode).to_have_value("removed-mode")
+        mode.select_option("")
+        expect(self.page.locator("#acpModeControl")).to_be_hidden()
+        with self.fixture.app.store.lock:
+            self.assertNotIn("acp_mode", self.fixture.app.store.get(chat["id"]))
+
+    def test_streamed_acp_answer_diff_preview_and_scoped_permission_choices(self):
+        card = self._send_and_wait_for_permission("browser-e2e-deny")
+        expect(self.page.locator(".acp-streamed-text")).to_contain_text(
+            "working on ",
+        )
+        expect(self.page.locator(".acp-tool-card")).to_contain_text("Prepare browser preview")
+        expect(self.page.locator(".acp-tool-card")).to_contain_text("preview.txt")
+        expect(self.page.locator(".acp-tool-card")).to_contain_text("ACP browser preview")
+        actions = self.page.get_by_role("region", name="Agent actions")
+        expect(actions).to_be_visible()
+        expect(card).to_contain_text("Write allowed.txt")
+        expect(card.locator(".acp-command pre")).to_have_text(PREVIEW_COMMAND)
+        expect(card.locator(".acp-diff")).to_contain_text("allowed.txt")
+        expect(card.locator(".acp-diff")).to_contain_text("approved")
+        expect(card.get_by_role("region", name="File change: allowed.txt")).to_be_visible()
+        expect(card.get_by_role("group", name="Before allowed.txt")).to_contain_text("New file")
+        expect(card.get_by_role("group", name="After allowed.txt")).to_contain_text("approved")
+
+        # A pending permission stays unanswered until the user chooses an option.
+        allowed_path = self.fixture.project / "allowed.txt"
+        self.assertFalse(allowed_path.exists())
+        with self.fixture.app.store.lock:
+            current_chat = next(
+                chat for chat in self.fixture.app.store.data["chats"]
+                if chat.get("window_id") == "main"
+                and any(message.get("pending") for message in chat.get("messages", []))
+            )
+        other_chat = self.fixture.app.create_chat(
+            {"cwd": str(self.fixture.project), "provider": "codex", "model": "fake-small"},
+            window_id="main", window_provider="codex",
+        )
+        other_capability = self.fixture.app.issue_capability(
+            "dashboard", window_id="other", provider="codex",
+        )
+
+        # The wrong window cannot inspect or decide this chat's pending request;
+        # a separate chat has no permission to leak into its permission list.
+        denied = self.page.evaluate(
+            """async ({url, capability, payload}) => {
+              const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-PilferedParrot-Capability': capability,
+                },
+                body: JSON.stringify(payload),
+              });
+              return {status: response.status, body: await response.text()};
+            }""",
+            {
+                "url": f"/api/chats/{current_chat['id']}/permissions",
+                "capability": other_capability,
+                "payload": {"request_id": card.locator("button").first.get_attribute("data-acp-permission"),
+                            "option_id": "yes"},
+            },
+        )
+        self.assertEqual(denied["status"], 404)
+        other_snapshot = self.page.evaluate(
+            """async ({url, capability}) => {
+              const response = await fetch(url, {
+                headers: {'X-PilferedParrot-Capability': capability},
+              });
+              return {status: response.status, body: await response.json()};
+            }""",
+            {
+                "url": f"/api/chats/{other_chat['id']}/permissions",
+                "capability": self.fixture.app.dashboard_capability,
+            },
+        )
+        self.assertEqual(other_snapshot, {"status": 200, "body": {"permissions": []}})
+        expect(card).to_be_visible()
+        self.assertFalse(allowed_path.exists())
+
+        card.get_by_role("button", name="Reject once").click()
+        expect(card).to_have_count(0, timeout=5_000)
+        expect(self.page.locator("article.message.assistant").last).to_contain_text(
+            "working on browser-e2e-deny",
+        )
+        self.assertFalse(allowed_path.exists())
+
+        allow_card = self._send_and_wait_for_permission("browser-e2e-allow")
+        expect(allow_card.locator(".acp-command pre")).to_have_text(PREVIEW_COMMAND)
+        self.assertFalse(allowed_path.exists(), "permission must remain denied until explicit approval")
+        allow_card.get_by_role("button", name="Allow once").click()
+        expect(allow_card).to_have_count(0, timeout=5_000)
+        expect(self.page.locator("article.message.assistant").last).to_contain_text(
+            "working on browser-e2e-allow",
+        )
+        self.assertEqual(allowed_path.read_text(encoding="utf-8"), "changed")
+
+    def test_split_secret_never_reaches_browser_events_or_persisted_chat(self):
+        prompt = "browser-e2e-split"
+        self.page.get_by_role("textbox", name="Message").fill(prompt)
+        self.page.get_by_role("button", name="Send").click()
+        card = self.page.get_by_role("group", name="Permission requested")
+        expect(card).to_be_visible(timeout=8_000)
+        with self.fixture.app.store.lock:
+            chat = next(
+                chat for chat in self.fixture.app.store.data["chats"]
+                if chat.get("window_id") == "main"
+                and any(message.get("pending") for message in chat.get("messages", []))
+            )
+
+        def assert_secret_absent():
+            self.assertNotIn(SPLIT_SECRET, self.page.locator("body").inner_text())
+            work_events = self.fixture.app.events.read_after(chat["id"], 0)
+            chunks = [
+                event for event in work_events if event.get("kind") == "acp_update"
+                and event.get("payload", {}).get("entry", {}).get("update", {}).get(
+                    "sessionUpdate",
+                ) == "agent_message_chunk"
+            ]
+            self.assertEqual(len(chunks), 2, "fake agent must emit exactly two answer chunks")
+            events = json.dumps(
+                work_events, ensure_ascii=False,
+            )
+            self.assertNotIn(SPLIT_SECRET, events)
+            self.fixture.app.store.save()
+            snapshot = Path(self.fixture.config["web"]["chat_store"]).read_text(
+                encoding="utf-8",
+            )
+            self.assertNotIn(SPLIT_SECRET, snapshot)
+
+        assert_secret_absent()
+        card.get_by_role("button", name="Reject once").click()
+        expect(card).to_have_count(0, timeout=5_000)
+        expect(self.page.locator("article.message.assistant").last).to_be_visible()
+        expect(self.page.locator("article.message.assistant").last).to_contain_text(
+            "[redacted]",
+        )
+        assert_secret_absent()
+
+    def test_text_chunk_preserves_prior_dom_and_focus_then_completion_reconciles(self):
+        card = self._send_and_wait_for_permission("browser-e2e-deny")
+        self.page.evaluate("""() => {
+          const prior = document.querySelector('article.message.user');
+          const pending = document.querySelector('article.message.assistant .acp-streamed-text');
+          const focus = document.createElement('button');
+          focus.type = 'button';
+          focus.textContent = 'Keep focus';
+          prior.append(focus);
+          focus.focus();
+          window.acpDomProbe = {prior, pending, focus};
+          const chat = state.chats.find(item => item.id === state.activeId);
+          const message = chat.messages.find(item => item.pending);
+          applyAcpUpdate({chatId: chat.id}, {
+            message_id: message.id,
+            entry: {
+              id: 'browser-incremental-text-probe',
+              update: {sessionUpdate: 'agent_message_chunk',
+                       streamed_text: 'Updated <img src=x onerror=alert(1)> text'},
+            },
+          });
+        }""")
+        expect(self.page.locator(".acp-streamed-content")).to_have_text(
+            "Updated <img src=x onerror=alert(1)> text",
+        )
+        self.assertTrue(self.page.evaluate("""() => {
+          const {prior, pending, focus} = window.acpDomProbe;
+          return prior === document.querySelector('article.message.user')
+            && pending === document.querySelector('article.message.assistant .acp-streamed-text')
+            && document.activeElement === focus;
+        }"""))
+        self.assertEqual(self.page.locator(".acp-streamed-text img").count(), 0)
+        self.assertEqual(self.page.locator(".acp-streamed-text").get_attribute("aria-live"), "off")
+
+        self.page.evaluate("""() => {
+          const chat = state.chats.find(item => item.id === state.activeId);
+          const message = chat.messages.find(item => item.pending);
+          applyAcpUpdate({chatId: chat.id}, {
+            message_id: message.id,
+            entry: {
+              id: 'browser-incremental-tool-probe',
+              update: {sessionUpdate: 'tool_call', toolCallId: 'browser-probe',
+                       title: 'New tool after chunk', status: 'pending'},
+            },
+          });
+        }""")
+        expect(self.page.locator(".acp-tool-card").filter(has_text="New tool after chunk")).to_have_count(1)
+        self.assertFalse(self.page.evaluate(
+            "window.acpDomProbe.prior === document.querySelector('article.message.user')",
+        ), "tool updates should use the full render fallback")
+
+        card.get_by_role("button", name="Reject once").click()
+        expect(card).to_have_count(0, timeout=5_000)
+        expect(self.page.locator("article.message.assistant").last).to_contain_text(
+            "working on browser-e2e-deny",
+        )
+        self.assertEqual(self.page.locator(".acp-streamed-text").count(), 0)
+        self.assertNotIn("Updated <img", self.page.locator("#messages").inner_text())
+
+    def test_mobile_permission_choice_scrolls_above_fixed_composer(self):
+        self.page.set_viewport_size({"width": 390, "height": 844})
+        card = self._send_and_wait_for_permission("browser-e2e-deny")
+        conversation = self.page.locator("#conversation")
+        scroll_state = conversation.evaluate(
+            "node => ({height: node.clientHeight, content: node.scrollHeight})",
+        )
+        self.assertGreater(scroll_state["content"], scroll_state["height"])
+        conversation.evaluate("node => { node.scrollTop = node.scrollHeight; }")
+        reject = card.get_by_role("button", name="Reject once")
+        reject.scroll_into_view_if_needed()
+        geometry = reject.evaluate("""node => {
+          const button = node.getBoundingClientRect();
+          const composer = document.querySelector('.composer-wrap').getBoundingClientRect();
+          return {buttonBottom: button.bottom, composerTop: composer.top};
+        }""")
+        self.assertLessEqual(geometry["buttonBottom"], geometry["composerTop"])
+        with self.page.expect_response(
+            re.compile(r"/api/chats/[^/]+/permissions$")
+        ) as decision:
+            reject.click()
+        self.assertEqual(decision.value.status, 200)
+        expect(card).to_have_count(0, timeout=5_000)
+
+
+if __name__ == "__main__":
+    unittest.main()

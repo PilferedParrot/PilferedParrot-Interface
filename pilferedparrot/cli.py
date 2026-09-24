@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from datetime import datetime
@@ -14,6 +15,31 @@ from .dispatch import dispatch
 from .ledger import append_run
 from .model import AUTH_SIGNED_IN, USAGE_AVAILABLE, Conversation, PROVIDERS, ProviderBudget
 from .qwen import ensure_qwen
+
+
+FEEDBACK_CATEGORIES = ("usage", "problems", "preferences", "local_changes")
+
+
+def _feedback_store(config: dict[str, Any]):
+    """Create the opt-in store without allowing telemetry to affect the CLI."""
+    try:
+        from .feedback import FeedbackStore
+        return FeedbackStore.from_config(config)
+    except Exception:
+        return None
+
+
+def _feedback_call(store: Any, method: str, *args: Any, **kwargs: Any) -> Any:
+    if store is None:
+        raise SystemExit("feedback store is unavailable; no settings were changed")
+    try:
+        return getattr(store, method)(*args, **kwargs)
+    except Exception as exc:
+        raise SystemExit(f"feedback error: {exc}") from exc
+
+
+def _print_feedback(value: Any) -> None:
+    print(json.dumps(value, indent=2, sort_keys=True))
 
 
 def budget_text(budget: ProviderBudget) -> str:
@@ -58,10 +84,36 @@ def run_prompt(
     conversation: Conversation,
     config: dict[str, Any],
 ) -> int:
-    if provider == "qwen":
-        ensure_qwen(config)
-    print(f"→ {provider}")
-    exit_code = dispatch(provider, prompt, cwd, conversation, config)
+    feedback = _feedback_store(config)
+    try:
+        if feedback is not None:
+            feedback.record("usage", "message_sent", "cli")
+    except Exception:
+        pass
+    try:
+        if provider == "qwen":
+            ensure_qwen(config)
+        print(f"→ {provider}")
+        exit_code = dispatch(provider, prompt, cwd, conversation, config)
+        if exit_code:
+            try:
+                if feedback is not None:
+                    feedback.record("problems", "provider_failed", "cli")
+            except Exception:
+                pass
+    except Exception:
+        try:
+            if feedback is not None:
+                feedback.record("problems", "provider_failed", "cli")
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            if feedback is not None:
+                feedback.close()
+        except Exception:
+            pass
     append_run(
         config["ledger"], provider=provider, prompt=prompt, cwd=cwd,
         session_id=conversation.provider_session_id, budgets={}, exit_code=exit_code,
@@ -80,6 +132,9 @@ HELP = """Commands:
   /status           show the working directory and provider
   /help             show this help
   /quit             exit
+
+Feedback is opt-in and local. Use `pilferedparrot feedback --help` for
+consent, aggregate usage, and inspectable reports.
 """
 
 
@@ -134,9 +189,32 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
     gui = sub.add_parser("gui", help="start the browser interface")
     gui.add_argument("--no-browser", action="store_true")
+    gui.add_argument("--sqlite-state", type=Path,
+                     help="explicit POSIX SQLite authority; requires a stopped app")
     gui.add_argument("--window-closed", metavar="URL", help=argparse.SUPPRESS)
     sub.add_parser("repl", help="start the terminal interface")
     sub.add_parser("budget", help="show local status and Codex included usage")
+    feedback = sub.add_parser(
+        "feedback", help="manage optional local feedback (default: status)",
+        description="""Policy 1: all choices start off. Usage counts actions; problems counts
+        provider/request failures and cancellations; preferences counts appearance and notification
+        choices; local_changes compares listed shipped sources only when you request a report.
+        Counts stay local for up to 30 days of use. No prompts, responses, paths, model names,
+        credentials, diffs or persistent IDs enter automatic reports. Reports are previewable JSON
+        for manual sharing; nothing is uploaded. Disable a category to delete its counts.
+        See docs/feedback.md for the complete policy.""",
+    )
+    feedback_sub = feedback.add_subparsers(dest="feedback_command")
+    feedback_sub.add_parser("status", help="show feedback consent and local status")
+    enable = feedback_sub.add_parser("enable", help="enable one feedback category")
+    enable.add_argument("category", choices=FEEDBACK_CATEGORIES)
+    enable.add_argument("--accept-policy", action="store_true", required=True,
+                        help="affirm acceptance of feedback policy 1")
+    disable = feedback_sub.add_parser("disable", help="disable one feedback category")
+    disable.add_argument("category", choices=FEEDBACK_CATEGORIES)
+    feedback_sub.add_parser("clear", help="clear locally stored feedback")
+    feedback_sub.add_parser("off", help="revoke all feedback consent and clear local data")
+    feedback_sub.add_parser("report", help="print an inspectable local JSON report")
     run = sub.add_parser("run", help="send one prompt directly to a provider")
     run.add_argument("--provider", choices=PROVIDERS, default="codex")
     run.add_argument("prompt", nargs="+")
@@ -156,11 +234,39 @@ def main(argv: list[str] | None = None) -> int:
     if args.command in (None, "gui"):
         from .web import serve
         no_browser = bool(getattr(args, "no_browser", False))
-        return serve(config, cwd, open_browser=not no_browser)
+        return serve(config, cwd, open_browser=not no_browser,
+                     sqlite_state_path=getattr(args, "sqlite_state", None))
     if args.command == "repl":
         return repl(config, cwd)
     if args.command == "budget":
         show_budgets(collect_budgets(config))
+        return 0
+    if args.command == "feedback":
+        store = _feedback_store(config)
+        command = args.feedback_command or "status"
+        try:
+            if command == "status":
+                _print_feedback(_feedback_call(store, "status"))
+            elif command == "enable":
+                _print_feedback(_feedback_call(store, "set_consent", {
+                    "policy_version": 1, "category": args.category, "enabled": True,
+                }))
+            elif command == "disable":
+                _print_feedback(_feedback_call(store, "set_consent", {
+                    "policy_version": 1, "category": args.category, "enabled": False,
+                }))
+            elif command == "clear":
+                _print_feedback(_feedback_call(store, "clear"))
+            elif command == "off":
+                _print_feedback(_feedback_call(store, "clear", reset=True))
+            else:
+                _print_feedback(_feedback_call(store, "report"))
+        finally:
+            if store is not None:
+                try:
+                    store.close()
+                except Exception:
+                    pass
         return 0
     prompt = " ".join(args.prompt)
     return run_prompt(prompt, args.provider, cwd, Conversation(provider=args.provider), config)

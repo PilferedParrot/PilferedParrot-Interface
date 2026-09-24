@@ -1,0 +1,10 @@
+{
+  "name": "pilferedparrot-acp-adapters",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned ACP adapter runtime installed only by an explicit PPI action",
+  "dependencies": {
+    "@agentclientprotocol/codex-acp": "1.13.1",
+    "@agentclientprotocol/claude-agent-acp": "0.81.1"
+  }
+}

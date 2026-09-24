@@ -25,14 +25,19 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlparse
 from urllib.request import urlopen
 
+from . import skills as skill_discovery
 
 ASSET_ROOT = Path(__file__).resolve().parent / "web_assets"
 RUNTIME_ROOT = Path(__file__).resolve().parent
 ASSET_NAMES = (
     "index.html", "chat.html", "app.css", "expanded-content.css", "code-actions.css", "markdown.js", "usage.js", "code-actions.js", "expanded-content.js", "identity.js", "provider-updates.js", "app.js", "chat.js", "icon.svg",
-    "pilferedparrot-icon.png", "company-logo.png", "company-logo-dark.png", "whiteboard-ui.js", "appearance.js", "appearance-sync.js",
+    "pilferedparrot-icon.png", "company-logo.png", "company-logo-dark.png", "whiteboard-ui.js", "appearance.js", "appearance-sync.js", "feedback.js",
 )
-API_GENERATION = 23
+API_GENERATION = 24
+
+
+class EngineSwitchConflict(RuntimeError):
+    """A provider run must finish before its engine can change."""
 
 
 class ServerApp(Protocol):
@@ -41,25 +46,51 @@ class ServerApp(Protocol):
     dashboard_capability: str
 
     def capability_context(self, supplied: str) -> dict[str, str] | None: ...
-    def state(self, scope: str, *, window_id: str, window_provider: str | None) -> Any: ...
+    def state(
+        self, scope: str, *, window_id: str, window_provider: str | None,
+        compact: bool = False,
+    ) -> Any: ...
     def cleanup_stale_sessions(self, *, protected_window_ids: tuple[str, ...] = (), protected_chat_ids: tuple[str, ...] = ()) -> int: ...
     def chat_state(self, chat_id: str, *, window_id: str) -> Any: ...
+    def observed_files_summary(self, chat_id: str, message_id: str, *, window_id: str) -> Any: ...
+    def work_permissions(self, chat_id: str, *, window_id: str) -> Any: ...
+    def decide_work_permission(self, chat_id: str, payload: dict[str, Any], *, window_id: str) -> Any: ...
+    def work_event_batch(
+        self, chat_id: str, after: int, *, epoch: str | None,
+        window_id: str, timeout: float = 10,
+    ) -> list[dict[str, Any]]: ...
+    def work_event_epoch(self) -> str: ...
+    def work_event_closed(self) -> bool: ...
     def current_chat_state(self) -> Any: ...
     def budgets(self) -> dict[str, Any]: ...
-    def poll_provider_models(self, provider: str) -> Any: ...
+    def poll_provider_models(
+        self, provider: str, *, model: str | None = None,
+        window_id: str = "main", window_provider: str | None = None,
+        scope: str = "dashboard",
+    ) -> Any: ...
     def provider_update(self, provider: str) -> Any: ...
+    def acp_setup(self, *, provider: str | None = None) -> Any: ...
+    def install_acp_adapters(self, *, provider: str | None = None) -> Any: ...
+    def set_acp_engine(self, provider: str, engine: str, *, visible_provider: str | None = None) -> Any: ...
+    def gpu_snapshot(self) -> Any: ...
     def native_window_action(self, window_id: str, payload: dict[str, Any]) -> Any: ...
     def browser_theme(self) -> Any: ...
     def chrome_theme_background(self, *, theme_version: str | None = None) -> tuple[bytes, str] | None: ...
     def chrome_theme_image(self, image_key: str, *, theme_version: str | None = None) -> tuple[bytes, str] | None: ...
-    def whiteboard_read(self) -> Any: ...
+    def whiteboard_read(self, filters: dict[str, Any] | None = None) -> Any: ...
     def whiteboard_post(self, payload: dict[str, Any]) -> Any: ...
     def set_draft(self, chat_id: str, payload: dict[str, Any], *, window_id: str) -> Any: ...
     def create_chat(self, payload: dict[str, Any], *, window_id: str, window_provider: str | None) -> Any: ...
+    def select_project(self, payload: dict[str, Any], *, window_id: str, window_provider: str | None) -> Any: ...
+    def pin_project(self, payload: dict[str, Any], *, window_id: str, window_provider: str | None) -> Any: ...
     def add_provider(self, payload: dict[str, Any]) -> Any: ...
     def remove_provider(self, payload: dict[str, Any]) -> None: ...
     def set_provider_preferences(self, payload: dict[str, Any], *, window_provider: str | None) -> Any: ...
     def set_notification_preferences(self, payload: dict[str, Any]) -> Any: ...
+    def feedback_status(self) -> Any: ...
+    def feedback_action(self, action: str, payload: dict[str, Any]) -> Any: ...
+    def feedback_snapshot(self) -> dict[str, str]: ...
+    def record_feedback(self, category: str, event: str, surface: str, consent: dict[str, str] | None = None) -> None: ...
     def appearance_preferences(self) -> Any: ...
     def set_appearance_preferences(self, payload: dict[str, Any]) -> Any: ...
     def choose_project_directory(self, payload: dict[str, Any], provider: str) -> Any: ...
@@ -81,6 +112,7 @@ class ServerApp(Protocol):
     def harness_action(self, chat_id: str, payload: dict[str, Any], *, window_id: str, window_provider: str | None) -> Any: ...
     def set_context_window(self, chat_id: str, payload: dict[str, Any], *, window_id: str) -> Any: ...
     def set_reasoning_effort(self, chat_id: str, payload: dict[str, Any], *, window_id: str) -> Any: ...
+    def set_acp_mode(self, chat_id: str, payload: dict[str, Any], *, window_id: str) -> Any: ...
     def activate_chat(self, chat_id: str, *, window_id: str) -> Any: ...
     def cancel_message(self, chat_id: str, *, window_id: str) -> Any: ...
     def launch_terminal_command(self, chat_id: str, payload: dict[str, Any], *, window_id: str) -> None: ...
@@ -219,6 +251,44 @@ def make_handler(
     thread_factory: Callable[..., Any] = threading.Thread,
 ) -> type[BaseHTTPRequestHandler]:
     """Adapt the application protocol to HTTP without application imports."""
+    def snapshot() -> dict[str, str]:
+        try:
+            return app.feedback_snapshot()
+        except Exception:
+            return {}
+
+    def record(category: str, event: str, scope: str, consent: dict[str, str]) -> None:
+        # Only fixed vocabulary crosses the telemetry boundary. Optional feedback
+        # must never change HTTP responses, provider behavior or request timing.
+        try:
+            app.record_feedback(category, event, "chat" if scope == "chat" else "work", consent)
+        except Exception:
+            pass
+
+    def record_action(path: str, payload: dict[str, Any], scope: str, consent: dict[str, str]) -> None:
+        event = {
+            "/api/chats": "new_session", "/api/chat/reset": "new_session",
+            "/api/chat/messages": "message_sent", "/api/chat/model": "model_changed",
+            "/api/chat/reasoning": "reasoning_changed", "/api/chat/context": "context_changed",
+            "/api/preferences/provider": "model_changed",
+        }.get(path)
+        if re.fullmatch(r"/api/chats/[^/]+/(messages|context|reasoning|commands)", path):
+            event = {"messages": "message_sent", "context": "context_changed",
+                     "reasoning": "reasoning_changed", "commands": "command_run"}[path.rsplit("/", 1)[1]]
+        if event:
+            record("usage", event, scope, consent)
+        if path == "/api/preferences/appearance":
+            for key, options in {"tone": {"original", "darker"},
+                                 "surface": {"minimal", "balanced", "maximal"},
+                                 "readability": {"standard", "stronger"}}.items():
+                value = payload.get(key)
+                if isinstance(value, str) and value in options:
+                    record("preferences", key + "_" + value, scope, consent)
+        elif path == "/api/preferences/notifications":
+            value = payload.get("decision")
+            if isinstance(value, str) and value in {"granted", "denied", "dismissed", "unavailable", "unasked"}:
+                record("preferences", "notifications_" + value, scope, consent)
+
     # Keep the frontend and API on the same generation. During development or
     # an in-place update, rereading assets from disk would let an old process
     # serve new JavaScript that calls routes the process does not have yet.
@@ -407,6 +477,75 @@ def make_handler(
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
+        def _stream_work_events(
+            self, chat_id: str, *, window_id: str, after: int, epoch: str | None,
+        ) -> None:
+            def authorized() -> bool:
+                context = self._request_capability_context()
+                return context is not None and context.get("scope") == "dashboard" and (
+                    context.get("history_id") or context.get("window_id") or "main"
+                ) == window_id
+
+            try:
+                first = app.work_event_batch(
+                    chat_id, after, epoch=epoch, window_id=window_id, timeout=0,
+                )
+            except KeyError:
+                self._json({"error": "work session not found"}, HTTPStatus.NOT_FOUND)
+                return
+            if app.work_event_closed():
+                self._json({"error": "event stream is closed"}, HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            current_epoch = app.work_event_epoch()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+            self.close_connection = True
+            cursor = after
+            deadline = time.monotonic() + 30
+            try:
+                hello = json.dumps({"epoch": current_epoch}, separators=(",", ":"))
+                self.wfile.write(f"event: hello\ndata: {hello}\n\n".encode("utf-8"))
+                self.wfile.flush()
+                batch: list[dict[str, Any]] | None = first
+                while time.monotonic() < deadline:
+                    if not authorized():
+                        return
+                    if batch is None:
+                        try:
+                            batch = app.work_event_batch(
+                                chat_id, cursor, epoch=current_epoch, window_id=window_id,
+                                timeout=min(10, max(0, deadline - time.monotonic())),
+                            )
+                        except KeyError:
+                            return
+                    if not authorized():
+                        return
+                    if not batch:
+                        if app.work_event_closed():
+                            return
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                        batch = None
+                        continue
+                    for item in batch:
+                        cursor = item["seq"]
+                        data = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+                        self.wfile.write(
+                            f"id: {cursor}\nevent: {item['kind']}\ndata: {data}\n\n".encode("utf-8"),
+                        )
+                        self.wfile.flush()
+                        if item["kind"] == "completed":
+                            return
+                    batch = None
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+
         def _do_GET(self) -> None:
             path = urlparse(self.path).path
             if path.startswith("/api/") and not self._local_request_allowed():
@@ -426,6 +565,8 @@ def make_handler(
                 self._asset("app.js", "text/javascript; charset=utf-8")
             elif path == "/usage.js":
                 self._asset("usage.js", "text/javascript; charset=utf-8")
+            elif path == "/feedback.js":
+                self._asset("feedback.js", "text/javascript; charset=utf-8")
             elif path == "/appearance-sync.js":
                 self._asset("appearance-sync.js", "text/javascript; charset=utf-8")
             elif path == "/appearance.js":
@@ -463,30 +604,111 @@ def make_handler(
                     "asset_version": asset_version,
                     "runtime_version": runtime_version,
                 })
+            elif path == "/api/acp/setup":
+                context = self._request_capability_context()
+                if context is None or context.get("scope") != "dashboard":
+                    self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
+                else:
+                    provider = context.get("provider") if context.get("window_id") != "main" else None
+                    if provider is not None and provider not in {"codex", "claude"}:
+                        self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
+                    else:
+                        self._json(app.acp_setup(provider=provider))
+            elif path == "/api/hardware/gpus":
+                if self._request_capability_scope() != "dashboard":
+                    self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
+                else:
+                    self._json(app.gpu_snapshot())
+            elif path == "/api/skills/status":
+                if self._request_capability_scope() != "dashboard":
+                    self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
+                else:
+                    self._json(skill_discovery.discovery_status(app.config))
             elif path == "/api/state":
                 context = self._request_capability_context()
                 if context is None:
                     self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
                 else:
-                    self._json(app.state(
-                        context["scope"],
+                    compact = parse_qs(
+                        urlparse(self.path).query, keep_blank_values=True,
+                    ).get("compact") == ["1"]
+                    state_kwargs = {
+                        "window_id": context.get("history_id") or context.get("window_id") or "main",
+                        "window_provider": context.get("provider") or None,
+                    }
+                    if compact:
+                        state_kwargs["compact"] = True
+                    self._json(app.state(context["scope"], **state_kwargs))
+            elif re.fullmatch(r"/api/chats/[^/]+/events", path):
+                context = self._request_capability_context()
+                if context is None or context.get("scope") != "dashboard":
+                    self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
+                else:
+                    query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+                    values = query.get("after", ["0"])
+                    if len(values) != 1 or not re.fullmatch(r"[0-9]{1,18}", values[0]):
+                        raise ValueError("invalid event cursor")
+                    epochs = query.get("epoch", [])
+                    if len(epochs) > 1 or (epochs and not re.fullmatch(r"[0-9a-f]{32}", epochs[0])):
+                        raise ValueError("invalid event epoch")
+                    if int(values[0]) > 0 and not epochs:
+                        raise ValueError("event epoch is required with a cursor")
+                    self._stream_work_events(
+                        path.split("/")[3],
                         window_id=context.get("history_id") or context.get("window_id") or "main",
-                        window_provider=context.get("provider") or None,
-                    ))
+                        after=int(values[0]), epoch=epochs[0] if epochs else None,
+                    )
+            elif re.fullmatch(r"/api/chats/[^/]+/permissions", path):
+                context = self._request_capability_context()
+                if context is None or context.get("scope") != "dashboard":
+                    self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
+                else:
+                    try:
+                        self._json(app.work_permissions(
+                            path.split("/")[3],
+                            window_id=context.get("history_id") or context.get("window_id") or "main",
+                        ))
+                    except KeyError:
+                        self._json({"error": "work session not found"}, HTTPStatus.NOT_FOUND)
+            elif re.fullmatch(r"/api/chats/[^/]+/observed-files/[^/]+", path):
+                context = self._request_capability_context()
+                if context is None or context.get("scope") != "dashboard":
+                    self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
+                else:
+                    parts = path.split("/")
+                    try:
+                        self._json(app.observed_files_summary(
+                            parts[3], parts[5],
+                            window_id=context.get("history_id") or context.get("window_id") or "main",
+                        ))
+                    except PermissionError:
+                        self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
+                    except KeyError:
+                        self._json({"error": "observation not found"}, HTTPStatus.NOT_FOUND)
             elif re.fullmatch(r"/api/chats/[^/]+", path):
                 context = self._request_capability_context()
                 if context is None or context.get("scope") != "dashboard":
                     self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
                 else:
-                    self._json(app.chat_state(
-                        path.rsplit("/", 1)[1],
-                        window_id=context.get("history_id") or context.get("window_id") or "main",
-                    ))
+                    try:
+                        payload = app.chat_state(
+                            path.rsplit("/", 1)[1],
+                            window_id=context.get("history_id") or context.get("window_id") or "main",
+                        )
+                    except KeyError:
+                        self._json({"error": "work session not found"}, HTTPStatus.NOT_FOUND)
+                    else:
+                        self._json(payload)
             elif path == "/api/chat/current":
                 if self._request_capability_scope() != "chat":
                     self._json({"error": "Chat authorization failed"}, HTTPStatus.FORBIDDEN)
                 else:
                     self._json(app.current_chat_state())
+            elif path == "/api/feedback":
+                if self._request_capability_scope() not in {"dashboard", "chat"}:
+                    self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
+                else:
+                    self._json(app.feedback_status())
             elif path == "/api/preferences/appearance":
                 if self._request_capability_scope() not in {"dashboard", "chat"}:
                     self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
@@ -501,13 +723,38 @@ def make_handler(
                                 if context["scope"] == "dashboard" or name == context.get("provider")})
             elif re.fullmatch(r"/api/providers/[^/]+/models", path):
                 provider = path.split("/")[3]
-                scope = self._request_capability_scope()
-                context = self._request_capability_context() if scope == "chat" else None
-                if scope not in {"dashboard", "chat"} or scope == "chat" \
-                        and (context is None or context.get("provider") != provider):
-                    self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
+                engine = app.config.get(provider, {}).get("engine")
+                if provider in {"codex", "claude"} and engine == "acp":
+                    context = self._request_capability_context()
+                    scope = context.get("scope") if context else None
+                    own_chat = scope == "chat" and context.get("provider") == provider
+                    own_dashboard = scope == "dashboard" and (
+                        context.get("window_id") == "main"
+                        or context.get("provider") == provider
+                    )
+                    if not own_chat and not own_dashboard:
+                        self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
+                    elif own_chat:
+                        self._json(app.poll_provider_models(provider, scope="chat"))
+                    else:
+                        query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+                        selected = query.get("model")
+                        if selected is not None and len(selected) != 1:
+                            raise ValueError("model must be specified once")
+                        self._json(app.poll_provider_models(
+                            provider, model=selected[0] if selected else None,
+                            window_id=context.get("history_id") or context.get("window_id") or "main",
+                            window_provider=context.get("provider"),
+                            scope=context["scope"],
+                        ))
                 else:
-                    self._json(app.poll_provider_models(provider))
+                    scope = self._request_capability_scope()
+                    context = self._request_capability_context() if scope == "chat" else None
+                    if scope not in {"dashboard", "chat"} or scope == "chat" \
+                            and (context is None or context.get("provider") != provider):
+                        self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
+                    else:
+                        self._json(app.poll_provider_models(provider))
             elif re.fullmatch(r"/api/providers/[^/]+/update", path):
                 provider = path.split("/")[3]
                 context = self._request_capability_context()
@@ -520,7 +767,14 @@ def make_handler(
                 if self._request_capability_scope() != "dashboard":
                     self._json({"error": "dashboard authorization failed"}, HTTPStatus.FORBIDDEN)
                 else:
-                    self._json(app.whiteboard_read())
+                    values = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+                    allowed = {"limit", "since", "query", "project", "topic", "kind", "status", "thread", "before"}
+                    if set(values) - allowed or any(len(items) != 1 for items in values.values()):
+                        raise ValueError("unsupported or repeated whiteboard filter")
+                    filters = {key: items[0] for key, items in values.items() if items[0]}
+                    consent = snapshot()
+                    self._json(app.whiteboard_read(filters) if filters else app.whiteboard_read())
+                    record("usage", "whiteboard_opened", "dashboard", consent)
             elif path.startswith("/api/browser/theme/image/"):
                 if self._request_capability_scope() not in {"dashboard", "chat"}:
                     self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
@@ -575,7 +829,9 @@ def make_handler(
                 chat_control = path.startswith("/api/chat/") and path != "/api/chat/window"
                 native_control = path == "/api/window/native"
                 appearance_control = path == "/api/preferences/appearance"
-                if native_control or appearance_control:
+                feedback_control = path in {"/api/feedback/consent", "/api/feedback/clear",
+                                            "/api/feedback/reset", "/api/feedback/report"}
+                if native_control or appearance_control or feedback_control:
                     context = self._request_capability_context(require_origin=True)
                     authorized = context is not None \
                         and context.get("scope") in {"dashboard", "chat"}
@@ -592,10 +848,43 @@ def make_handler(
                 window_provider = context.get("provider") or None
                 parts = path.strip("/").split("/")
                 payload = self._read_json()
-                if path == "/api/chats":
+                # Capture the permission in force before executing the action.
+                # Post-response recording must not backfill pre-consent actions.
+                feedback_consent = snapshot() if not feedback_control else {}
+                if feedback_control:
+                    self._json(app.feedback_action(parts[-1], payload))
+                elif path == "/api/acp/install":
+                    provider = window_provider if lifecycle_window_id != "main" else None
+                    if provider is not None and provider not in {"codex", "claude"}:
+                        self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
+                    else:
+                        self._json(app.install_acp_adapters(provider=provider))
+                elif path == "/api/skills/discover":
+                    self._json({"skills": skill_discovery.discover(app.config)})
+                elif len(parts) == 5 and parts[:3] == ["api", "acp", "providers"] \
+                        and parts[4] == "engine":
+                    provider = parts[3]
+                    if provider not in {"codex", "claude"}:
+                        raise ValueError("unsupported ACP provider")
+                    if lifecycle_window_id != "main" and window_provider != provider:
+                        self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
+                    else:
+                        self._json(app.set_acp_engine(
+                            provider, payload.get("engine"),
+                            visible_provider=window_provider if lifecycle_window_id != "main" else None,
+                        ))
+                elif path == "/api/chats":
                     self._json(app.create_chat(
                         payload, window_id=window_id, window_provider=window_provider,
                     ), HTTPStatus.CREATED)
+                elif path == "/api/projects/select":
+                    self._json(app.select_project(
+                        payload, window_id=window_id, window_provider=window_provider,
+                    ))
+                elif path == "/api/projects/pin":
+                    self._json(app.pin_project(
+                        payload, window_id=window_id, window_provider=window_provider,
+                    ))
                 elif path == "/api/whiteboard":
                     self._json(app.whiteboard_post(payload), HTTPStatus.CREATED)
                 elif path == "/api/providers":
@@ -696,12 +985,20 @@ def make_handler(
                         parts[2], payload, window_id=window_id,
                         window_provider=window_provider,
                     ), HTTPStatus.ACCEPTED)
+                elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "permissions":
+                    self._json(app.decide_work_permission(
+                        parts[2], payload, window_id=window_id,
+                    ))
                 elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "context":
                     self._json(app.set_context_window(
                         parts[2], payload, window_id=window_id,
                     ))
                 elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "reasoning":
                     self._json(app.set_reasoning_effort(
+                        parts[2], payload, window_id=window_id,
+                    ))
+                elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "acp-mode":
+                    self._json(app.set_acp_mode(
                         parts[2], payload, window_id=window_id,
                     ))
                 elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "activate":
@@ -719,11 +1016,16 @@ def make_handler(
                     ), HTTPStatus.ACCEPTED)
                 else:
                     self.send_error(HTTPStatus.NOT_FOUND)
+                record_action(path, payload, context["scope"], feedback_consent)
             except KeyError:
                 self._json({"error": "work session not found"}, HTTPStatus.NOT_FOUND)
             except (ValueError, json.JSONDecodeError) as exc:
                 self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except EngineSwitchConflict as exc:
+                self._json({"error": str(exc)}, HTTPStatus.CONFLICT)
             except Exception as exc:
+                if locals().get("authorized") and not locals().get("feedback_control"):
+                    record("problems", "request_failed", context["scope"], locals().get("feedback_consent", {}))
                 print(f"[web] request failed: {type(exc).__name__}: {exc}")
                 self._json({"error": f"PilferedParrot error: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
@@ -767,6 +1069,7 @@ def serve(
     http_server: Callable[..., Any] = BrowserHTTPServer,
     ipv6_http_server: Callable[..., Any] = IPv6ThreadingHTTPServer,
     timer_factory: Callable[..., Any] = threading.Timer,
+    require_fresh: bool = False,
 ) -> int:
     web = config["web"]
     host, port = str(web["host"]), int(web["port"])
@@ -779,6 +1082,9 @@ def serve(
         web.get("open_browser", True) if open_browser is None else open_browser
     )
     current = status(url) if port != 0 else "unavailable"
+
+    if require_fresh and current != "unavailable":
+        raise RuntimeError("SQLite start requires the previous app to be stopped")
 
     def attach() -> int:
         print(f"PilferedParrot is already running at {url}")
@@ -806,6 +1112,9 @@ def serve(
             url = f"http://{web_authority(host, server.server_address[1])}"
     except OSError as error:
         current = status(url)
+        if require_fresh:
+            app.shutdown()
+            raise RuntimeError("SQLite start requires an unused app port") from error
         if error.errno != errno.EADDRINUSE or current == "other":
             raise
         if current == "stale":

@@ -76,6 +76,11 @@ An exit code of zero means that a provider run completed. It is not independent
 evidence that a change satisfies the user's request. The application does not
 run a generic acceptance check because such a check is task-specific.
 
+The explicitly requested [continuation rule](continuation.md) now asks agents to check
+the full user objective before ending and leave a next-session prompt for unfinished
+work. It is delivered on each dispatched turn, including resumes, and uses existing
+replies and whiteboard posting. It does not classify completion or add a review loop.
+
 There is no automatic retry or backoff for ordinary Work or Chat. A generic retry
 could rerun an editing task after an ambiguous provider failure and duplicate a
 change. Interrupted work remains visible as retryable, leaving the user in
@@ -95,7 +100,8 @@ experience using automatically available local results such as selected
 provider/model, elapsed time, completion state, and reported tokens where
 available. It must not silently choose a provider or model, add a second
 reviewer, automatically retry, create a recursive agent loop, or wrap every
-prompt in policy text.
+prompt in unrelated policy text. The bounded continuation rule above is the explicit
+exception for preserving unfinished work.
 
 Evaluate any proposed change with small, representative fixture tasks before
 optimizing. Give each task a clear acceptance check, use comparable conditions,
