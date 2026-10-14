@@ -31,7 +31,7 @@ MANIFEST_DIR = Path(__file__).resolve().parent.parent / "packaging" / "acp-adapt
 _ACTIVE = "active.json"
 _MARKER = "installed.json"
 _INSTALL_ID = re.compile(r"[a-z0-9-]{1,80}")
-_LOCK_SHA256 = "42161dce0e6ad0a9bee2e1b99ad8c486547efcc724eb52c7d4e9aae28abb1cf2"
+_LOCK_SHA256 = "66c85961387654dbfed7042c2d08c987d475f65f1e1d8d077591f2e9eafc0ac0"
 
 
 @dataclass(frozen=True)
