@@ -7,14 +7,18 @@ contract. The current implementation has these integration paths:
 | --- | --- | --- | --- |
 | OpenAI Codex | Local Codex CLI | CLI session resume | Install and authenticate the CLI |
 | Anthropic Claude | Local Claude Code CLI | CLI session resume | Install and authenticate the CLI |
-| Google Antigravity | Local Antigravity CLI (`agy`) | Exact conversation ID resume | Update and authenticate the CLI; Work only |
-| Google Gemini | Local Gemini CLI | CLI session resume | Install and authenticate the CLI |
+| Google Gemini | Local Gemini CLI | CLI session resume | Install the CLI; Gemini API key or Vertex AI only |
 | Local LLM | OpenAI-compatible HTTP endpoint | Locally stored message history | Start a compatible model server |
 | Additional providers | OpenAI-compatible HTTP endpoint | Locally stored message history | Add a provider card and configure its credential environment variable |
 
-The Add provider form includes xAI/Grok, OpenRouter, Google AI Studio/Gemini API, Mistral/Devstral,
-LM Studio, Ollama,
-and a custom connection template.
+The Add provider form includes Google AI Studio/Gemini API, OpenRouter, Mistral/Devstral,
+LM Studio, Ollama, and a custom connection template.
+
+PPI 0.8.2 and earlier also shipped a Google Antigravity CLI adapter and an xAI/Grok template.
+Both were removed, for provider terms and by the owner's choice: Google's Antigravity FAQ says
+wrapping `agy` in third-party applications "is not supported under consumer plans". Settings
+saved by an earlier release that name either one still load, and PPI falls back to another
+provider.
 
 ## Platform status
 
@@ -39,44 +43,55 @@ service. PPI uses native CLI authentication only through its supported CLI integ
 cards require the credentials issued for the endpoint you choose. It never extracts editor
 tokens or routes requests through undocumented subscription endpoints.
 
-Google ended consumer Google-login access to Gemini CLI on June 18, 2026; its notice says
-Code Assist Standard and Enterprise access continues. PPI leaves Gemini CLI available for
-supported authentication methods and checks account access when a request runs. An installed
-CLI or cached credential file is not reported as a verified login. See
-[Google's deprecation notice](https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals).
+### Gemini CLI: API key or Vertex AI only
+
+Google ended consumer Google sign-in for Gemini CLI on June 18, 2026
+([deprecation notice](https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals)).
+Gemini CLI's terms bar third-party software from using its OAuth, and its FAQ names "a Vertex AI
+or Google AI Studio API key" as "the supported and secure method" for third-party agents. PPI
+therefore runs Gemini CLI only with a key:
+
+- **Gemini API key** (default): set `GEMINI_API_KEY` in the environment that launches PPI, then
+  restart PPI. To read the key from another variable, set `gemini.api_key_env` to its name.
+- **Vertex AI**: set `gemini.auth_type` to `"vertex-ai"`, and set `GOOGLE_API_KEY`, or
+  `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`, in the environment that launches PPI.
+
+In headless mode Gemini CLI uses the auth type saved in its settings before it looks at the
+environment, so a key in the environment cannot displace a saved Google sign-in. Before each run
+PPI reads every settings file the CLI merges (system defaults, `~/.gemini/settings.json`, the
+project's `.gemini/settings.json`, system settings) and refuses to start, with a message, when any
+of them saves a different auth type. To switch, run `gemini` in a terminal and choose **Use Gemini
+API key** with `/auth`, or edit `security.auth.selectedType` in the named file. PPI also sets the
+CLI's auth-selection variables (`GOOGLE_GENAI_USE_GCA`, `GOOGLE_GENAI_USE_VERTEXAI`,
+`GEMINI_CLI_USE_COMPUTE_ADC`, `CLOUD_SHELL`, `GOOGLE_GEMINI_BASE_URL`) for each run. Gemini CLI
+never lets a `.env` file override a variable that is already set, so a `.env` file cannot switch
+the run to another auth type. An installed CLI is reported as unverified until a request runs.
+
+### Gemini API terms
+
+Both Gemini paths, Gemini CLI with a key and the Google AI Studio / Gemini API card, run under the
+[Gemini API terms](https://ai.google.dev/gemini-api/terms). Among them:
+
+- You must be 18 or older to use the APIs.
+- Google AI Studio and the Gemini API are meant for developers building for professional or
+  business purposes, not for consumer use.
+- On the free tier, Google uses the content you submit and the responses to provide, improve and
+  develop its products, and asks you not to submit sensitive, confidential or personal
+  information. A paid key is recommended.
+- Users in the European Economic Area, Switzerland or the United Kingdom must use paid services.
+
+### Google AI Studio / Gemini API card
 
 The Google AI Studio/Gemini API template uses
 `https://generativelanguage.googleapis.com/v1beta/openai` and `GEMINI_API_KEY` as documented
 in [Google's OpenAI compatibility guide](https://ai.google.dev/gemini-api/docs/openai).
 Choose an account-accessible model with function calling. This is a separate API connection
-with its own access and usage limits.
-
-Gemini can still be used without a paid subscription through the Gemini API's
-[Free Tier](https://ai.google.dev/gemini-api/docs/billing), subject to the eligible models
-and the account's rate limits. Create a key in
+with its own access and usage limits. Create a key in
 [Google AI Studio](https://aistudio.google.com/apikey), make it available as
 `GEMINI_API_KEY` in the environment that launches PPI, and restart PPI. In **Providers →
-Add provider**, choose **Google AI Studio / Gemini API** and select a model available
-on the project's Free Tier. The form expects the variable name `GEMINI_API_KEY`,
-not the secret value. Model discovery lists IDs; it does not verify free-tier eligibility.
-
-For consumer Google sign-in, Google's migration path is
-[Antigravity CLI](https://antigravity.google/docs/cli/gcli-migration/).
-PPI implements the current CLI's
-[headless streaming protocol](https://antigravity.google/docs/cli/headless/): prompts travel
-through stdin, progress includes file/tool steps, and continuation selects the exact
-`conversation_id`. Run `agy update` if an older binary rejects the streaming flags, then
-authenticate in an interactive `agy` terminal. **Poll models** reads `agy models`.
-The initial model is `gemini-3.8-flash-low`; choose another account-accessible model in the picker.
-Model-list success does not establish that inference is available.
-
-Antigravity is currently **Work only**. Its
-[plan mode](https://antigravity.google/docs/cli/modes/) adds a planning instruction rather
-than establishing a read-only tool boundary. PPI disables Chat and rejects Chat requests
-for this adapter. Work uses `accept-edits` with the CLI's normal shell permission rules;
-PPI does not pass `--dangerously-skip-permissions`. Headless tools needing approval can be
-denied by the CLI; configure scoped provider-owned permissions when needed. Antigravity's
-cumulative session token counters are not presented as per-turn usage or remaining allowance.
+Add provider**, choose **Google AI Studio / Gemini API**. The form expects the variable name
+`GEMINI_API_KEY`, not the secret value. Model discovery lists IDs; it does not verify which
+tier a model is billed on. See [Gemini API billing](https://ai.google.dev/gemini-api/docs/billing).
 
 ## Coding API and local setup
 
@@ -104,13 +119,6 @@ PPI does not start LM Studio automatically; the existing Qwen automatic-start se
 These paths share PPI's contained file/tool loop. Protocol regression tests are separate from
 live model certification; see [provider expansion validation](provider-expansion-validation.md)
 for the tested combinations and remaining account prerequisites.
-
-Cursor is not a native PPI adapter, and a Cursor account is not an xAI API key. Cursor's
-[pricing page](https://cursor.com/pricing) lists limited Agent use and Composer for Hobby;
-its [Grok access documentation](https://cursor.com/help/models-and-usage/grok-4-5) lists paid
-plans. PPI's xAI/Grok card uses an xAI-issued API key, or you can use another configured
-compatible provider that offers an accessible Grok model. Account access must be tested
-separately; templates do not promise a particular subscription entitlement.
 
 ## Compatible endpoint requirements
 

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-_NATIVE_PROVIDERS = frozenset({"antigravity", "claude", "codex", "gemini"})
+_NATIVE_PROVIDERS = frozenset({"claude", "codex", "gemini"})
 _DESCRIPTOR_FIELDS = frozenset({
     "version", "provider", "whiteboard_directory", "codex_home", "read_only",
 })

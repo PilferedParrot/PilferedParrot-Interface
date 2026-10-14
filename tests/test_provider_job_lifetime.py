@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -8,7 +9,6 @@ from unittest.mock import patch
 from copy import deepcopy
 
 from pilferedparrot.adapters import GeminiAdapter
-from pilferedparrot.antigravity import AntigravityAdapter
 from pilferedparrot.config import DEFAULTS
 from pilferedparrot.dispatch import (
     RunCancelled, _stream_process, capture_claude, capture_codex,
@@ -52,7 +52,6 @@ class ProviderJobLifetimeTests(unittest.TestCase):
         config["codex"]["request_timeout_seconds"] = 0
         config["claude"]["request_timeout_seconds"] = 0
         config["gemini"]["request_timeout_seconds"] = 0
-        config["antigravity"]["request_timeout_seconds"] = 0
 
         def cli(*lines):
             source = "import sys,time\n" \
@@ -73,24 +72,20 @@ class ProviderJobLifetimeTests(unittest.TestCase):
             '{"type":"message","role":"assistant","content":"gemini ok"}',
             '{"type":"result","status":"success","stats":{}}',
         )
-        antigravity = cli(
-            '{"event":"init","conversation_id":"agy-123"}',
-            '{"event":"result","result":{"status":"SUCCESS","conversation_id":"agy-123","response":"agy ok"}}',
-        )
         with patch("pilferedparrot.dispatch._codex_command", return_value=codex), \
              patch("pilferedparrot.dispatch._claude_command", return_value=claude), \
              patch.object(GeminiAdapter, "_command", return_value=gemini), \
-             patch.object(AntigravityAdapter, "_command", return_value=antigravity):
+             patch.dict("os.environ", {
+                 "GEMINI_API_KEY": "synthetic-key",
+                 "GEMINI_CLI_SYSTEM_SETTINGS_PATH": str(Path(tempfile.gettempdir()) / "ppi-absent.json"),
+                 "GEMINI_CLI_HOME": str(Path(tempfile.gettempdir()) / "ppi-absent-home"),
+             }):
             codex_result = capture_codex("p", Path.cwd(), Conversation(), config)
             claude_result = capture_claude("p", Path.cwd(), Conversation(), config)
             gemini_result = GeminiAdapter("gemini", config).run("p", Path.cwd(), Conversation())
-            agy_result = AntigravityAdapter("antigravity", config).run(
-                "p", Path.cwd(), Conversation(),
-            )
         self.assertEqual((codex_result.exit_code, codex_result.text), (0, "codex ok"))
         self.assertEqual((claude_result.exit_code, claude_result.text), (0, "claude ok"))
         self.assertEqual((gemini_result.exit_code, gemini_result.text), (0, "gemini ok"))
-        self.assertEqual((agy_result.exit_code, agy_result.text), (0, "agy ok"))
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from pilferedparrot.adapters import GeminiAdapter
+from pilferedparrot.adapters import GEMINI_AUTH_HELP, GeminiAdapter
 from pilferedparrot.budgets import collect_budgets
 from pilferedparrot.config import load_config
 from pilferedparrot.model import AUTH_UNKNOWN, STATUS_AUTH_UNVERIFIED, UNREACHABLE, Conversation
@@ -19,6 +19,40 @@ from pilferedparrot.model import AUTH_UNKNOWN, STATUS_AUTH_UNVERIFIED, UNREACHAB
 class GeminiStatusTests(unittest.TestCase):
     def setUp(self):
         self.config = load_config(Path("/definitely/missing/config.json"))
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.system_settings = self.root / "system-settings.json"
+        self.home = self.root / "home"
+        self.system_settings = self.root / "system-settings.json"
+        self.workspace = self.root / "workspace"
+        self.workspace.mkdir()
+        environment = patch.dict("os.environ", {
+            "GEMINI_API_KEY": "synthetic-key",
+            "GEMINI_CLI_HOME": str(self.home),
+            "GEMINI_CLI_SYSTEM_SETTINGS_PATH": str(self.system_settings),
+        }, clear=False)
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def _settings(self, path, auth):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"security": {"auth": auth}}), encoding="utf-8")
+
+    def _launch(self, config=None, environment=None):
+        """Run Gemini with a fake CLI; return (result, stream mock, launch env)."""
+        adapter = GeminiAdapter("gemini", config or self.config)
+        seen: dict = {}
+
+        def fake(*args, stdout_line, env=None, **kwargs):
+            seen.update(env)
+            return subprocess.CompletedProcess(["gemini"], 0, "", "")
+
+        with patch.dict("os.environ", environment or {}, clear=False), \
+             patch.object(adapter, "_command", return_value=["gemini"]), \
+             patch("pilferedparrot.dispatch._stream_process", side_effect=fake) as stream:
+            result = adapter.run("synthetic prompt", self.workspace, Conversation(provider="gemini"))
+        return result, stream, seen
 
     def test_authentication_does_not_trust_cached_credentials_or_environment(self):
         adapter = GeminiAdapter("gemini", self.config)
@@ -69,7 +103,7 @@ class GeminiStatusTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 55)
         self.assertEqual(
             result.error,
-            "Gemini CLI account tier is not supported; configure a Gemini API key or an eligible organization account using the provider setup.",
+            "Gemini CLI rejected this account tier. " + GEMINI_AUTH_HELP,
         )
 
     def test_successful_stream_is_unchanged(self):
@@ -93,6 +127,106 @@ class GeminiStatusTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(conversation.provider_session_id, "synthetic-session")
 
+    def test_launch_environment_selects_only_the_key(self):
+        # With no saved auth type the CLI chooses from the environment and
+        # loads .env files only for unset variables, so every competing
+        # selector is set explicitly.
+        result, stream, env = self._launch(environment={
+            "GOOGLE_GENAI_USE_GCA": "true", "GOOGLE_GEMINI_BASE_URL": "https://gateway.example",
+        })
+        self.assertEqual(result.exit_code, 0)
+        stream.assert_called_once()
+        self.assertEqual(env["GEMINI_API_KEY"], "synthetic-key")
+        for name, value in (("GOOGLE_GENAI_USE_GCA", "false"), ("GOOGLE_GENAI_USE_VERTEXAI", "false"),
+                            ("GEMINI_CLI_USE_COMPUTE_ADC", "false"), ("CLOUD_SHELL", "false"),
+                            ("GOOGLE_GEMINI_BASE_URL", "")):
+            self.assertEqual(env[name], value, name)
+
+    def test_saved_key_auth_launches(self):
+        self._settings(self.home / ".gemini" / "settings.json",
+                       {"selectedType": "gemini-api-key", "enforcedType": "gemini-api-key"})
+        result, stream, _ = self._launch()
+        self.assertEqual(result.exit_code, 0)
+        stream.assert_called_once()
+
+    def test_configured_key_variable_supplies_the_cli_key(self):
+        config = copy.deepcopy(self.config)
+        config["gemini"]["api_key_env"] = "PPI_FIXTURE_GEMINI_KEY"
+        result, _, env = self._launch(config, {"PPI_FIXTURE_GEMINI_KEY": "other-key"})
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(env["GEMINI_API_KEY"], "other-key")
+
+    def test_vertex_credentials_select_vertex(self):
+        config = copy.deepcopy(self.config)
+        config["gemini"]["auth_type"] = "vertex-ai"
+        result, _, env = self._launch(config, {"GOOGLE_API_KEY": "synthetic-vertex"})
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(env["GOOGLE_GENAI_USE_VERTEXAI"], "true")
+
+    def test_sign_in_or_missing_credentials_refuse_before_launch(self):
+        oauth = copy.deepcopy(self.config)
+        oauth["gemini"]["auth_type"] = "oauth-personal"
+        vertex = copy.deepcopy(self.config)
+        vertex["gemini"]["auth_type"] = "vertex-ai"
+        for config, environment, detail in (
+            (self.config, {"GEMINI_API_KEY": ""}, "Set GEMINI_API_KEY"),
+            (oauth, {}, "gemini.auth_type"),
+            (vertex, {"GOOGLE_API_KEY": "", "GOOGLE_CLOUD_PROJECT": ""}, "GOOGLE_CLOUD_LOCATION"),
+        ):
+            with self.subTest(detail=detail):
+                result, stream, _ = self._launch(config, environment)
+                stream.assert_not_called()
+                self.assertEqual(result.exit_code, 1)
+                self.assertTrue(result.unavailable)
+                self.assertIn("(OAuth) is not supported", result.error)
+                self.assertIn(detail, result.error)
+
+    def test_saved_google_sign_in_in_any_settings_layer_refuses_before_launch(self):
+        # The CLI prefers a saved auth type over the environment, so a key
+        # cannot displace a cached sign-in; PPI must refuse instead.
+        layers = (
+            self.root / "system-defaults.json",
+            self.home / ".gemini" / "settings.json",
+            self.workspace / ".gemini" / "settings.json",
+            self.system_settings,
+        )
+        for path in layers:
+            for auth in ({"selectedType": "oauth-personal"},
+                         {"enforcedType": "compute-default-credentials"}):
+                with self.subTest(path=path.name, auth=auth):
+                    self._settings(path, auth)
+                    try:
+                        result, stream, _ = self._launch()
+                    finally:
+                        path.unlink()
+                    stream.assert_not_called()
+                    self.assertIn(str(path), result.error)
+                    self.assertIn("/auth", result.error)
+        legacy = self.home / ".gemini" / "settings.json"
+        legacy.write_text('{"selectedAuthType": "oauth-personal"}', encoding="utf-8")
+        result, stream, _ = self._launch()
+        stream.assert_not_called()
+
+    def test_commented_settings_are_read_and_unreadable_settings_refuse(self):
+        path = self.home / ".gemini" / "settings.json"
+        path.parent.mkdir(parents=True)
+        path.write_text('{\n  // "selectedType": "gemini-api-key"\n  "security": {"auth": '
+                        '{"selectedType": /* saved */ "oauth-personal"}}}', encoding="utf-8")
+        result, stream, _ = self._launch()
+        stream.assert_not_called()
+        self.assertIn("'oauth-personal'", result.error)
+        path.write_text("{ not json", encoding="utf-8")
+        result, stream, _ = self._launch()
+        stream.assert_not_called()
+        self.assertIn("could not read", result.error)
+
+    def test_budget_names_the_missing_key(self):
+        with patch.dict("os.environ", {"GEMINI_API_KEY": ""}, clear=False), \
+             patch("pilferedparrot.budgets.provider_ids", return_value=("gemini",)), \
+             patch("pilferedparrot.adapters.GeminiAdapter.available", return_value=True):
+            result = collect_budgets(self.config)["gemini"]
+        self.assertEqual(result.status, STATUS_AUTH_UNVERIFIED)
+        self.assertIn("Set GEMINI_API_KEY", result.note or "")
 
 if __name__ == "__main__":
     unittest.main()

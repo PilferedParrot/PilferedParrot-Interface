@@ -161,6 +161,7 @@ def _stream_process(
     cancel_event: threading.Event | None,
     stdout_line: Callable[[str], None],
     on_tick: Callable[[], None] | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Stream a provider until it exits or is cancelled, with no job deadline."""
     _check_cancelled(cancel_event)
@@ -173,7 +174,7 @@ def _stream_process(
         cwd=cwd,
         bufsize=1,
         start_new_session=True,
-        env=_provider_process_environment(),
+        env=_provider_process_environment() if env is None else env,
     )
     assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
     lines: Queue[tuple[str, str | None]] = Queue()

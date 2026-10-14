@@ -69,11 +69,6 @@
     "context_window_tokens": null,
     "context_window_percent": 100
   },
-  "antigravity": {
-    "command": "agy",
-    "model": "gemini-3.8-flash-low",
-    "mode": "accept-edits"
-  },
   "gemini": {
     "command": "gemini",
     "model": "auto",
@@ -105,7 +100,9 @@
     ],
     "context_window_tokens": null,
     "context_window_percent": 100,
-    "approval_mode": "auto_edit"
+    "approval_mode": "auto_edit",
+    "auth_type": "gemini-api-key",
+    "api_key_env": "GEMINI_API_KEY"
   },
   "web": {
     "default_provider": "codex",

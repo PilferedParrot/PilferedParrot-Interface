@@ -63,7 +63,7 @@ class BudgetTests(unittest.TestCase):
             self.assertFalse(_start_command_available([directory]))
 
     def test_only_supported_providers_remain(self):
-        self.assertEqual(PROVIDERS, ("qwen", "codex", "claude", "antigravity", "gemini"))
+        self.assertEqual(PROVIDERS, ("qwen", "codex", "claude", "gemini"))
         self.assertIn("claude", load_config())
         self.assertIn("gemini", load_config())
         self.assertNotIn("routing", load_config())
@@ -131,7 +131,7 @@ class BudgetTests(unittest.TestCase):
         self, run, _resolve,
     ):
         config = load_config(Path("/definitely/missing/config.json"))
-        config["_hidden_providers"] = ["qwen", "codex", "gemini", "antigravity"]
+        config["_hidden_providers"] = ["qwen", "codex", "gemini"]
         run.return_value = subprocess.CompletedProcess(
             [], 0, json.dumps({
                 "loggedIn": True,
@@ -291,7 +291,7 @@ class CommandResolutionTests(unittest.TestCase):
             config["codex"]["models_cache"] = str(cache_path)
             self.assertEqual(effective_model(config, "codex"), "gpt-current")
             catalog = model_catalog(config)
-        self.assertEqual(set(catalog), {"qwen", "codex", "claude", "antigravity", "gemini"})
+        self.assertEqual(set(catalog), {"qwen", "codex", "claude", "gemini"})
         self.assertEqual(catalog["codex"]["options"], [
             {"value": "gpt-current", "label": "GPT Current",
              "reasoning_efforts": ["low", "medium", "high"]},
@@ -806,11 +806,11 @@ class WebStoreTests(unittest.TestCase):
             app = PilferedParrotApp(_web_config(directory), Path(directory))
             state = app.state("dashboard")
             chat_state = app.state("chat")
-        self.assertEqual(set(state["models"]), {"qwen", "codex", "claude", "antigravity", "gemini"})
-        self.assertEqual(set(state["model_catalog"]), {"qwen", "codex", "claude", "antigravity", "gemini"})
+        self.assertEqual(set(state["models"]), {"qwen", "codex", "claude", "gemini"})
+        self.assertEqual(set(state["model_catalog"]), {"qwen", "codex", "claude", "gemini"})
         self.assertEqual(
             {provider["id"] for provider in state["providers"]},
-            {"qwen", "codex", "claude", "antigravity", "gemini"},
+            {"qwen", "codex", "claude", "gemini"},
         )
         claude = next(provider for provider in state["providers"] if provider["id"] == "claude")
         self.assertEqual(claude["auth_mode"], "cli")

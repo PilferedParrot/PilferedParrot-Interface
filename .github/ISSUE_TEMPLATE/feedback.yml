@@ -21,7 +21,7 @@ body:
     attributes:
       label: Provider
       description: Name the provider, CLI or compatible endpoint, and model if relevant.
-      placeholder: Claude Code, Antigravity, LM Studio, or another provider
+      placeholder: Claude Code, Gemini CLI, LM Studio, or another provider
     validations:
       required: true
   - type: input

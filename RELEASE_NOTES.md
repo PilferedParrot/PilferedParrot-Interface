@@ -1,3 +1,19 @@
+## Unreleased
+
+- Removed the Google Antigravity CLI adapter (`agy`) and the xAI/Grok provider template, for
+  provider terms and by the owner's choice. Google's Antigravity FAQ says wrapping `agy` in
+  third-party applications "is not supported under consumer plans", and its terms call using
+  third-party software to access the service a breach. The owner chose not to ship an xAI
+  integration. Saved settings that name either one still load; PPI falls back to another provider.
+- Gemini CLI runs only with a Gemini API key (`gemini.api_key_env`, default `GEMINI_API_KEY`) or
+  Vertex AI credentials (`gemini.auth_type: "vertex-ai"`). Google ended consumer Google sign-in
+  for Gemini CLI on 2026-06-18 and names an API key as the supported route for third-party tools.
+  Before launch, PPI reads every Gemini CLI settings layer and refuses, with a message, when any
+  of them saves Google sign-in or another auth type. It also sets the CLI's auth-selection
+  variables so that a `.env` file cannot switch a run to Google sign-in.
+- The Gemini CLI card and the Google AI Studio / Gemini API template carry the Gemini API terms
+  notice: 18+ only, free-tier data use, a paid key for the EEA, Switzerland and the UK.
+
 ## PilferedParrot Interface 0.8.2
 
 0.8.2 improves continuation after unfinished Work sessions. New and resumed ACP Work turns

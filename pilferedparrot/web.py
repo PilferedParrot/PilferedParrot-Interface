@@ -187,12 +187,6 @@ def _acp_public_update(config: dict[str, Any], update: dict[str, Any]) -> dict[s
 PROVIDER_LABELS = {item["id"]: item["label"] for item in PROVIDER_CATALOG}
 PROVIDER_TEMPLATES: tuple[dict[str, str], ...] = (
     {
-        "id": "xai", "label": "xAI / Grok", "adapter": "openai_compatible",
-        "description": "Grok models through xAI's OpenAI-compatible API.",
-        "base_url": "https://api.x.ai/v1", "api_key_env": "XAI_API_KEY",
-        "model": "",
-    },
-    {
         "id": "openrouter", "label": "OpenRouter", "adapter": "openai_compatible",
         "description": "DeepSeek, GLM, and other model families. Choose a model with tool support; pricing and access vary by model.",
         "base_url": "https://openrouter.ai/api/v1",
@@ -201,7 +195,7 @@ PROVIDER_TEMPLATES: tuple[dict[str, str], ...] = (
     {
         "id": "google-ai-studio", "label": "Google AI Studio / Gemini API",
         "adapter": "openai_compatible",
-        "description": "Gemini models with a Google AI Studio API key; separate from Gemini CLI sign-in.",
+        "description": "Gemini models with your Google AI Studio API key. Gemini API terms apply: 18+ only; Google may use free-tier prompts and responses to improve its products, so a paid key is recommended; users in the EEA, Switzerland or the UK need a paid key.",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
         "api_key_env": "GEMINI_API_KEY", "model": "",
     },
@@ -2868,10 +2862,6 @@ class PilferedParrotApp(HarnessWorkflow):
                 run_config["claude"]["permission_mode"] = "plan"
             elif provider == "gemini":
                 run_config["gemini"]["approval_mode"] = "plan"
-            elif provider == "antigravity":
-                run_config[provider]["mode"] = "plan"
-                run_config[provider]["read_only"] = True
-                run_config[provider]["additional_dirs"] = []
             else:
                 run_config[provider]["read_only"] = True
                 run_config[provider]["additional_dirs"] = []

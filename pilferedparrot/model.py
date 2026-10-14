@@ -41,24 +41,14 @@ PROVIDER_CATALOG: tuple[dict[str, Any], ...] = (
         "login_help": "Complete the Anthropic sign-in at claude.ai in your browser, then return here.",
     },
     {
-        "id": "antigravity",
-        "label": "Google Antigravity",
-        "initial": "A",
-        "description": "Google's coding agent through the local Antigravity CLI. Work only; read-only Chat is not yet supported.",
-        "auth_mode": "external_cli",
-        "auth_label": "Uses your Antigravity CLI authentication",
-        "install_help": "Install Antigravity CLI from antigravity.google, then run agy in a terminal to sign in.",
-        "auth_help": "Run agy in a terminal to complete Google's sign-in. Use agy update if your CLI lacks streaming support. Account access is checked when used.",
-    },
-    {
         "id": "gemini",
         "label": "Google Gemini",
         "initial": "G",
-        "description": "Google's coding agent through the local Gemini CLI.",
+        "description": "Google's coding agent through the local Gemini CLI, with your Gemini API key or Vertex AI credentials. Gemini API terms apply: 18+ only; Google may use free-tier prompts and responses to improve its products, so a paid key is recommended; users in the EEA, Switzerland or the UK need a paid key.",
         "auth_mode": "external_cli",
-        "auth_label": "Uses your Gemini CLI authentication",
-        "install_help": "Install the Gemini CLI, then run gemini in a terminal to configure an API key or supported organization account.",
-        "auth_help": "Consumer Google sign-in is no longer supported by Gemini CLI. Configure an API key or supported organization account in gemini, or add the Google AI Studio / Gemini API provider.",
+        "auth_label": "Uses a Gemini API key or Vertex AI",
+        "install_help": "Install the Gemini CLI, set GEMINI_API_KEY in the environment that starts PPI, then restart PPI.",
+        "auth_help": "PPI never runs Gemini CLI on Google account sign-in. Set GEMINI_API_KEY (or Vertex AI credentials) in the environment that starts PPI; if gemini has saved a Google sign-in, run gemini in a terminal and choose Use Gemini API key with /auth.",
     },
 )
 PROVIDERS = tuple(item["id"] for item in PROVIDER_CATALOG)

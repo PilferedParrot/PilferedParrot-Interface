@@ -127,7 +127,6 @@ HELP = """Commands:
   /codex            switch to a fresh Codex conversation
   /claude           switch to a fresh Claude Code conversation
   /gemini           switch to a fresh Google Gemini conversation
-  /antigravity      switch to a fresh Google Antigravity conversation
   /budget           refresh provider status and included usage
   /status           show the working directory and provider
   /help             show this help
@@ -181,7 +180,7 @@ def repl(config: dict[str, Any], cwd: Path) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Direct interface for local models, Codex, Claude Code, Gemini, and Antigravity",
+        description="Direct interface for local models, Codex, Claude Code, and Gemini",
     )
     parser.add_argument("--version", action="version", version=f"PilferedParrot {__version__}")
     parser.add_argument("--config", help="path to a JSON configuration file")

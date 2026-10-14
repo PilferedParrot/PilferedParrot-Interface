@@ -24,7 +24,7 @@ from pilferedparrot.web import PilferedParrotApp
 
 MARKER = "[Incomplete work handoff]"
 NEXT_PROMPT = "Next session prompt"
-NATIVE_PROVIDERS = ("codex", "claude", "gemini", "antigravity")
+NATIVE_PROVIDERS = ("codex", "claude", "gemini")
 
 
 class _RecordingAdapter:
@@ -147,7 +147,6 @@ class ContinuationTests(unittest.TestCase):
             ("codex", "sandbox", "read-only"),
             ("claude", "permission_mode", "plan"),
             ("gemini", "approval_mode", "plan"),
-            ("antigravity", "mode", "plan"),
             ("qwen", "read_only", True),
             ("custom", "read_only", True),
         )

@@ -33,7 +33,7 @@ PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
     "lmstudio": {"base_url": "http://127.0.0.1:1234/v1", "api_key_env": ""},
 }
 KNOWN_COMPATIBLE = frozenset({"qwen", "openrouter", "mistral", "lmstudio"})
-NATIVE_PROVIDERS = frozenset({"codex", "claude", "gemini", "antigravity"})
+NATIVE_PROVIDERS = frozenset({"codex", "claude", "gemini"})
 
 
 def parser() -> argparse.ArgumentParser:

@@ -1,5 +1,9 @@
 # Provider expansion validation — 2026-09-05
 
+> **Later change:** the Google Antigravity adapter and the xAI/Grok template described in this
+> historical record were removed after 0.8.2, for provider terms and by the owner's choice. See
+> [provider compatibility](provider-compatibility.md).
+
 This local source update adds Antigravity Work sessions, Mistral/Devstral and LM Studio
 connection templates, and compatible API conversation handling for DeepSeek/GLM reasoning
 and Mistral structured content. Earlier interface improvements are retained.

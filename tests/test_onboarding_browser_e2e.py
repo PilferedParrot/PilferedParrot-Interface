@@ -43,7 +43,7 @@ class OnboardingApp(BrowserTestApp):
                 auth_status="signed_out",
                 reachability="unreachable",
             )
-            for provider in ("codex", "claude", "gemini", "antigravity")
+            for provider in ("codex", "claude", "gemini")
         }
 
     def poll_provider_models(self, provider: str):
@@ -72,7 +72,7 @@ class OnboardingFixture(PilferedParrotBrowserFixture):
         # Exercise every native card without discovering a host CLI or touching
         # host config/state. Qwen is outside this native onboarding flow.
         config["_hidden_providers"] = ["qwen"]
-        for provider in ("codex", "claude", "gemini", "antigravity"):
+        for provider in ("codex", "claude", "gemini"):
             config[provider]["command"] = str(self.root / f"never-invoked-{provider}")
             config[provider]["config_path"] = str(self.root / f"{provider}-config")
             config[provider]["models_cache"] = str(self.root / f"{provider}-models.json")
@@ -319,21 +319,18 @@ class OnboardingBrowserEndToEndTests(unittest.TestCase):
         dialog = self._open_dashboard()
         card = self._card(dialog, "gemini")
         expect(card).to_contain_text("Install the Gemini CLI")
-        expect(card).to_contain_text("run gemini in a terminal")
-        expect(card.get_by_text("Uses your Gemini CLI authentication", exact=True)).to_be_visible()
-        expect(card).to_contain_text("API key or supported organization account")
+        expect(card).to_contain_text("set GEMINI_API_KEY")
+        expect(card.get_by_text("Uses a Gemini API key or Vertex AI", exact=True)).to_be_visible()
+        expect(card).to_contain_text("Gemini API terms apply")
+        expect(card).to_contain_text("need a paid key")
         expect(card.locator('[data-provider-login="gemini"]')).to_have_count(0)
         expect(card.get_by_text("Install CLI first", exact=True)).to_have_count(0)
         expect(card.locator('[data-provider-window="gemini"]')).to_be_enabled()
 
-    def test_antigravity_card_explains_terminal_setup_and_work_only_capability(self):
+    def test_removed_providers_have_no_card(self):
         dialog = self._open_dashboard()
-        card = self._card(dialog, "antigravity")
-        expect(card).to_contain_text("Install Antigravity CLI")
-        expect(card).to_contain_text("Work only")
-        expect(card).to_contain_text("run agy in a terminal")
-        expect(card.locator('[data-provider-login="antigravity"]')).to_have_count(0)
-        expect(card.locator('[data-provider-window="antigravity"]')).to_be_enabled()
+        expect(dialog.locator('[data-provider-window="antigravity"]')).to_have_count(0)
+        expect(dialog).not_to_contain_text("Antigravity")
 
     def test_dashboard_refresh_reports_pending_completion_and_error_inside_dialog(self):
         dialog = self._open_dashboard()

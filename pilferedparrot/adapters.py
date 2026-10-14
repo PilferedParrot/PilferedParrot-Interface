@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 import threading
 import urllib.error
 from abc import ABC, abstractmethod
@@ -272,6 +274,154 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 for model_id in ids]
 
 
+# Google ended consumer Google sign-in for Gemini CLI on 2026-06-18, and its
+# terms bar third-party software from using Gemini CLI's OAuth. Google names a
+# Gemini API or Vertex AI key as the supported way for other tools to use
+# Gemini, so PPI launches the CLI only with one of these authentication types.
+GEMINI_CLI_AUTH_TYPES = ("gemini-api-key", "vertex-ai")
+GEMINI_AUTH_HELP = (
+    "PPI runs Gemini CLI only with a Gemini API key or Vertex AI credentials; "
+    "Google account sign-in (OAuth) is not supported."
+)
+
+
+class GeminiAuthError(ValueError):
+    """The configured Gemini CLI authentication is not one PPI may launch."""
+
+
+def _strip_json_comments(text: str) -> str:
+    """Remove // and /* */ comments outside strings, as Gemini CLI accepts them."""
+    out: list[str] = []
+    index, quoted = 0, False
+    while index < len(text):
+        char = text[index]
+        if quoted:
+            out.append(char)
+            if char == "\\":
+                out.append(text[index + 1:index + 2])
+                index += 1
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+            out.append(char)
+        elif text.startswith("//", index):
+            newline = text.find("\n", index)
+            index = len(text) if newline < 0 else newline
+            continue
+        elif text.startswith("/*", index):
+            close = text.find("*/", index + 2)
+            index = len(text) if close < 0 else close + 2
+            continue
+        else:
+            out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _gemini_settings_layers(environment: Any, cwd: Path | None) -> list[Path]:
+    """Gemini CLI settings files from lowest to highest precedence."""
+    if environment.get("GEMINI_CLI_SYSTEM_SETTINGS_PATH"):
+        system = Path(environment["GEMINI_CLI_SYSTEM_SETTINGS_PATH"])
+    elif sys.platform == "darwin":
+        system = Path("/Library/Application Support/GeminiCli/settings.json")
+    elif sys.platform == "win32":
+        system = Path("C:\\ProgramData\\gemini-cli\\settings.json")
+    else:
+        system = Path("/etc/gemini-cli/settings.json")
+    defaults = Path(environment.get("GEMINI_CLI_SYSTEM_DEFAULTS_PATH")
+                    or system.parent / "system-defaults.json")
+    home = Path(environment.get("GEMINI_CLI_HOME") or Path.home())
+    layers = [defaults, home / ".gemini" / "settings.json"]
+    if cwd is not None:
+        layers.append(Path(cwd) / ".gemini" / "settings.json")
+    return layers + [system]
+
+
+def gemini_cli_auth_problem(
+    config: dict[str, Any], environment: Any = None, cwd: Path | None = None,
+) -> str | None:
+    """Explain why Gemini CLI cannot launch with key authentication, or return None.
+
+    In headless mode Gemini CLI uses the auth type saved in its settings before
+    it consults the environment, so a key in the environment cannot displace a
+    saved Google sign-in. PPI reads every settings layer the CLI merges and
+    refuses unless the saved choice, if any, is the configured key type. Each
+    layer is checked on its own, so an untrusted workspace's choice also
+    refuses; a missing workspace (``cwd=None``) is skipped.
+    """
+    environment = os.environ if environment is None else environment
+    cfg = config.get("gemini", {})
+    auth_type = str(cfg.get("auth_type") or "gemini-api-key")
+    if auth_type not in GEMINI_CLI_AUTH_TYPES:
+        return (f"{GEMINI_AUTH_HELP} Set gemini.auth_type to gemini-api-key or vertex-ai "
+                f"(found {auth_type!r}).")
+    if auth_type == "gemini-api-key":
+        variable = str(cfg.get("api_key_env") or "GEMINI_API_KEY").strip()
+        if not environment.get(variable, "").strip():
+            return (f"{GEMINI_AUTH_HELP} Set {variable} in the environment that launches "
+                    "PPI, then restart PPI.")
+    else:
+        project = environment.get("GOOGLE_CLOUD_PROJECT", "").strip() \
+            and environment.get("GOOGLE_CLOUD_LOCATION", "").strip()
+        if not (environment.get("GOOGLE_API_KEY", "").strip() or project):
+            return (f"{GEMINI_AUTH_HELP} For Vertex AI, set GOOGLE_API_KEY, or "
+                    "GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION, in the environment "
+                    "that launches PPI, then restart PPI.")
+    for path in _gemini_settings_layers(environment, cwd):
+        try:
+            if not path.is_file():
+                continue
+            settings = json.loads(_strip_json_comments(path.read_text(encoding="utf-8")))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            return (f"PPI could not read Gemini CLI settings at {path} ({error}), so it "
+                    "cannot confirm key authentication.")
+        security = settings.get("security") if isinstance(settings, dict) else None
+        auth = security.get("auth") if isinstance(security, dict) else None
+        saved = [auth.get(key) for key in ("selectedType", "enforcedType")] \
+            if isinstance(auth, dict) else []
+        if isinstance(settings, dict):
+            saved.append(settings.get("selectedAuthType"))  # pre-0.3 flat layout
+        for value in saved:
+            if value and value != auth_type:
+                return (f"Gemini CLI settings at {path} choose {value!r} authentication. "
+                        f"{GEMINI_AUTH_HELP} Run gemini in a terminal and use /auth to "
+                        f"select {'Use Gemini API key' if auth_type == 'gemini-api-key' else 'Vertex AI'}, "
+                        "or change security.auth.selectedType in that file.")
+    return None
+
+
+def gemini_cli_environment(
+    config: dict[str, Any], environment: Any, cwd: Path | None,
+) -> dict[str, str]:
+    """Return a launch environment in which Gemini CLI can only use the key.
+
+    With no saved auth type, Gemini CLI picks one from the environment, and it
+    loads ``.env`` files only for variables that are not already set. Setting
+    every competing selector explicitly therefore keeps a ``.env`` file from
+    switching the run to Google sign-in, Cloud Shell or Compute credentials.
+    """
+    problem = gemini_cli_auth_problem(config, environment, cwd)
+    if problem:
+        raise GeminiAuthError(problem)
+    cfg = config.get("gemini", {})
+    auth_type = str(cfg.get("auth_type") or "gemini-api-key")
+    result = dict(environment)
+    result.update({
+        "GOOGLE_GENAI_USE_GCA": "false",
+        "GEMINI_CLI_USE_COMPUTE_ADC": "false",
+        "CLOUD_SHELL": "false",
+        "GOOGLE_GEMINI_BASE_URL": "",
+    })
+    if auth_type == "gemini-api-key":
+        variable = str(cfg.get("api_key_env") or "GEMINI_API_KEY").strip()
+        result["GEMINI_API_KEY"] = environment[variable].strip()
+        result["GOOGLE_GENAI_USE_VERTEXAI"] = "false"
+    else:
+        result["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
+    return result
+
+
 class GeminiAdapter(ProviderAdapter):
     capabilities = ProviderCapabilities(resume=True, tools=True, usage=True, models=True)
 
@@ -302,8 +452,16 @@ class GeminiAdapter(ProviderAdapter):
         self._cancellations[id(conversation)] = event
         text_parts: list[str] = []
         error_message: str | None = None
+        from .dispatch import RunResult, _provider_process_environment
         try:
             from .dispatch import _stream_process
+            try:
+                environment = gemini_cli_environment(
+                    self.config, _provider_process_environment(), Path(cwd),
+                )
+            except GeminiAuthError as error:
+                return RunResult("", 1, conversation.provider_session_id, str(error),
+                                 unavailable=True)
 
             def receive(line: str) -> None:
                 nonlocal error_message
@@ -351,18 +509,17 @@ class GeminiAdapter(ProviderAdapter):
                 self._command(conversation), prompt, cwd,
                 cancel_event=event,
                 stdout_line=receive,
+                env=environment,
             )
         finally:
             self._cancellations.pop(id(conversation), None)
-        from .dispatch import RunResult
         error = error_message or completed.stderr.strip() or None
         if error and (
             "IneligibleTierError" in error
             or "This client is no longer supported for Gemini Code Assist for individuals" in error
         ):
             error = (
-                "Gemini CLI account tier is not supported; configure a Gemini API key "
-                "or an eligible organization account using the provider setup."
+                "Gemini CLI rejected this account tier. " + GEMINI_AUTH_HELP
             )
         exit_code = completed.returncode or (1 if error_message else 0)
         return RunResult(
@@ -383,9 +540,6 @@ class GeminiAdapter(ProviderAdapter):
 
 
 def adapter_for(provider: str, config: dict[str, Any]) -> ProviderAdapter:
-    if provider == "antigravity":
-        from .antigravity import AntigravityAdapter
-        return AntigravityAdapter(provider, config)
     adapter_type = PROVIDER_ADAPTERS.get(provider)
     if adapter_type is not None:
         return adapter_type(provider, config)

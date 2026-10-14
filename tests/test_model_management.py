@@ -26,14 +26,14 @@ class ModelManagementTests(unittest.TestCase):
             root = Path(directory)
             app = PilferedParrotApp(self._config(root), root)
             added = app.add_provider({
-                "template": "xai", "label": "My Grok", "model": "grok-test",
-                "base_url": "https://api.x.ai/v1", "api_key_env": "XAI_API_KEY",
+                "template": "openrouter", "label": "My Router", "model": "router-test",
+                "base_url": "https://openrouter.ai/api/v1", "api_key_env": "OPENROUTER_API_KEY",
             })
-            self.assertEqual(added["label"], "My Grok")
+            self.assertEqual(added["label"], "My Router")
             provider = added["id"]
             state = app.state()
             self.assertIn(provider, state["model_catalog"])
-            self.assertEqual(state["model_catalog"][provider]["default"], "grok-test")
+            self.assertEqual(state["model_catalog"][provider]["default"], "router-test")
             self.assertEqual(app.config[provider]["adapter"], "openai_compatible")
             self.assertNotIn("api_key", app.dashboard_models["provider_cards"][provider])
 
@@ -53,9 +53,9 @@ class ModelManagementTests(unittest.TestCase):
             app = PilferedParrotApp(self._config(root), root)
             before = app.state()["providers"]
             for payload, message in (
-                ({"template": "xai", "model": "grok", "base_url": "file:///tmp/x"}, "base URL"),
-                ({"template": "xai", "model": "", "base_url": "https://api.x.ai/v1"}, "discover models"),
-                ({"template": "xai", "model": "grok", "base_url": "https://api.x.ai/v1",
+                ({"template": "openrouter", "model": "fixture", "base_url": "file:///tmp/x"}, "base URL"),
+                ({"template": "openrouter", "model": "", "base_url": "https://openrouter.ai/api/v1"}, "discover models"),
+                ({"template": "openrouter", "model": "fixture", "base_url": "https://openrouter.ai/api/v1",
                   "api_key_env": "not valid"}, "variable"),
             ):
                 with self.assertRaisesRegex(ValueError, message):
@@ -66,7 +66,7 @@ class ModelManagementTests(unittest.TestCase):
     def test_blank_model_is_discovered_and_all_choices_are_saved(self, opener):
         response = MagicMock()
         response.read.return_value = json.dumps({
-            "data": [{"id": "grok-fast"}, {"id": "grok-deep"}],
+            "data": [{"id": "model-fast"}, {"id": "model-deep"}],
         }).encode()
         opener.return_value.__enter__.return_value = response
         with tempfile.TemporaryDirectory() as directory:
@@ -77,10 +77,10 @@ class ModelManagementTests(unittest.TestCase):
                 "base_url": "https://models.example/v1", "model": "",
             })
             catalog = app.state()["model_catalog"][added["id"]]
-            self.assertEqual(catalog["default"], "grok-fast")
+            self.assertEqual(catalog["default"], "model-fast")
             self.assertEqual(
                 [item["value"] for item in catalog["options"]],
-                ["grok-fast", "grok-deep"],
+                ["model-fast", "model-deep"],
             )
 
     @patch("pilferedparrot.web.adapter_for")
