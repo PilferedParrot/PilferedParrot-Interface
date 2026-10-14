@@ -480,6 +480,13 @@ def collect_budgets(config: dict[str, Any]) -> dict[str, ProviderBudget]:
                 auth_status=AUTH_UNKNOWN,
                 reachability=UNREACHABLE,
             )
+        from .model import retired_provider_notice
+        notice = retired_provider_notice(config, provider)
+        if notice:
+            return ProviderBudget(
+                provider, False, status=STATUS_AUTH_UNVERIFIED, note=notice,
+                auth_status=AUTH_UNKNOWN, reachability=UNREACHABLE,
+            )
         return read_compatible_status(provider, config)
 
     def qwen_status() -> ProviderBudget:

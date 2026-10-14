@@ -92,7 +92,8 @@ account limits, and usage charges belong to the provider you configure.
 
 - Removed the Google Antigravity CLI adapter and the xAI/Grok provider template. Google's
   Antigravity terms do not allow wrapping its CLI in third-party applications on consumer plans,
-  and the maintainer chose not to ship an xAI integration.
+  and the maintainer chose not to ship an xAI integration. Cards saved from the xAI template show
+  a "removed from PPI" notice and no longer run.
 - Gemini CLI now runs only with a Gemini API key or Vertex AI credentials. PPI refuses to start it
   when a Gemini CLI settings file has saved Google sign-in or another auth type.
 

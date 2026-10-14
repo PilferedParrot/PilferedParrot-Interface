@@ -322,10 +322,31 @@ class OnboardingBrowserEndToEndTests(unittest.TestCase):
         expect(card).to_contain_text("set GEMINI_API_KEY")
         expect(card.get_by_text("Uses a Gemini API key or Vertex AI", exact=True)).to_be_visible()
         expect(card).to_contain_text("Gemini API terms apply")
+        expect(card).to_contain_text("professional or business use")
         expect(card).to_contain_text("need a paid key")
         expect(card.locator('[data-provider-login="gemini"]')).to_have_count(0)
         expect(card.get_by_text("Install CLI first", exact=True)).to_have_count(0)
         expect(card.locator('[data-provider-window="gemini"]')).to_be_enabled()
+
+    def test_saved_xai_card_shows_removal_notice_and_cannot_be_used(self):
+        app = self.fixture.app
+        with app.model_catalog_lock:
+            app.dashboard_models.setdefault("provider_cards", {})["xai-grok"] = {
+                "label": "xAI / Grok", "adapter": "openai_compatible",
+                "description": "Grok models through xAI's OpenAI-compatible API.",
+                "base_url": "https://api.x.ai/v1", "api_key_env": "XAI_API_KEY",
+                "model": "grok-fixture", "model_options": ["grok-fixture"],
+            }
+            app.dashboard_models.setdefault("providers", {})["xai-grok"] = {
+                "models": [], "hidden": [],
+            }
+            app._apply_dashboard_models()
+        self.page.reload(wait_until="domcontentloaded")
+        dialog = self._open_dashboard()
+        card = self._card(dialog, "xai-grok")
+        expect(card).to_contain_text("xAI / Grok was removed from PPI")
+        expect(card.locator('[data-provider-window="xai-grok"]')).to_be_disabled()
+        expect(card.locator('[data-provider-remove="xai-grok"]')).to_be_enabled()
 
     def test_removed_providers_have_no_card(self):
         dialog = self._open_dashboard()

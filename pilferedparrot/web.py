@@ -53,7 +53,7 @@ from .harness import metric, outcome_summary, render_handoff
 from .web_harness import HarnessWorkflow
 from .model import (
     Conversation, PROVIDER_CATALOG, PROVIDERS, ProviderBudget,
-    provider_catalog, provider_ids,
+    provider_catalog, provider_ids, retired_provider_notice,
 )
 from .qwen import AGENT_SYSTEM_PROMPT, TOOL_DEFINITIONS, ensure_qwen
 from .response_identity import configured_identity
@@ -195,7 +195,7 @@ PROVIDER_TEMPLATES: tuple[dict[str, str], ...] = (
     {
         "id": "google-ai-studio", "label": "Google AI Studio / Gemini API",
         "adapter": "openai_compatible",
-        "description": "Gemini models with your Google AI Studio API key. Gemini API terms apply: 18+ only; Google may use free-tier prompts and responses to improve its products, so a paid key is recommended; users in the EEA, Switzerland or the UK need a paid key.",
+        "description": "Gemini models with your Google AI Studio API key. Gemini API terms apply: 18+ only, for professional or business use, not consumer use; Google may use free-tier prompts and responses to improve its products, so a paid key is recommended; users in the EEA, Switzerland or the UK need a paid key.",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
         "api_key_env": "GEMINI_API_KEY", "model": "",
     },
@@ -1192,7 +1192,7 @@ class PilferedParrotApp(HarnessWorkflow):
         known = {item["id"]: item for item in self._provider_catalog(include_hidden=True)}
         for provider in sorted(hidden):
             info = known.get(provider)
-            if not info:
+            if not info or info.get("retired"):
                 continue
             provider_config = self.config.get(provider) or {}
             templates.insert(0, {
@@ -1350,6 +1350,9 @@ class PilferedParrotApp(HarnessWorkflow):
             provider = template_id.partition(":")[2]
             if provider not in self._provider_ids(include_hidden=True):
                 raise ValueError("provider is no longer available to restore")
+            notice = retired_provider_notice(self.config, provider)
+            if notice:
+                raise ValueError(notice)
             with self.model_catalog_lock:
                 previous = deepcopy(self.dashboard_models)
                 self.dashboard_models["hidden_providers"] = [

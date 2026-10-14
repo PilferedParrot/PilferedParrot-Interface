@@ -18,7 +18,9 @@ PPI 0.8.2 and earlier also shipped a Google Antigravity CLI adapter and an xAI/G
 Both were removed, for provider terms and by the owner's choice: Google's Antigravity FAQ says
 wrapping `agy` in third-party applications "is not supported under consumer plans". Settings
 saved by an earlier release that name either one still load, and PPI falls back to another
-provider.
+provider. Cards saved from the old xAI/Grok template are retired: they still load, show a
+"removed from PPI" notice, and never contact the endpoint; you can remove them. Cards you created
+for other compatible endpoints are unchanged.
 
 ## Platform status
 
@@ -60,7 +62,11 @@ In headless mode Gemini CLI uses the auth type saved in its settings before it l
 environment, so a key in the environment cannot displace a saved Google sign-in. Before each run
 PPI reads every settings file the CLI merges (system defaults, `~/.gemini/settings.json`, the
 project's `.gemini/settings.json`, system settings) and refuses to start, with a message, when any
-of them saves a different auth type. To switch, run `gemini` in a terminal and choose **Use Gemini
+of them saves a different auth type or external authentication. Relative `GEMINI_CLI_HOME`,
+`GEMINI_CLI_SYSTEM_SETTINGS_PATH` and `GEMINI_CLI_SYSTEM_DEFAULTS_PATH` values are resolved against
+the project folder the CLI runs in and passed on as absolute paths, so PPI checks the files the CLI
+reads. PPI also refuses when the environment sets `GEMINI_CLI_AUTH_OVERRIDE` or
+`GEMINI_DEFAULT_AUTH_TYPE` to another auth type, and never passes either variable on. To switch, run `gemini` in a terminal and choose **Use Gemini
 API key** with `/auth`, or edit `security.auth.selectedType` in the named file. PPI also sets the
 CLI's auth-selection variables (`GOOGLE_GENAI_USE_GCA`, `GOOGLE_GENAI_USE_VERTEXAI`,
 `GEMINI_CLI_USE_COMPUTE_ADC`, `CLOUD_SHELL`, `GOOGLE_GEMINI_BASE_URL`) for each run. Gemini CLI

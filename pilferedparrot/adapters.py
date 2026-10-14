@@ -285,8 +285,40 @@ GEMINI_AUTH_HELP = (
 )
 
 
+# Environment variables that name a Gemini CLI auth type outright. 0.64 copies
+# GEMINI_CLI_AUTH_OVERRIDE (its relaunch hand-off) into the user settings layer,
+# above any environment selector; GEMINI_DEFAULT_AUTH_TYPE seeds interactive
+# sign-in. PPI refuses an inherited value naming another type and never passes
+# either on. Boolean selectors are pinned in gemini_cli_environment instead.
+GEMINI_AUTH_TYPE_VARIABLES = ("GEMINI_CLI_AUTH_OVERRIDE", "GEMINI_DEFAULT_AUTH_TYPE")
+# Path variables Gemini CLI resolves against its own working directory.
+GEMINI_PATH_VARIABLES = (
+    "GEMINI_CLI_HOME", "GEMINI_CLI_SYSTEM_SETTINGS_PATH", "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
+)
+
+
 class GeminiAuthError(ValueError):
     """The configured Gemini CLI authentication is not one PPI may launch."""
+
+
+def _gemini_resolved_paths(environment: Any, cwd: Path | None) -> dict[str, str]:
+    """Resolve Gemini CLI's path variables as the child at ``cwd`` will.
+
+    Relative values are joined to the launch directory, the same directory the
+    CLI resolves them against, and forwarded absolute so that the files PPI
+    checks are the files the CLI reads. Without a launch directory a relative
+    value cannot be resolved and is left out.
+    """
+    result: dict[str, str] = {}
+    for name in GEMINI_PATH_VARIABLES:
+        value = environment.get(name)
+        if not value:
+            continue
+        if os.path.isabs(value):
+            result[name] = value
+        elif cwd is not None:
+            result[name] = os.path.join(os.path.abspath(cwd), value)
+    return result
 
 
 def _strip_json_comments(text: str) -> str:
@@ -321,6 +353,7 @@ def _strip_json_comments(text: str) -> str:
 
 def _gemini_settings_layers(environment: Any, cwd: Path | None) -> list[Path]:
     """Gemini CLI settings files from lowest to highest precedence."""
+    environment = {**environment, **_gemini_resolved_paths(environment, cwd)}
     if environment.get("GEMINI_CLI_SYSTEM_SETTINGS_PATH"):
         system = Path(environment["GEMINI_CLI_SYSTEM_SETTINGS_PATH"])
     elif sys.platform == "darwin":
@@ -368,6 +401,11 @@ def gemini_cli_auth_problem(
             return (f"{GEMINI_AUTH_HELP} For Vertex AI, set GOOGLE_API_KEY, or "
                     "GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION, in the environment "
                     "that launches PPI, then restart PPI.")
+    for name in GEMINI_AUTH_TYPE_VARIABLES:
+        value = str(environment.get(name) or "").strip()
+        if value and value != auth_type:
+            return (f"The environment that launches PPI sets {name}={value!r}. "
+                    f"{GEMINI_AUTH_HELP} Unset {name}, then restart PPI.")
     for path in _gemini_settings_layers(environment, cwd):
         try:
             if not path.is_file():
@@ -380,6 +418,8 @@ def gemini_cli_auth_problem(
         auth = security.get("auth") if isinstance(security, dict) else None
         saved = [auth.get(key) for key in ("selectedType", "enforcedType")] \
             if isinstance(auth, dict) else []
+        if isinstance(auth, dict) and auth.get("useExternal"):
+            saved.append("external authentication (useExternal)")
         if isinstance(settings, dict):
             saved.append(settings.get("selectedAuthType"))  # pre-0.3 flat layout
         for value in saved:
@@ -407,6 +447,9 @@ def gemini_cli_environment(
     cfg = config.get("gemini", {})
     auth_type = str(cfg.get("auth_type") or "gemini-api-key")
     result = dict(environment)
+    for name in GEMINI_AUTH_TYPE_VARIABLES:
+        result.pop(name, None)
+    result.update(_gemini_resolved_paths(environment, cwd))
     result.update({
         "GOOGLE_GENAI_USE_GCA": "false",
         "GEMINI_CLI_USE_COMPUTE_ADC": "false",
@@ -543,6 +586,10 @@ def adapter_for(provider: str, config: dict[str, Any]) -> ProviderAdapter:
     adapter_type = PROVIDER_ADAPTERS.get(provider)
     if adapter_type is not None:
         return adapter_type(provider, config)
+    from .model import retired_provider_notice
+    notice = retired_provider_notice(config, provider)
+    if notice:
+        raise ValueError(notice)
     if config.get(provider, {}).get("adapter") == "openai_compatible":
         return OpenAICompatibleAdapter(provider, config)
     raise ValueError(f"unknown provider: {provider}")

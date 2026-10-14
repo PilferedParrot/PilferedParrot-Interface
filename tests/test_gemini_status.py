@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from pilferedparrot.adapters import GEMINI_AUTH_HELP, GeminiAdapter
+from pilferedparrot.adapters import GEMINI_AUTH_HELP, GEMINI_AUTH_TYPE_VARIABLES, GeminiAdapter
 from pilferedparrot.budgets import collect_budgets
 from pilferedparrot.config import load_config
 from pilferedparrot.model import AUTH_UNKNOWN, STATUS_AUTH_UNVERIFIED, UNREACHABLE, Conversation
@@ -219,6 +219,65 @@ class GeminiStatusTests(unittest.TestCase):
         result, stream, _ = self._launch()
         stream.assert_not_called()
         self.assertIn("could not read", result.error)
+
+    def test_inherited_auth_type_variables_refuse_or_are_removed_in_both_modes(self):
+        # Class test over every variable that names an auth type outright
+        # (Gemini CLI 0.51 and 0.64 sources). 0.64 copies GEMINI_CLI_AUTH_OVERRIDE
+        # into the user settings layer, above every environment selector.
+        vertex = copy.deepcopy(self.config)
+        vertex["gemini"]["auth_type"] = "vertex-ai"
+        modes = ((self.config, "gemini-api-key", {}),
+                 (vertex, "vertex-ai", {"GOOGLE_API_KEY": "synthetic-vertex"}))
+        for config, allowed, credentials in modes:
+            for name in GEMINI_AUTH_TYPE_VARIABLES:
+                for value in ("oauth-personal", "compute-default-credentials", "gateway",
+                              "cloud-shell", "vertex-ai" if allowed != "vertex-ai" else "gemini-api-key"):
+                    with self.subTest(mode=allowed, name=name, value=value):
+                        result, stream, _ = self._launch(config, {**credentials, name: value})
+                        stream.assert_not_called()
+                        self.assertIn(name, result.error)
+                        self.assertIn("(OAuth) is not supported", result.error)
+                with self.subTest(mode=allowed, name=name, value="matching"):
+                    result, stream, env = self._launch(config, {**credentials, name: allowed})
+                    stream.assert_called_once()
+                    self.assertNotIn(name, env)
+
+    def test_saved_external_auth_refuses(self):
+        self._settings(self.home / ".gemini" / "settings.json", {"useExternal": True})
+        result, stream, _ = self._launch()
+        stream.assert_not_called()
+        self.assertIn("useExternal", result.error)
+
+    def test_relative_gemini_home_is_checked_where_the_cli_reads_it(self):
+        # The proof case: user settings have no ownership gate, so a relative
+        # GEMINI_CLI_HOME read from PPI's own directory would miss the file the
+        # CLI loads from the project directory and let a saved sign-in through.
+        self._settings(self.workspace / "relative-home" / ".gemini" / "settings.json",
+                       {"selectedType": "oauth-personal"})
+        result, stream, _ = self._launch(environment={"GEMINI_CLI_HOME": "relative-home"})
+        stream.assert_not_called()
+        self.assertIn(str(self.workspace / "relative-home"), result.error)
+        (self.workspace / "relative-home" / ".gemini" / "settings.json").unlink()
+        result, stream, env = self._launch(environment={"GEMINI_CLI_HOME": "relative-home"})
+        stream.assert_called_once()
+        self.assertEqual(env["GEMINI_CLI_HOME"], str(self.workspace / "relative-home"))
+
+    def test_relative_system_paths_resolve_to_the_launch_directory(self):
+        # Path consistency only: the files checked are the files forwarded.
+        # Gemini CLI also gates system files on ownership, so these cases do
+        # not by themselves show a sign-in bypass.
+        for name, file_name in (("GEMINI_CLI_SYSTEM_SETTINGS_PATH", "sys.json"),
+                                ("GEMINI_CLI_SYSTEM_DEFAULTS_PATH", "defaults.json")):
+            with self.subTest(name=name):
+                target = self.workspace / "conf" / file_name
+                self._settings(target, {"selectedType": "oauth-personal"})
+                result, stream, _ = self._launch(environment={name: f"conf/{file_name}"})
+                stream.assert_not_called()
+                self.assertIn(str(target), result.error)
+                target.unlink()
+                result, stream, env = self._launch(environment={name: f"conf/{file_name}"})
+                stream.assert_called_once()
+                self.assertEqual(env[name], str(target))
 
     def test_budget_names_the_missing_key(self):
         with patch.dict("os.environ", {"GEMINI_API_KEY": ""}, clear=False), \

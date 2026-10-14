@@ -1051,7 +1051,7 @@ function renderProviderConnections() {
       <div class="provider-connection-actions">
         <button type="button" class="secondary" data-provider-remove="${escapeHtml(provider)}">Remove provider</button>
         ${authAction}
-        <button type="button" data-provider-window="${provider}">${budget?.auth_status === "signed_in" || info.auth_mode !== "cli" ? "Use" : "Open"} ${escapeHtml(providerLabel(provider))}</button>
+        <button type="button" data-provider-window="${provider}" ${info.retired ? "disabled" : ""}>${budget?.auth_status === "signed_in" || info.auth_mode !== "cli" ? "Use" : "Open"} ${escapeHtml(providerLabel(provider))}</button>
       </div>
     </section>`;
   }).join("");

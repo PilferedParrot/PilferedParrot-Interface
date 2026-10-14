@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from pilferedparrot.adapters import GeminiAdapter, ProviderCapabilities, adapter_for
 from pilferedparrot.budgets import collect_budgets
-from pilferedparrot.config import load_config
+from pilferedparrot.config import load_config, open_compatible_url
 from pilferedparrot.model import provider_ids
 from pilferedparrot.web import PROVIDER_TEMPLATES, PilferedParrotApp
 from pilferedparrot.web_provider import ProviderRunOrchestrator
@@ -102,6 +102,55 @@ class ProviderExpansionTests(unittest.TestCase):
         self.assertNotIn("antigravity", provider_ids(config))
         with self.assertRaisesRegex(ValueError, "unknown provider template"):
             app.add_provider({"template": "xai", "model": "fixture"})
+
+    def test_saved_xai_cards_are_retired_and_never_contact_the_endpoint(self):
+        # Cards saved from the removed template survive in the dashboard store.
+        # They load (history stays readable) but show a notice and never run;
+        # a user's own generic compatible card is untouched.
+        app = PilferedParrotApp(self.config, self.root)
+        cards = app.dashboard_models.setdefault("provider_cards", {})
+        cards["xai-grok"] = {  # the reviewer's prior-release repro
+            "label": "xAI / Grok", "adapter": "openai_compatible",
+            "base_url": "https://api.x.ai/v1", "api_key_env": "XAI_API_KEY",
+            "model": "grok-fixture", "model_options": ["grok-fixture"],
+        }
+        cards["my-renamed-card"] = {
+            "label": "Renamed", "description": "Grok models through xAI's OpenAI-compatible API.",
+            "adapter": "openai_compatible", "base_url": "https://api.x.ai/v1",
+            "api_key_env": "MY_KEY", "model": "grok-fixture", "model_options": [],
+        }
+        cards["my-endpoint"] = {
+            "label": "Mine", "description": "An OpenAI-compatible LLM endpoint.",
+            "adapter": "openai_compatible", "base_url": "https://models.example/v1",
+            "api_key_env": "MY_KEY", "model": "fixture", "model_options": [],
+        }
+        for provider in cards:
+            app.dashboard_models.setdefault("providers", {})[provider] = {"models": [], "hidden": []}
+        app._save_dashboard_models()
+        restarted = PilferedParrotApp(self.config, self.root)
+        catalog = {item["id"]: item for item in restarted._provider_catalog(include_hidden=True)}
+        with patch("pilferedparrot.config._compatible_opener") as opener:
+            for provider in ("xai-grok", "my-renamed-card"):
+                with self.subTest(provider=provider):
+                    self.assertTrue(catalog[provider]["retired"])
+                    self.assertIn("removed from PPI", catalog[provider]["description"])
+                    with self.assertRaisesRegex(ValueError, "removed from PPI"):
+                        adapter_for(provider, restarted.config)
+                    with self.assertRaisesRegex(ValueError, "removed from PPI"):
+                        open_compatible_url(restarted.config, provider,
+                                            "https://api.x.ai/v1/models", timeout=1)
+                    budget = collect_budgets(restarted.config)[provider]
+                    self.assertFalse(budget.available)
+                    self.assertIn("removed from PPI", budget.note)
+            opener.assert_not_called()
+        self.assertNotIn("retired", catalog["my-endpoint"])
+        self.assertTrue(adapter_for("my-endpoint", restarted.config).capabilities.tools)
+        restarted.remove_provider({"provider": "xai-grok"})
+        self.assertNotIn("restore:xai-grok",
+                         [item["id"] for item in restarted.provider_templates()])
+        with self.assertRaisesRegex(ValueError, "removed from PPI"):
+            restarted.add_provider({"template": "restore:xai-grok"})
+
 
 if __name__ == "__main__":
     unittest.main()
