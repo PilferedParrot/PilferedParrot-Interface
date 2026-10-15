@@ -194,6 +194,10 @@ and the existing CodeQL security requirement.
 
 ## 0.5.1 historical readiness record
 
+> **Later change:** the Google Antigravity adapter and the xAI/Grok template described in this
+> historical record were removed after 0.8.2, for provider terms and by the owner's choice. See
+> [provider compatibility](provider-compatibility.md).
+
 The interface and desktop integrations have passed automated and live validation on
 Linux Mint/X11. These checks describe the local source validation checkpoint; provider access remains
 account-specific. The 0.5.1 release is a repository/governance release that renames the project and

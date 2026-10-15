@@ -195,10 +195,6 @@ class ProviderRunOrchestrator:
                 provider_config["permission_mode"] = "plan"
             elif provider == "gemini":
                 provider_config["approval_mode"] = "plan"
-            elif provider == "antigravity":
-                provider_config["mode"] = "plan"
-                provider_config["read_only"] = True
-                provider_config["additional_dirs"] = []
             else:
                 provider_config["read_only"] = True
                 provider_config["additional_dirs"] = []

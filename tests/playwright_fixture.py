@@ -219,7 +219,7 @@ class PilferedParrotBrowserFixture:
         config = deepcopy(DEFAULTS)
         state = self.root / "state"
         config["_hidden_providers"] = (
-            ["qwen", "gemini", "antigravity"] if self.include_claude else ["qwen", "claude", "gemini", "antigravity"]
+            ["qwen", "gemini"] if self.include_claude else ["qwen", "claude", "gemini"]
         )
         config["web"].update({
             "host": "127.0.0.1",

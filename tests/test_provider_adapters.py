@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import tempfile
 import threading
 import unittest
 from pathlib import Path
@@ -133,10 +134,13 @@ class ProviderAdapterTests(unittest.TestCase):
             return subprocess.CompletedProcess(["gemini"], 0, "", "")
 
         adapter = GeminiAdapter("gemini", config)
-        with patch.object(adapter, "_command", return_value=["gemini"]), \
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.dict("os.environ", {"GEMINI_API_KEY": "synthetic-key",
+                                       "GEMINI_CLI_HOME": directory}), \
+             patch.object(adapter, "_command", return_value=["gemini"]), \
              patch("pilferedparrot.dispatch._stream_process", side_effect=stream):
             result = adapter.run(
-                "hello", Path("/tmp"), conversation, threading.Event(), events.append,
+                "hello", Path(directory), conversation, threading.Event(), events.append,
             )
         self.assertEqual(result.text, "Done")
         self.assertEqual(result.session_id, "session-1")

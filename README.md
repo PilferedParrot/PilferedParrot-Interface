@@ -65,10 +65,18 @@ PPI can run these providers through their local tools or through compatible APIs
 
 - OpenAI Codex CLI
 - Claude Code CLI
-- Gemini CLI
-- Google Antigravity CLI (Work only at present)
+- Gemini CLI, with a Gemini API key or Vertex AI credentials only
 - Local Qwen through an OpenAI-compatible endpoint
-- OpenAI-compatible services such as OpenRouter, xAI, Mistral, LM Studio, Ollama, and other endpoints
+- OpenAI-compatible services such as Google AI Studio (Gemini API), OpenRouter, Mistral, LM Studio,
+  Ollama, and other endpoints
+
+You connect your own account or key, under your provider's terms, and PPI never reads or stores
+your credentials. Check your plan's terms before you connect it. PPI does not run Gemini CLI on
+Google account sign-in: Google ended that access for Gemini CLI and points third-party tools to a
+Gemini API or Vertex AI key. Gemini API terms apply to both Gemini paths: you must be 18 or older,
+the API is meant for professional or business use, Google may use free-tier prompts and responses
+to improve its products (a paid key is recommended), and users in the EEA, Switzerland or the UK
+need a paid key. See [provider compatibility](docs/provider-compatibility.md).
 
 Work sessions show provider progress, commands, tool results, the selected project folder, and
 saved conversation history. Chat runs in its own window and session; it does not receive the work
@@ -79,6 +87,15 @@ desktop notifications. Work executes directly through the provider you choose; t
 Harness UI has been retired. The existing Harness backend and API remain available for existing
 records. See [the Harness review](docs/harness-review.md). Provider access, model availability,
 account limits, and usage charges belong to the provider you configure.
+
+## Unreleased changes
+
+- Removed the Google Antigravity CLI adapter and the xAI/Grok provider template. Google's
+  Antigravity terms do not allow wrapping its CLI in third-party applications on consumer plans,
+  and the maintainer chose not to ship an xAI integration. Cards saved from the xAI template show
+  a "removed from PPI" notice and no longer run.
+- Gemini CLI now runs only with a Gemini API key or Vertex AI credentials. PPI refuses to start it
+  when a Gemini CLI settings file has saved Google sign-in or another auth type.
 
 ## 0.8.2 changes
 

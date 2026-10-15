@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
 
 
 # Provider presentation and capabilities live beside the provider registry so the
@@ -41,27 +42,47 @@ PROVIDER_CATALOG: tuple[dict[str, Any], ...] = (
         "login_help": "Complete the Anthropic sign-in at claude.ai in your browser, then return here.",
     },
     {
-        "id": "antigravity",
-        "label": "Google Antigravity",
-        "initial": "A",
-        "description": "Google's coding agent through the local Antigravity CLI. Work only; read-only Chat is not yet supported.",
-        "auth_mode": "external_cli",
-        "auth_label": "Uses your Antigravity CLI authentication",
-        "install_help": "Install Antigravity CLI from antigravity.google, then run agy in a terminal to sign in.",
-        "auth_help": "Run agy in a terminal to complete Google's sign-in. Use agy update if your CLI lacks streaming support. Account access is checked when used.",
-    },
-    {
         "id": "gemini",
         "label": "Google Gemini",
         "initial": "G",
-        "description": "Google's coding agent through the local Gemini CLI.",
+        "description": "Google's coding agent through the local Gemini CLI, with your Gemini API key or Vertex AI credentials. Gemini API terms apply: 18+ only, for professional or business use, not consumer use; Google may use free-tier prompts and responses to improve its products, so a paid key is recommended; users in the EEA, Switzerland or the UK need a paid key.",
         "auth_mode": "external_cli",
-        "auth_label": "Uses your Gemini CLI authentication",
-        "install_help": "Install the Gemini CLI, then run gemini in a terminal to configure an API key or supported organization account.",
-        "auth_help": "Consumer Google sign-in is no longer supported by Gemini CLI. Configure an API key or supported organization account in gemini, or add the Google AI Studio / Gemini API provider.",
+        "auth_label": "Uses a Gemini API key or Vertex AI",
+        "install_help": "Install the Gemini CLI, set GEMINI_API_KEY in the environment that starts PPI, then restart PPI.",
+        "auth_help": "PPI never runs Gemini CLI on Google account sign-in. Set GEMINI_API_KEY (or Vertex AI credentials) in the environment that starts PPI; if gemini has saved a Google sign-in, run gemini in a terminal and choose Use Gemini API key with /auth.",
     },
 )
 PROVIDERS = tuple(item["id"] for item in PROVIDER_CATALOG)
+
+# Integrations removed from PPI (provider terms; the owner's choice). Cards saved
+# from the removed xAI template carry its description verbatim; its endpoint and
+# key variable together identify a card saved before descriptions were stored.
+# A retired card still loads, so its history stays readable, but it never runs.
+RETIRED_PROVIDER_NOTICE = (
+    "xAI / Grok was removed from PPI. This saved card no longer runs; you can remove it."
+)
+_RETIRED_DESCRIPTIONS = frozenset({"Grok models through xAI's OpenAI-compatible API."})
+
+
+def retired_provider_notice(config: dict[str, Any], provider: str) -> str | None:
+    """Return the removal notice when a saved card belongs to a removed integration."""
+    definitions = config.get("provider_definitions")
+    candidates = (
+        definitions.get(provider) if isinstance(definitions, dict) else None,
+        config.get(provider),
+    )
+    for raw in candidates:
+        if not isinstance(raw, dict):
+            continue
+        if str(raw.get("description") or "") in _RETIRED_DESCRIPTIONS:
+            return RETIRED_PROVIDER_NOTICE
+        try:
+            host = urlparse(str(raw.get("base_url") or "")).hostname or ""
+        except ValueError:
+            host = ""
+        if host.lower() == "api.x.ai" and str(raw.get("api_key_env") or "") == "XAI_API_KEY":
+            return RETIRED_PROVIDER_NOTICE
+    return None
 
 
 def provider_catalog(config: dict[str, Any] | None = None, *, include_hidden: bool = False) \
@@ -108,6 +129,12 @@ def provider_catalog(config: dict[str, Any] | None = None, *, include_hidden: bo
                 "base_url": str(raw.get("base_url") or ""),
                 "api_key_env": api_key_env,
             })
+            notice = retired_provider_notice(config, provider)
+            if notice:
+                result[-1].update({
+                    "description": notice, "auth_mode": "none", "retired": True,
+                    "auth_label": "Removed from PPI", "auth_help": notice,
+                })
     return tuple(result)
 
 

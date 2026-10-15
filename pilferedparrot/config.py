@@ -109,16 +109,6 @@ DEFAULTS: dict[str, Any] = {
         "context_window_tokens": None,
         "context_window_percent": 100,
     },
-    "antigravity": {
-        "command": "agy",
-        "model": "gemini-3.8-flash-low",
-        "model_options": [
-            {"value": "gemini-3.8-flash-low", "label": "Gemini 3.8 Flash (Low)"},
-        ],
-        "context_window_tokens": None,
-        "context_window_percent": 100,
-        "mode": "accept-edits",
-    },
     "gemini": {
         "command": "gemini",
         "model": "auto",
@@ -133,6 +123,10 @@ DEFAULTS: dict[str, Any] = {
         "context_window_tokens": None,
         "context_window_percent": 100,
         "approval_mode": "auto_edit",
+        # Key authentication only: "gemini-api-key" (the key is read from
+        # api_key_env) or "vertex-ai". Google sign-in is never used.
+        "auth_type": "gemini-api-key",
+        "api_key_env": "GEMINI_API_KEY",
     },
     "web": {
         "host": "127.0.0.1",
@@ -470,6 +464,10 @@ def open_compatible_url(
     target: str | urllib.request.Request, *, timeout: float,
 ) -> Any:
     """Open a configured API URL, retaining Qwen's local-egress boundary."""
+    from .model import retired_provider_notice
+    notice = retired_provider_notice(config, provider)
+    if notice:
+        raise ValueError(notice)
     provider_config = config.get(provider) or {}
     base_url = validate_compatible_base_url(provider_config.get("base_url"))
     parsed = urlparse(base_url)

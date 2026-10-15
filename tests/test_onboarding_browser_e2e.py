@@ -43,7 +43,7 @@ class OnboardingApp(BrowserTestApp):
                 auth_status="signed_out",
                 reachability="unreachable",
             )
-            for provider in ("codex", "claude", "gemini", "antigravity")
+            for provider in ("codex", "claude", "gemini")
         }
 
     def poll_provider_models(self, provider: str):
@@ -72,7 +72,7 @@ class OnboardingFixture(PilferedParrotBrowserFixture):
         # Exercise every native card without discovering a host CLI or touching
         # host config/state. Qwen is outside this native onboarding flow.
         config["_hidden_providers"] = ["qwen"]
-        for provider in ("codex", "claude", "gemini", "antigravity"):
+        for provider in ("codex", "claude", "gemini"):
             config[provider]["command"] = str(self.root / f"never-invoked-{provider}")
             config[provider]["config_path"] = str(self.root / f"{provider}-config")
             config[provider]["models_cache"] = str(self.root / f"{provider}-models.json")
@@ -319,21 +319,39 @@ class OnboardingBrowserEndToEndTests(unittest.TestCase):
         dialog = self._open_dashboard()
         card = self._card(dialog, "gemini")
         expect(card).to_contain_text("Install the Gemini CLI")
-        expect(card).to_contain_text("run gemini in a terminal")
-        expect(card.get_by_text("Uses your Gemini CLI authentication", exact=True)).to_be_visible()
-        expect(card).to_contain_text("API key or supported organization account")
+        expect(card).to_contain_text("set GEMINI_API_KEY")
+        expect(card.get_by_text("Uses a Gemini API key or Vertex AI", exact=True)).to_be_visible()
+        expect(card).to_contain_text("Gemini API terms apply")
+        expect(card).to_contain_text("professional or business use")
+        expect(card).to_contain_text("need a paid key")
         expect(card.locator('[data-provider-login="gemini"]')).to_have_count(0)
         expect(card.get_by_text("Install CLI first", exact=True)).to_have_count(0)
         expect(card.locator('[data-provider-window="gemini"]')).to_be_enabled()
 
-    def test_antigravity_card_explains_terminal_setup_and_work_only_capability(self):
+    def test_saved_xai_card_shows_removal_notice_and_cannot_be_used(self):
+        app = self.fixture.app
+        with app.model_catalog_lock:
+            app.dashboard_models.setdefault("provider_cards", {})["xai-grok"] = {
+                "label": "xAI / Grok", "adapter": "openai_compatible",
+                "description": "Grok models through xAI's OpenAI-compatible API.",
+                "base_url": "https://api.x.ai/v1", "api_key_env": "XAI_API_KEY",
+                "model": "grok-fixture", "model_options": ["grok-fixture"],
+            }
+            app.dashboard_models.setdefault("providers", {})["xai-grok"] = {
+                "models": [], "hidden": [],
+            }
+            app._apply_dashboard_models()
+        self.page.reload(wait_until="domcontentloaded")
         dialog = self._open_dashboard()
-        card = self._card(dialog, "antigravity")
-        expect(card).to_contain_text("Install Antigravity CLI")
-        expect(card).to_contain_text("Work only")
-        expect(card).to_contain_text("run agy in a terminal")
-        expect(card.locator('[data-provider-login="antigravity"]')).to_have_count(0)
-        expect(card.locator('[data-provider-window="antigravity"]')).to_be_enabled()
+        card = self._card(dialog, "xai-grok")
+        expect(card).to_contain_text("xAI / Grok was removed from PPI")
+        expect(card.locator('[data-provider-window="xai-grok"]')).to_be_disabled()
+        expect(card.locator('[data-provider-remove="xai-grok"]')).to_be_enabled()
+
+    def test_removed_providers_have_no_card(self):
+        dialog = self._open_dashboard()
+        expect(dialog.locator('[data-provider-window="antigravity"]')).to_have_count(0)
+        expect(dialog).not_to_contain_text("Antigravity")
 
     def test_dashboard_refresh_reports_pending_completion_and_error_inside_dialog(self):
         dialog = self._open_dashboard()

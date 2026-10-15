@@ -57,7 +57,7 @@ class IsolatedSecretRedactionTests(unittest.TestCase):
             "default_provider": "synthetic",
         })
         self.config["ledger"] = str(self.root / "runs.jsonl")
-        self.config["_hidden_providers"] = ["qwen", "codex", "claude", "gemini", "antigravity"]
+        self.config["_hidden_providers"] = ["qwen", "codex", "claude", "gemini"]
         self.config["provider_definitions"] = {
             "synthetic": self._provider_definition(PRIMARY_ENV),
             "related": self._provider_definition(OVERLAPPING_ENV),

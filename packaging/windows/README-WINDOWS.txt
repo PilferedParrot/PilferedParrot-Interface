@@ -19,7 +19,7 @@ is not a replacement for the generated configuration. New projects default to:
 
   %USERPROFILE%\PilferedParrot Projects
 
-Provider CLIs (Codex, Claude, Gemini, and Antigravity), Node.js, and local model
+Provider CLIs (Codex, Claude, and Gemini), Node.js, and local model
 servers are separate software. The Windows preview supports the browser interface,
 Chat, and file tools. Bubblewrap is a Unix-only shell and is disabled on Windows;
 Windows provider accounts and CLIs are not live-certified by this package.

@@ -13,7 +13,6 @@ from pilferedparrot.whiteboard import Whiteboard, MAX_OUTPUT, MAX_SERIALIZED_OUT
 from pilferedparrot.qwen_tools import QwenToolbox
 from pilferedparrot.dispatch import _codex_command, _claude_command, capture_dispatch, RunResult
 from pilferedparrot.adapters import GeminiAdapter
-from pilferedparrot.antigravity import AntigravityAdapter
 
 
 class WhiteboardTests(unittest.TestCase):
@@ -198,8 +197,7 @@ class WhiteboardTests(unittest.TestCase):
         conversation = Conversation()
         commands = [(_codex_command(conversation, self.config, self.root), '--add-dir'),
                     (_claude_command(conversation, self.config), '--add-dir'),
-                    (GeminiAdapter('gemini', self.config)._command(conversation), '--include-directories'),
-                    (AntigravityAdapter('antigravity', self.config)._command(conversation), '--add-dir')]
+                    (GeminiAdapter('gemini', self.config)._command(conversation), '--include-directories')]
         for command, flag in commands:
             self.assertEqual(command[command.index(flag) + 1], str(self.board.directory))
         self.config['codex']['sandbox'] = 'read-only'

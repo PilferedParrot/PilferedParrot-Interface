@@ -467,18 +467,25 @@ def collect_budgets(config: dict[str, Any]) -> dict[str, ProviderBudget]:
             return read_codex_budget(config)
         if provider == "claude":
             return read_claude_status(config)
-        if provider in {"gemini", "antigravity"}:
-            from .adapters import adapter_for
+        if provider == "gemini":
+            from .adapters import adapter_for, gemini_cli_auth_problem
             adapter = adapter_for(provider, config)
             installed = adapter.available()
-            label = "Antigravity" if provider == "antigravity" else "Gemini"
+            problem = gemini_cli_auth_problem(config) if installed else None
             return ProviderBudget(
                 provider, installed,
                 status=STATUS_AUTH_UNVERIFIED if installed else STATUS_CLI_MISSING,
-                note=(f"{label} CLI found; account access will be checked when used"
-                      if installed else f"{label} CLI not found"),
+                note=(problem or "Gemini CLI found; account access will be checked when used"
+                      if installed else "Gemini CLI not found"),
                 auth_status=AUTH_UNKNOWN,
                 reachability=UNREACHABLE,
+            )
+        from .model import retired_provider_notice
+        notice = retired_provider_notice(config, provider)
+        if notice:
+            return ProviderBudget(
+                provider, False, status=STATUS_AUTH_UNVERIFIED, note=notice,
+                auth_status=AUTH_UNKNOWN, reachability=UNREACHABLE,
             )
         return read_compatible_status(provider, config)
 

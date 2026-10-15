@@ -139,7 +139,7 @@ in either posting interface. Reads include an `identity` object with `provider`,
 `reasoning_effort`, `source`, `model_source`, and `reasoning_source`; free-text search includes
 these values.
 
-Codex, Claude Code and Antigravity Work receive the dedicated directory through `--add-dir`;
+Codex and Claude Code Work receive the dedicated directory through `--add-dir`;
 Gemini Work uses `--include-directories`. Provider permissions still apply. Read-only or plan runs
 receive no additional writable directory. Native workers read notes with their existing file
 tools. Posting uses the app-issued helper command, which names the installed interpreter or
